@@ -31,11 +31,53 @@ private struct SubjectOptions: ParsableArguments {
     }
 }
 
+/// What a pull-request run mutates (ADR 0007).
+private struct ChangeOptions: ParsableArguments {
+    @Option(help: "Limit to the change in this unified diff (paths relative to --diff-root).") var diff: String?
+    @Option(
+        help:
+            "Limit to the change from the merge base with this revision to the working tree (git; tracked files only)."
+    )
+    var diffBase: String?
+    @Option(help: "Directory the --diff paths are relative to (default: the enclosing git work tree, else the root).")
+    var diffRoot: String?
+    @Option(help: "Leading path components to strip from --diff paths (default: detect git's a/ and b/).")
+    var diffStrip: Int?
+    @Option(help: "lines: sites on changed lines; files: every site of changed files, changed lines first.")
+    var diffScope: String = "lines"
+
+    func scope(root: String) async throws -> ChangeScope? {
+        guard diff == nil || diffBase == nil else { throw ValidationError("--diff and --diff-base are exclusive") }
+        guard let breadth = ChangeScope.Breadth(rawValue: diffScope) else {
+            throw ValidationError("diff-scope must be lines or files")
+        }
+        if let diff {
+            return try ChangeScope.load(
+                diffFile: diff,
+                root: root,
+                diffRoot: diffRoot.map { URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath().path },
+                strip: diffStrip,
+                breadth: breadth
+            )
+        }
+        if let diffBase {
+            return try await ChangeScope.fromGit(
+                base: diffBase,
+                root: root,
+                breadth: breadth,
+                executor: BoundedExecutor()
+            )
+        }
+        return nil
+    }
+}
+
 private struct Plan: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Discover syntax mutation candidates without building or executing project code."
     )
     @OptionGroup var subject: SubjectOptions
+    @OptionGroup var change: ChangeOptions
     @Option(help: "Output plan (.json or .pb); stdout JSON when omitted.") var output: String?
     @Option(help: "Bounded source-discovery parallelism, 1...16.") var jobs: Int = 4
     mutating func run() async throws {
@@ -47,8 +89,11 @@ private struct Plan: AsyncParsableCommand {
                 root: subject.absoluteRoot,
                 exclude: excludes,
                 include: try subject.includes(),
-                jobs: jobs
+                jobs: jobs,
+                scope: try await change.scope(root: subject.absoluteRoot)
             )
+        } catch let error as ValidationError {
+            throw error
         } catch {
             try fail(error, code: .usage)
         }
@@ -99,6 +144,7 @@ private struct Run: AsyncParsableCommand {
         abstract: "Build and test mutants in an owned snapshot. Executes trusted project code."
     )
     @OptionGroup var subject: SubjectOptions
+    @OptionGroup var change: ChangeOptions
     @Option(help: "Relative .xcodeproj/.xcworkspace inside root. Omit for Swift packages.") var project: String?
     @Option(help: "Xcode scheme (required for iOS packages/projects).") var scheme: String?
     @Option(help: "Xcode destination (supply an existing simulator ID for reproducibility).") var destination: String?
@@ -191,6 +237,9 @@ private struct Run: AsyncParsableCommand {
         }
         options.exclude = try subject.excludes()
         options.include = try subject.includes()
+        do { options.scope = try await change.scope(root: subject.absoluteRoot) } catch let error as ValidationError {
+            throw error
+        } catch { try fail(error, code: .usage) }
         let artifact: RunArtifact
         let (runDriver, runOptions, runOutput) = (driver, options, output)
         do {
@@ -207,6 +256,13 @@ private struct Run: AsyncParsableCommand {
             throw ExitCode(interrupted.exitStatus)
         } catch { try fail(error, code: .internalFailure) }
         print(String(decoding: try ArtifactCodec.json(artifact), as: UTF8.self))
+        if let scope = artifact.plan.scope, artifact.results.isEmpty {
+            stderr(
+                "litmus: \(scope.source): \(scope.swiftFiles) changed Swift file(s), no mutable site in scope; "
+                    + "nothing built or run (\(((artifact.timings["total"] ?? 0) * 100).rounded() / 100) s)"
+            )
+            return
+        }
         let counts = Dictionary(grouping: artifact.results, by: \.verdict).mapValues(\.count)
         let summary = Verdict.allCases.compactMap { verdict in counts[verdict].map { "\(verdict.rawValue) \($0)" } }
         let score = artifact.score.percent.map { String($0) + "%" } ?? "n/a"

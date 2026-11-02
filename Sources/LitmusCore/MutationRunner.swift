@@ -63,6 +63,8 @@ public struct RunOptions: Sendable {
     /// reach which mutants (`RunArtifact.perTestReach`): the data per-test selection would use. Costs one run per test
     /// and schema build.
     public var perTestReach = false
+    /// The change a pull-request run is limited to (`--diff`, `--diff-base`); nil mutates the whole subject.
+    public var scope: ChangeScope?
 
     public init() {}
 
@@ -137,6 +139,44 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         }
 
         var phase = clock.now
+        if let scope = options.scope {
+            // The fast path: a change reaching no site ends here, before any copy, build or toolchain query.
+            let sourcePlan = try await MutationPlanner.plan(
+                root: root,
+                exclude: options.exclude,
+                include: options.include,
+                jobs: 8,
+                scope: scope
+            )
+            account("plan", since: phase)
+            if sourcePlan.mutations.isEmpty {
+                phase = clock.now
+                let inputs = try await WorkspaceSnapshot.currentEntries(root)
+                account("inventory", since: phase)
+                let provenance = RunProvenance(
+                    toolVersion: LitmusVersion.current,
+                    snapshotSHA256: Digest.sha256(try ArtifactCodec.json(inputs)),
+                    inputs: inputs,
+                    driver: driver,
+                    toolchain: "not invoked: the change reaches no mutable site",
+                    startedAt: ISO8601DateFormatter().string(from: Date()),
+                    executionPolicy: RunArtifact.executionPolicy
+                )
+                var artifact = RunArtifact(provenance: provenance, plan: sourcePlan)
+                artifact.notes.append(
+                    "\(scope.source): \(sourcePlan.scope?.swiftFiles ?? 0) changed Swift file(s), no mutable site on "
+                        + (scope.breadth == .lines ? "their changed lines" : "them")
+                        + "; nothing was copied, built or run"
+                )
+                artifact.complete = true
+                timings["total"] = seconds(clock.now - started)
+                artifact.timings = timings
+                try ArtifactCodec.write(artifact, path: output + "/run.json")
+                try ArtifactCodec.write(artifact, path: output + "/run.pb")
+                return artifact
+            }
+            phase = clock.now
+        }
         let snapshot = try await WorkspaceSnapshot.create(source: root, destination: output + "/workspace")
         account("snapshot", since: phase)
         phase = clock.now
@@ -144,16 +184,18 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             root: snapshot.root,
             exclude: options.exclude,
             include: options.include,
-            jobs: 8
+            jobs: 8,
+            scope: options.scope
         )
         account("plan", since: phase)
-        let plan = MutationPlan(
+        var plan = MutationPlan(
             root: root,
             analyzedFiles: clonePlan.analyzedFiles,
             mutations: clonePlan.mutations,
             suppressed: clonePlan.suppressed,
             notes: clonePlan.notes
         )
+        plan.scope = clonePlan.scope
         guard !plan.mutations.isEmpty else {
             throw LitmusFailure("no mutable production sites; inspect plan exclusions")
         }
@@ -203,7 +245,9 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             account("build", since: phase)
             guard baselineBuild.exitStatus == 0, !baselineBuild.timedOut else {
                 let first = CompilerDiagnostics(baselineBuild, snapshotRoot: snapshot.root).errors.first
-                let detail = first.map { ": \($0.path):\($0.line): \($0.message)" } ?? ""
+                let detail =
+                    first.map { ": \($0.path):\($0.line): \($0.message)" }
+                    ?? CompilerDiagnostics.firstError(baselineBuild).map { ": \($0)" } ?? ""
                 let hint =
                     options.background
                     ? "; at --background priority a type-check time limit of the subject's can fail it (rerun without)"
@@ -354,7 +398,14 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             }
             let judging = judge
 
-            var pending = Array(SchemaWriter.batches(plan.mutations, limit: options.batchSize).reversed())
+            // Changed-line mutants are batched apart and first: a budget spends itself on them before the rest.
+            let first = Set(plan.scope?.onChangedLines ?? plan.mutations.map(\.id))
+            let classes = [
+                plan.mutations.filter { first.contains($0.id) }, plan.mutations.filter { !first.contains($0.id) },
+            ]
+            var pending = Array(
+                classes.flatMap { SchemaWriter.batches($0, limit: options.batchSize) }.reversed()
+            )
             var buildIndex = 0
             while let group = pending.popLast() {
                 try Task.checkCancellation()
@@ -734,6 +785,16 @@ struct CompilerDiagnostics {
             errors.append(Error(path: path, line: number, message: String(line[marker.upperBound...])))
         }
         self.errors = errors
+    }
+
+    /// The first line saying `error:` of any kind (`xcodebuild: error: Unable to find a device…`), at most 300
+    /// characters: what a failed build says when no compiler diagnostic names a file.
+    static func firstError(_ build: ProcessOutput) -> String? {
+        let text = plain(build.stdout + Array("\n".utf8) + build.stderr)
+        guard let line = text.split(whereSeparator: \.isNewline).first(where: { $0.contains("error:") }) else {
+            return nil
+        }
+        return String(line.trimmingCharacters(in: .whitespaces).prefix(300))
     }
 
     /// `bytes` without terminal escape sequences: compilers colour their diagnostics (CSI `ESC [ … letter`) and link

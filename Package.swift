@@ -57,7 +57,11 @@ let package = Package(
             ],
             swiftSettings: strict
         ),
-        .testTarget(name: "LitmusCoreTests", dependencies: ["LitmusCore"], swiftSettings: strict),
+        .testTarget(
+            name: "LitmusCoreTests",
+            dependencies: ["LitmusCore", .product(name: "ProjectModel", package: "analyzerkit")],
+            swiftSettings: strict
+        ),
     ],
     swiftLanguageModes: [.v6]
 )

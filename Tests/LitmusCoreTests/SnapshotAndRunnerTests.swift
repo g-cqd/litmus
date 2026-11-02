@@ -1,4 +1,5 @@
 import Foundation
+import ProjectModel
 import Synchronization
 import Testing
 
@@ -154,13 +155,19 @@ private func options(jobs: Int = 2) -> RunOptions {
     return options
 }
 
-private func run(_ executor: FakeExecutor, source: String? = nil) async throws -> (RunArtifact, URL) {
+private func run(
+    _ executor: FakeExecutor,
+    source: String? = nil,
+    configure: (inout RunOptions) -> Void = { _ in }
+) async throws -> (RunArtifact, URL) {
     let base = try source.map(fixture) ?? fixture()
     let driver = try BuildDriver(root: base.path + "/input", scheme: nil, destination: nil)
+    var options = options()
+    configure(&options)
     let artifact = try await MutationRunner(executor: executor).run(
         driver: driver,
         outputDirectory: base.path + "/run",
-        options: options()
+        options: options
     )
     return (artifact, base)
 }
@@ -297,4 +304,88 @@ private let twoSites = """
     #expect(MutationRunner<BoundedExecutor>.remove(directory))
     #expect(!FileManager.default.fileExists(atPath: directory))
     #expect(MutationRunner<BoundedExecutor>.remove(directory))
+}
+
+private let scopedSites = """
+    public func choice(_ value: Bool) -> Int {
+        value ? 1 : 2
+    }
+    public func other(_ a: Bool, _ b: Bool) -> Bool {
+        a && b
+    }
+    """
+
+private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope.Breadth = .lines) -> ChangeScope {
+    ChangeScope(changed: ChangedLines(files: files), breadth: breadth, source: "test diff", digest: "d")
+}
+
+@Test func `a change that reaches no site ends before any copy, build or toolchain query`() async throws {
+    let executor = FakeExecutor()
+    let (artifact, base) = try await run(executor, source: scopedSites) { options in
+        options.scope = scope(["Sources/Example/F.swift": [4...4], "README.md": [1...3]])
+    }
+    defer { try? FileManager.default.removeItem(at: base) }
+    #expect(artifact.complete && artifact.isSuccessfulExecution)
+    #expect(artifact.results.isEmpty)
+    #expect(artifact.plan.scope?.swiftFiles == 1)
+    #expect(executor.builds.withLock { $0 } == 0)
+    #expect(executor.calls.withLock { $0.isEmpty })
+    #expect(!FileManager.default.fileExists(atPath: base.path + "/run/workspace"))
+    #expect(FileManager.default.fileExists(atPath: base.path + "/run/run.pb"))
+    #expect(artifact.provenance.toolchain.hasPrefix("not invoked"))
+    // The report checks the inventory as it does after a full run.
+    let report = try await MutationReport.make(artifact, root: base.path + "/input")
+    #expect(report.successfulExecution)
+}
+
+@Test func `a change runs the sites on its changed lines only, or its files with those lines first`() async throws {
+    let (lines, base) = try await run(FakeExecutor(), source: scopedSites) { options in
+        options.scope = scope(["Sources/Example/F.swift": [5...5]])
+    }
+    defer { try? FileManager.default.removeItem(at: base) }
+    #expect(lines.results.map(\.mutation.original) == ["a && b"])
+    #expect(lines.results.allSatisfy { $0.verdict == .killed })
+
+    let (files, other) = try await run(FakeExecutor(), source: scopedSites) { options in
+        options.scope = scope(["Sources/Example/F.swift": [5...5]], .files)
+    }
+    defer { try? FileManager.default.removeItem(at: other) }
+    #expect(files.plan.mutations.map(\.original) == ["a && b", "value"])
+    #expect(files.plan.scope?.onChangedLines == [files.plan.mutations[0].id])
+}
+
+@Test func `a scoped plan reads only the changed Swift files and notes stale or excluded ones`() async throws {
+    let base = try fixture(scopedSites)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let root = base.path + "/input"
+    try Data("let x = true ? 1 : 2\n".utf8).write(to: URL(fileURLWithPath: root + "/Sources/Example/G.swift"))
+    let plan = try await MutationPlanner.plan(
+        root: root,
+        exclude: ["G.swift"],
+        scope: scope(["Sources/Example/F.swift": [2...2], "Sources/Example/G.swift": [1...1], "Gone.swift": [1...1]])
+    )
+    #expect(plan.mutations.map(\.original) == ["value"])
+    #expect(plan.analyzedFiles == 1)
+    #expect(plan.notes.contains { $0.path == "Sources/Example/G.swift" && !$0.isDegraded })
+    #expect(plan.notes.contains { $0.path == "Gone.swift" && $0.isDegraded })
+}
+
+@Test func `a multi-line site is in scope when any of its lines changed`() {
+    let site = Mutation(
+        id: "0000000000000001",
+        path: "A.swift",
+        line: 10,
+        column: 5,
+        operatorID: .replaceLogical,
+        start: 0,
+        end: 10,
+        original: "a\n    && b\n    && c",
+        replacement: "x",
+        sourceFingerprint: "f"
+    )
+    #expect(site.endLine == 12)
+    #expect(scope(["A.swift": [12...12]]).priority(of: site) == 0)
+    #expect(scope(["A.swift": [13...20]]).priority(of: site) == nil)
+    #expect(scope(["A.swift": [13...20]], .files).priority(of: site) == 1)
+    #expect(scope(["B.swift": [10...10]], .files).priority(of: site) == nil)
 }
