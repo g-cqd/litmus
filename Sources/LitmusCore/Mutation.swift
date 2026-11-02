@@ -17,6 +17,42 @@ public struct Mutation: Codable, Equatable, Sendable {
     public let original: String
     public let replacement: String
     public let sourceFingerprint: String
+    /// The enclosing declaration's path (`Type.method(_:)`, empty at file scope), part of the anchored identity.
+    public var declaration: String? = nil
+    /// SHA-256 of the whitespace-normalised text of the outermost enclosing body declaration (function, accessor,
+    /// property...), or of the file at file scope: what `--reuse declaration` compares.
+    public var declarationDigest: String? = nil
+
+    public init(
+        id: String,
+        path: String,
+        line: Int,
+        column: Int,
+        operatorID: MutationOperator,
+        start: Int,
+        end: Int,
+        original: String,
+        replacement: String,
+        sourceFingerprint: String,
+        declaration: String? = nil,
+        declarationDigest: String? = nil
+    ) {
+        self.id = id
+        self.path = path
+        self.line = line
+        self.column = column
+        self.operatorID = operatorID
+        self.start = start
+        self.end = end
+        self.original = original
+        self.replacement = replacement
+        self.sourceFingerprint = sourceFingerprint
+        self.declaration = declaration
+        self.declarationDigest = declarationDigest
+    }
+
+    /// The last line of the mutated expression.
+    public var endLine: Int { line + original.count(where: { $0 == "\n" }) }
 }
 
 /// A file intentionally left out, or a file that could not be planned. Neither disappears silently.

@@ -24,6 +24,8 @@ struct JournalMutation: Equatable {
     @ProtoField(8) var original: String = ""
     @ProtoField(9) var replacement: String = ""
     @ProtoField(10) var sourceFingerprint: String = ""
+    @ProtoField(11) var declaration: String? = nil
+    @ProtoField(12) var declarationDigest: String? = nil
 }
 
 @ProtoMessage(unknownFields: .discard)
@@ -47,7 +49,9 @@ extension JournalRecord {
             end: Int64(mutation.end),
             original: mutation.original,
             replacement: mutation.replacement,
-            sourceFingerprint: mutation.sourceFingerprint
+            sourceFingerprint: mutation.sourceFingerprint,
+            declaration: mutation.declaration,
+            declarationDigest: mutation.declarationDigest
         )
         verdict = result.verdict.rawValue
         counts = result.tests.map {
@@ -73,7 +77,9 @@ extension JournalRecord {
             end: Int(stored.end),
             original: stored.original,
             replacement: stored.replacement,
-            sourceFingerprint: stored.sourceFingerprint
+            sourceFingerprint: stored.sourceFingerprint,
+            declaration: stored.declaration,
+            declarationDigest: stored.declarationDigest
         )
         return MutationResult(
             mutation: mutation,
