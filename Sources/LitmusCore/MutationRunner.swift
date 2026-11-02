@@ -314,6 +314,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             wholeSnapshot: snapshot.digest,
             mutations: plan.mutations,
             closureKnown: driver.container == nil,
+            inPlace: prepared.restore != nil,
             context: ReuseContextInputs(
                 toolVersion: LitmusVersion.current,
                 executionPolicy: RunArtifact.executionPolicy,
@@ -335,6 +336,12 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         )
         for index in artifact.results.indices {
             artifact.results[index].reuseKey = reuse.key(artifact.results[index].mutation)
+        }
+        if !reuse.outsideRoot.isEmpty {
+            artifact.notes.append(
+                "\(reuse.outsideRoot.count) file(s) belong to a package depending on a local package outside the root; "
+                    + "their verdicts are never reused (the root's inventory cannot see those files change)"
+            )
         }
         let store = try options.resultStore.map {
             try ResultStore(

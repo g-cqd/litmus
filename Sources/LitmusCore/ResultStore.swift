@@ -38,6 +38,7 @@ public struct ReuseContext: Sendable {
     /// - Parameters:
     ///   - root: the snapshot root, whose entries are `entries`.
     ///   - closureKnown: false for Xcode projects, whose app target the package layout does not describe.
+    ///   - inPlace: the workspace is the subject itself, whose build can reach outside the root.
     init(
         mode: Mode,
         root: String,
@@ -45,6 +46,7 @@ public struct ReuseContext: Sendable {
         wholeSnapshot: String,
         mutations: [Mutation],
         closureKnown: Bool,
+        inPlace: Bool = false,
         context: ReuseContextInputs
     ) throws {
         self.mode = mode
@@ -55,6 +57,7 @@ public struct ReuseContext: Sendable {
         let classification = layout.map(ProjectClassification.load)
         var closures: [String: String] = [:]
         var testFiles: [String: String] = [:]
+        var outside: Set<String> = []
         var byClosure: [[String]: String] = [:]
         let sorted = entries.sorted { $0.path < $1.path }
         func digest(under directories: [String]) -> String {
@@ -71,12 +74,19 @@ public struct ReuseContext: Sendable {
         for path in Set(mutations.map(\.path)) {
             let absolute = root + "/" + path
             var directories: [String]?
-            if closureKnown, let closure = classification?.packageClosure(containing: absolute),
-                closure.allSatisfy({ $0 == root || $0.hasPrefix(root + "/") })
-            {
+            let closure = closureKnown ? classification?.packageClosure(containing: absolute) : nil
+            if let closure, closure.allSatisfy({ $0 == root || $0.hasPrefix(root + "/") }) {
                 directories = closure.map { $0 == root ? "" : String($0.dropFirst(root.count + 1)) }
+                closures[path] = digest(under: directories ?? [])
+            } else if inPlace || closure.map({ !$0.isEmpty }) == true {
+                // A local dependency outside the root (an in-place run of one package of a repository), or, in place,
+                // a closure that cannot be read: files the root's inventory does not hold could change the verdict
+                // unnoticed. Such a mutant is never reused. (A copy cannot build what is outside its root.)
+                closures[path] = "unreusable-" + UUID().uuidString
+                outside.insert(path)
+            } else {
+                closures[path] = wholeSnapshot
             }
-            closures[path] = directories.map { digest(under: $0) } ?? wholeSnapshot
             if mode == .declaration {
                 // Every file in a test directory of the closure (of the snapshot when the closure is unknown): a test
                 // added or changed anywhere in the package invalidates; a change to the code it calls does not.
@@ -90,7 +100,11 @@ public struct ReuseContext: Sendable {
         }
         self.closures = closures
         self.testFiles = testFiles
+        self.outsideRoot = outside
     }
+
+    /// The files whose package depends on a local package outside the root: their mutants are never reused.
+    let outsideRoot: Set<String>
 
     /// The directories named `Tests` or ending in `Tests` among `entries`' paths, outermost first.
     private static func testDirectories(_ entries: [SnapshotEntry]) -> [String] {
@@ -109,6 +123,8 @@ public struct ReuseContext: Sendable {
         let code: String
         switch mode {
         case .closure: code = closures[mutation.path] ?? wholeSnapshot
+        case .declaration where outsideRoot.contains(mutation.path):
+            code = closures[mutation.path] ?? wholeSnapshot
         case .declaration:
             code = (mutation.declarationDigest ?? wholeSnapshot) + "|" + (testFiles[mutation.path] ?? wholeSnapshot)
         }

@@ -915,3 +915,51 @@ private func runIn(
     #expect(future == SourcePath.canonical(parent + "/run/workspace"))
     #expect(!future.hasPrefix("/private/"))
 }
+
+@Test func `in place, a package depending on one outside the root is never reused`() throws {
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-outside-" + UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let root = base.path + "/App"
+    try FileManager.default.createDirectory(atPath: root + "/Sources/App", withIntermediateDirectories: true)
+    try Data(
+        "// swift-tools-version: 6.4\nimport PackageDescription\nlet package = Package(name: \"App\", dependencies: [.package(path: \"../Kit\")], targets: [.target(name: \"App\")])"
+            .utf8
+    ).write(to: URL(fileURLWithPath: root + "/Package.swift"))
+    let source = "public func a(_ x: Bool) -> Int { x ? 1 : 2 }\n"
+    try Data(source.utf8).write(to: URL(fileURLWithPath: root + "/Sources/App/A.swift"))
+    let mutations = try MutationPlanner.mutations(in: source, path: "Sources/App/A.swift")
+    func context(inPlace: Bool) throws -> ReuseContext {
+        try ReuseContext(
+            mode: .closure,
+            root: root,
+            entries: [SnapshotEntry(path: "Sources/App/A.swift", sha256: "1")],
+            wholeSnapshot: "whole",
+            mutations: mutations,
+            closureKnown: true,
+            inPlace: inPlace,
+            context: ReuseContextInputs(
+                toolVersion: "v",
+                executionPolicy: "p",
+                toolchain: "t",
+                driver: try BuildDriver(root: root, scheme: nil, destination: nil),
+                harness: "h",
+                failFast: true,
+                killConfirmation: "k",
+                memoryLimitMiB: 1,
+                timeoutCap: 1,
+                timeoutFactor: 1,
+                minimumTimeout: 1,
+                baselineRepetitions: 1,
+                suiteWidth: nil,
+                selectTestTargets: true,
+                background: false,
+                excluded: []
+            )
+        )
+    }
+    let inPlace = try context(inPlace: true)
+    #expect(inPlace.outsideRoot == ["Sources/App/A.swift"])
+    #expect(inPlace.key(mutations[0]) != (try context(inPlace: true)).key(mutations[0]))
+    // A copy cannot build ../Kit at all: its whole snapshot is what the key covers.
+    #expect(try context(inPlace: false).key(mutations[0]) == (try context(inPlace: false)).key(mutations[0]))
+}

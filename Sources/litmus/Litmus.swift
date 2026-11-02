@@ -393,12 +393,13 @@ private struct Run: AsyncParsableCommand {
         let root = subject.absoluteRoot
         let made: MutationReport
         do {
-            made = try await MutationReport.make(artifact, root: root, relative: true, baseline: accepted)
+            // Absolute paths: a CI tool that runs Litmus on one package of a repository makes them its own.
+            made = try await MutationReport.make(artifact, root: root, relative: false, baseline: accepted)
         } catch { try fail(error, code: .internalFailure) }
         do {
             switch format {
             case "markdown": print(MarkdownReport.render(made, artifact: artifact), terminator: "")
-            default: print(try LitmusReportFormat.render(made, format: format, root: root))
+            default: print(try LitmusReportFormat.render(made, format: format, root: nil))
             }
         } catch { try fail(error, code: .outputFailure) }
         reportFindings = made.findings.contains { $0.severity == "error" || gate != nil && $0.severity == "warning" }
