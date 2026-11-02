@@ -171,8 +171,8 @@ public struct ReusedResult: Sendable {
 /// `LITMUS_STORE_KEY` when it is set (then a record without the right tag is ignored: a store that untrusted jobs can
 /// write cannot forge verdicts for trusted ones). A record that fails any check is a miss, noted, never trusted.
 ///
-/// Waiting for upstream: a verified, size-bounded content-addressed store in aemi (Litmus task t57) would replace the
-/// layout and eviction here.
+/// Waiting for upstream: a verified, size-bounded content-addressed store in aemi (AE-10, Litmus task t57) would replace
+/// the layout and eviction here.
 public final class ResultStore: Sendable {
     static let version: UInt64 = 1
     public let directory: String

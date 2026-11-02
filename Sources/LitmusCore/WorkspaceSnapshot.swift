@@ -4,7 +4,7 @@ internal import SourceCorpus
 /// The canonical spelling of a path that may not exist yet: its deepest existing ancestor canonicalized, then the rest.
 /// `SourcePath.canonical` (Foundation's symlink resolution) drops the `/private` of `/private/tmp/x` only once `x`
 /// exists, so a destination canonicalized before it is created would be spelled differently afterwards, and an
-/// "outside the root" check could compare two spellings of one directory.
+/// "outside the root" check could compare two spellings of one directory. Waiting for upstream: analyzerkit AK-18.
 func canonicalNew(_ path: String) -> String {
     let absolute = SourcePath.canonical(path)
     var existing = absolute

@@ -1,7 +1,5 @@
 # Design 0001 — Mutation testing on every pull request, incrementally
 
-Status: accepted as the plan, 2026-11-02; decisions in ADR 0007. Phase 0 measured (below).
-
 ## Goal
 
 Family principles apply unchanged: performance, safety (never modify the subject outside an owned copy unless asked,
