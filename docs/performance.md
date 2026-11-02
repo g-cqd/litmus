@@ -86,3 +86,33 @@ Debug Litmus, shared machine. See `docs/research/2026-11-02-mutation-extent-and-
 
 Seven workers were 2.4× slower than two on a suite that parallelises itself. swift-mutation-testing defaults to
 CPUs − 1 workers too; it was not run on fcheck here.
+
+## 0.3.0-dev against swift-mutation-testing 1.6.4, 2026-11-02 evening
+
+Release builds, same machine, fresh copy per run, interleaved; load 6–30 on 8 cores.
+
+### Fixture (10 mutants)
+
+| Configuration | Wall, 3 runs | Median | SMT ÷ this |
+| --- | --- | --- | --- |
+| Litmus defaults (targeted confirmation, flaky probe, target selection) | 40.6, 51.4, 43.2 s | 43.2 s | 3.1× |
+| Litmus `--kill-confirmation none --baseline-repetitions 1` | 31.0, 38.1, 39.6 s | 38.1 s | 3.5× |
+| swift-mutation-testing `--no-cache` | 139.9, 129.7, 133.2 s | 133.2 s | — |
+
+Same score, 77.8 %; every run gave the same verdicts. The 51.4 s run ended with a failed status: Finder wrote `.DS_Store` into the
+workspace as it was removed; since fixed (a removal failure after a complete run is a note).
+
+### fcheck (206 mutants, 152 tests)
+
+Litmus defaults: 1933 s, 175 killed, 1 crashed, 23 survived, 6 no coverage, 1 unviable, 85.85 % (the earlier pilot run's
+verdicts exactly), every kill confirmed by named tests (28 whole-suite fallbacks before), 2 workers (suite parallelism
+3.3). swift-mutation-testing refused to run: its unmutated suite fails in its sandbox, because fcheck's golden tests
+run `<package>/.build/<config>/fcheck` and SMT builds outside the sandbox copy. No speed comparison is possible there.
+
+### iOS Simulator (the ExampleApp fixture, iPhone 17, iOS 27.2)
+
+First complete simulator run: 635 s (builds 32 s, tests 602 s), 10 verdicts as on the package fixture except the crash,
+reported as a kill (an `.xcresult` records a crashed host as a failed test). Each `xcodebuild test-without-building` on a
+booted simulator costs 3–34 s for 9 tests that take milliseconds; the timeout mutant alone took about 250 s (deadline
+84 s, then 168 s alone). Booting the simulator raised the load average to 270 for a few minutes, which explains the
+60–160 s runs seen earlier while it booted.
