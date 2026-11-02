@@ -1,5 +1,14 @@
 # Mutation-analyzer investigation — evidence and feasibility
 
+> **Errata (2026-11-02, session review).** Re-checked against the GitHub API and the saved evidence:
+> - No PR had a head or base of `release/*` or `merge_release/*` since 2026-06-15. #1509 was merged into `develop`; `release/23.0.1`
+>   holds a cherry-pick of it plus two direct commits. Release branches are created by a push, so a release report needs a `push` trigger on `release/**`.
+> - Release scope from `release-scope.txt`: 25.0.0 → 26.0.0 is 966 mutants (371 incompatible); 24.0.0 → 25.0.0 is 1079 (364). The figure "643 / 285" said in the chat was wrong.
+> - swift-mutation-testing 1.6.4 also has activation markers (no coverage), killed-by-crash, unviable isolation, timeouts counted as detected, fail-fast,
+>   parallel workers on directly launched SwiftPM bundles, measured operator tiers and Stryker/HTML/Sonar reports. The comparison below understates it.
+> - Full review: `/Volumes/Personal/Github/g-cqd/litmus/docs/reviews/2026-11-02-session-review.md`.
+
+
 Date: 2026-11-02. This supersedes the conclusions, not the raw evidence, of the preliminary note in `Github/notes`.
 Implementation now lives in this package; implementation verification is separate from investigation measurements.
 
