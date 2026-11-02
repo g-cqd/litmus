@@ -90,27 +90,44 @@ public enum MutationPlanner {
         )
     }
 
+    /// A file a mutation tool may mutate, or why not.
+    enum ProductionFile {
+        case production(String, SourceFileSyntax)
+        case excluded(String)
+    }
+
+    /// Reads, parses and classifies one file: test, preview-only, generated and uncompiled files are excluded.
+    /// - Throws: when the file is unreadable, not UTF-8, malformed or nested beyond 256 levels.
+    static func productionFile(path: String, classification: ProjectClassification) throws -> ProductionFile {
+        let bytes = try BoundedFileReader.read(path: path, cap: 2 << 20)
+        guard let source = String(bytes: bytes, encoding: .utf8) else { throw LitmusFailure("not UTF-8") }
+        let tree = Parser.parse(source: source)
+        guard !SyntaxDepth.exceeds(tree, limit: 256), !tree.hasError else {
+            throw LitmusFailure("invalid or deeply nested syntax")
+        }
+        let classified = classification.classify(path)
+        if !classified.region.isEmpty || TestConventions.isTestFile(path: path, tree: tree)
+            || GeneratedCode.isGenerated(path: path, tree: tree)
+        {
+            return .excluded("non-production region")
+        }
+        // A project encloses the file but none of its targets compiles it: every mutant would "survive".
+        if case .convention(.unclaimed) = classified.provenance {
+            return .excluded("no target of the enclosing project compiles this file")
+        }
+        return .production(source, tree)
+    }
+
     private static func planFile(path: String, root: String, classification: ProjectClassification) -> MutationPlan {
         let relative = String(path.dropFirst(root.count + 1))
         func excludedFile(_ reason: String) -> MutationPlan {
             MutationPlan(root: root, analyzedFiles: 1, mutations: [], notes: [PlanNote(path: relative, reason: reason)])
         }
         do {
-            let bytes = try BoundedFileReader.read(path: path, cap: 2 << 20)
-            guard let source = String(bytes: bytes, encoding: .utf8) else { throw LitmusFailure("not UTF-8") }
-            let tree = Parser.parse(source: source)
-            guard !SyntaxDepth.exceeds(tree, limit: 256), !tree.hasError else {
-                throw LitmusFailure("invalid or deeply nested syntax")
-            }
-            let classified = classification.classify(path)
-            if !classified.region.isEmpty || TestConventions.isTestFile(path: path, tree: tree)
-                || GeneratedCode.isGenerated(path: path, tree: tree)
-            {
-                return excludedFile("non-production region")
-            }
-            // A project encloses the file but none of its targets compiles it: every mutant would "survive".
-            if case .convention(.unclaimed) = classified.provenance {
-                return excludedFile("no target of the enclosing project compiles this file")
+            let (source, tree): (String, SourceFileSyntax)
+            switch try productionFile(path: path, classification: classification) {
+            case .excluded(let reason): return excludedFile(reason)
+            case .production(let text, let parsed): (source, tree) = (text, parsed)
             }
             let converter = SourceLocationConverter(fileName: path, tree: tree)
             let spans = CodeRegionScanner.scan(tree, converter: converter)

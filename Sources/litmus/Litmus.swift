@@ -7,7 +7,7 @@ import LitmusCore
     static let configuration = CommandConfiguration(
         abstract: "Evidence-led mutation testing for Swift packages and Xcode projects.",
         version: LitmusVersion.current,
-        subcommands: [Plan.self, Run.self, Analyze.self]
+        subcommands: [Plan.self, Run.self, Analyze.self, Census.self]
     )
 }
 
@@ -52,6 +52,34 @@ private struct Plan: AsyncParsableCommand {
     }
 }
 
+private struct Census: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Count where candidate operators would apply (syntax only; sizes operators before they exist)."
+    )
+    @OptionGroup var subject: SubjectOptions
+    @Option(help: "json or text.") var format: String = "text"
+    mutating func run() async throws {
+        guard ["json", "text"].contains(format) else { throw ValidationError("format must be json or text") }
+        let report: CensusReport
+        do { report = try await MutationCensus.run(root: subject.absoluteRoot, exclude: try subject.excludes()) } catch
+        {
+            try fail(error, code: .usage)
+        }
+        if format == "json" {
+            print(String(decoding: try ArtifactCodec.json(report), as: UTF8.self))
+            return
+        }
+        print(
+            "production files \(report.files), excluded \(report.excludedFiles), degraded \(report.degradedFiles.count)"
+        )
+        for entry in report.entries {
+            print(
+                "\(entry.operatorID)\t\(entry.shape.rawValue)\tsites \(entry.sites)\tmutants \(entry.mutants)\tblocked \(entry.blocked)"
+            )
+        }
+    }
+}
+
 private struct Run: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Build and test mutants in an owned snapshot. Executes trusted project code."
@@ -76,8 +104,8 @@ private struct Run: AsyncParsableCommand {
     var swiftpmBuildSystem: String?
     @Flag(help: "Run every mutant's whole suite instead of stopping at its first Swift Testing failure.")
     var noFailFast = false
-    @Flag(help: "Confirm each kill with an inactive control and a second active run (three runs per kill).")
-    var confirmKills = false
+    @Option(help: "Kill confirmation: targeted (default: the failing tests alone, active and inactive), full, or none.")
+    var killConfirmation: String = "targeted"
     @Flag(
         help:
             "Required: authorize executing package manifests, plugins, build scripts and tests. Copying is NOT an OS sandbox."
@@ -101,7 +129,10 @@ private struct Run: AsyncParsableCommand {
         options.jobs = jobs
         options.harness = selection
         options.failFast = !noFailFast
-        options.confirmKills = confirmKills
+        guard let confirmation = KillConfirmation(rawValue: killConfirmation) else {
+            throw ValidationError("kill-confirmation must be targeted, full or none")
+        }
+        options.killConfirmation = confirmation
         options.keepWorkspace = keepWorkspace
         guard swiftpmBuildSystem.map({ ["native", "swiftbuild"].contains($0) }) ?? true else {
             throw ValidationError("swiftpm-build-system must be native or swiftbuild")

@@ -57,10 +57,13 @@ private final class FakeExecutor: ProcessExecutor {
         var active = Active.fail
         var poison: String?
         var poisonDiagnostic = true
+        /// Lines between the poisoned replacement and the error reported (a flow error at the end of a function).
+        var diagnosticOffset = 0
     }
     let config: Config
     let calls = Mutex<[[String: String]]>([])
     let deadlines = Mutex<[Int]>([])
+    let reports = Mutex<[String]>([])
     let builds = Mutex(0)
     init(_ config: Config = Config()) { self.config = config }
 
@@ -105,6 +108,7 @@ private final class FakeExecutor: ProcessExecutor {
         }
         calls.withLock { $0.append(environment) }
         deadlines.withLock { $0.append(timeout) }
+        reports.withLock { $0.append(URL(fileURLWithPath: command.arguments[index + 1]).lastPathComponent) }
         let active = !(environment[ActivationEnvironment.activeID] ?? "").isEmpty
         if config.reach, !active || config.markActive,
             let markers = environment[ActivationEnvironment.coverageDirectory]
@@ -161,12 +165,31 @@ private func run(_ executor: FakeExecutor, source: String? = nil) async throws -
     #expect(result.isSuccessfulExecution)
     #expect(result.results.map(\.verdict) == [.killed])
     let active = try #require(result.results.first?.mutation.id)
-    #expect(executor.calls.withLock { $0.map { $0[ActivationEnvironment.activeID] ?? "" } } == ["", "", active])
+    // `swift test` cannot select tests, so a targeted confirmation reruns the whole suite alone.
+    #expect(
+        executor.calls.withLock { $0.map { $0[ActivationEnvironment.activeID] ?? "" } } == ["", "", active, active]
+    )
+    #expect(result.policy?.killConfirmation == .targeted)
     #expect(!FileManager.default.fileExists(atPath: base.path + "/run/workspace"))
     #expect(try ArtifactCodec.read(RunArtifact.self, path: base.path + "/run/run.pb").results.first?.verdict == .killed)
     let journal = try ResultJournal.read(path: base.path + "/run/results.journal")
     #expect(journal.results.map(\.verdict) == [.killed])
     #expect(!journal.truncated)
+}
+
+@Test func `with no kill confirmation, the first failure after activation is the kill`() async throws {
+    let executor = FakeExecutor()
+    let base = try fixture()
+    defer { try? FileManager.default.removeItem(at: base) }
+    var unconfirmed = options()
+    unconfirmed.killConfirmation = .none
+    let result = try await MutationRunner(executor: executor).run(
+        driver: try BuildDriver(root: base.path + "/input", scheme: nil, destination: nil),
+        outputDirectory: base.path + "/run",
+        options: unconfirmed
+    )
+    #expect(result.results.map(\.verdict) == [.killed])
+    #expect(executor.calls.withLock { $0.count } == 3)
 }
 
 @Test func `a mutant the control never reached is no coverage, and is not run`() async throws {
@@ -195,13 +218,18 @@ private func run(_ executor: FakeExecutor, source: String? = nil) async throws -
     #expect(result.score.percent == 100)
 }
 
-@Test func `a timeout is rerun alone with twice the derived deadline`() async throws {
+@Test func `timeouts are rerun alone, after the parallel pass, with twice the deadline`() async throws {
     let executor = FakeExecutor(.init(active: .hang))
-    let (result, base) = try await run(executor)
+    let (result, base) = try await run(executor, source: twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
-    #expect(result.results.map(\.verdict) == [.timeout])
-    #expect(executor.deadlines.withLock { Array($0.suffix(2)) } == [3, 6])
+    #expect(result.results.map(\.verdict) == [.timeout, .timeout])
     #expect(result.policy?.deadline == 3)
+    // `swift test` allows one worker: no contention allowance on the first runs, twice the deadline on the reruns.
+    #expect(result.policy?.parallelDeadline == 3)
+    #expect(executor.deadlines.withLock { Array($0.suffix(4)) } == [3, 3, 6, 6])
+    let names = executor.reports.withLock { Array($0.suffix(4)) }
+    #expect(names.prefix(2).allSatisfy { !$0.contains("-rerun") })
+    #expect(names.suffix(2).allSatisfy { $0.contains("-rerun") })
 }
 
 private let twoSites = """
@@ -219,7 +247,7 @@ private let twoSites = """
     #expect(executor.builds.withLock { $0 } == 4)
 }
 
-@Test func `without a diagnostic on the mutant, a failing build is not called unviable`() async throws {
+@Test func `without a compiler error in the mutant's file, a failing build is not called unviable`() async throws {
     let executor = FakeExecutor(.init(poison: "!(y)", poisonDiagnostic: false))
     let (result, base) = try await run(executor, source: twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
@@ -242,4 +270,12 @@ private let twoSites = """
     #expect(!checkpoint.complete)
     #expect(checkpoint.results.map(\.verdict) == [.notRun])
     #expect(!checkpoint.isSuccessfulExecution)
+}
+
+@Test func `a lone mutant whose error lands elsewhere in its own file is unviable`() async throws {
+    let executor = FakeExecutor(.init(poison: "!(y)", diagnosticOffset: 3))
+    let (result, base) = try await run(executor, source: twoSites)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let verdicts = Dictionary(uniqueKeysWithValues: result.results.map { ($0.mutation.original, $0.verdict) })
+    #expect(verdicts == ["x": .killed, "y": .unviable])
 }

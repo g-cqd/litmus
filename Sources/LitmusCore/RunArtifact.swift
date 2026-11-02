@@ -4,12 +4,16 @@ public struct RunPolicy: Codable, Sendable, Equatable {
     public let harness: String
     public let workers: Int
     public let failFast: Bool
-    public let confirmKills: Bool
+    public let killConfirmation: KillConfirmation
     /// The per-suite deadline derived from the baseline, in seconds, and the rerun deadline for timeouts.
     public let deadline: Int
+    /// The deadline of a mutant's first run among parallel workers (twice `deadline` with more than one worker).
+    public let parallelDeadline: Int
     public let timeoutRerunDeadline: Int
     /// The unmutated suite's duration, in nanoseconds.
     public let baselineNanoseconds: Int64
+    /// Cores the suite keeps busy alone (child CPU ÷ wall time), which sized `workers`.
+    public let suiteParallelism: Double
 }
 
 /// Provenance required before a verdict may be presented as current execution evidence.

@@ -13,8 +13,10 @@ public struct BuildDriver: Codable, Sendable, Equatable {
     public var usesXcode: Bool { scheme != nil }
 
     /// The arguments every SwiftPM invocation of a run shares, so build, bin path, listing and tests agree.
+    /// The scratch directory is the copied workspace's own `.build`, SwiftPM's default: tests often find the package's
+    /// executables at `<package>/.build/debug/<tool>` (fcheck's do). The snapshot never copies or verifies `.build`.
     public func swiftPMArguments(workspace: String, artifacts: String) -> [String] {
-        ["--package-path", workspace, "--scratch-path", artifacts + "/build"]
+        ["--package-path", workspace, "--scratch-path", workspace + "/.build"]
             + (swiftPMBuildSystem.map { ["--build-system", $0] } ?? [])
     }
 
