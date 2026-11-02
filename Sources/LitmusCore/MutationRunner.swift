@@ -85,6 +85,8 @@ public struct RunOptions: Sendable {
     public var reachFrom: String?
     /// Run one shard of the plan (`--shard k/n`): whole module units, merged later with `litmus merge`.
     public var shard: ShardSelection?
+    /// Run hostless Xcode test bundles on the simulator through Litmus's helper rather than `xcodebuild` (t58).
+    public var simulatorHarness = true
     /// Where the run builds and mutates (`--workspace`).
     public var workspace = WorkspaceStrategy.copy
     /// The directory holding Xcode's `DerivedData` (`--build-directory`); default: the run's or the persistent one.
@@ -317,7 +319,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 executionPolicy: RunArtifact.executionPolicy,
                 toolchain: provenance.toolchain,
                 driver: driver,
-                harness: options.harness.rawValue,
+                harness: options.harness.rawValue + (options.simulatorHarness ? "" : "/xcodebuild"),
                 failFast: options.failFast,
                 killConfirmation: options.killConfirmation.rawValue,
                 memoryLimitMiB: options.memoryLimitMiB,
@@ -1122,13 +1124,28 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         notes: inout [String]
     ) async throws -> any TestHarness {
         if driver.usesXcode {
-            return XcodeHarness(
+            let xcode = XcodeHarness(
                 executor: executor,
                 driver: driver,
                 workspace: workspace,
                 artifacts: artifacts,
                 logs: logs
             )
+            guard options.simulatorHarness, let destination = driver.destination,
+                let udid = SimulatorDirectHarness<Executor>.simulatorID(destination)
+            else { return xcode }
+            do {
+                return try await simulatorHarness(
+                    udid: udid,
+                    workspace: workspace,
+                    artifacts: artifacts,
+                    logs: logs,
+                    notes: &notes
+                ) ?? xcode
+            } catch {
+                notes.append("simulator helper unavailable (\(error)); using xcodebuild")
+                return xcode
+            }
         }
         let fallback = SwiftPMToolHarness(
             executor: executor,
@@ -1182,6 +1199,60 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
     }
 
     /// Writes one batch's schemas into the snapshot, keeping the originals to restore.
+    /// The direct simulator harness when every test target is hostless and the helper runs on the booted simulator
+    /// (t58); nil, with a note, to use `xcodebuild`.
+    private func simulatorHarness(
+        udid: String,
+        workspace: String,
+        artifacts: String,
+        logs: String,
+        notes: inout [String]
+    ) async throws -> (any TestHarness)? {
+        let products = artifacts + "/DerivedData/Build/Products"
+        let runs = try FileManager.default.contentsOfDirectory(atPath: products).filter { $0.hasSuffix(".xctestrun") }
+        guard runs.count == 1, let run = runs.first else {
+            notes.append("simulator helper not used: \(runs.count) .xctestrun files; using xcodebuild")
+            return nil
+        }
+        let helper = try await SimulatorHelper.build(into: artifacts, executor: executor, logs: logs)
+        let targets = try XCTestRunTarget.targets(
+            xctestrun: products + "/" + run,
+            products: products,
+            platforms: helper.platforms
+        )
+        guard let bundles = SimulatorDirectHarness<Executor>.bundles(targets) else {
+            notes.append("simulator helper not used: a test target is hosted by an application or is a UI test")
+            return nil
+        }
+        // `simctl spawn` needs a booted device; xcodebuild boots it itself.
+        let boot = try await executor.execute(
+            ToolCommand(executable: "/usr/bin/xcrun", arguments: ["simctl", "bootstatus", udid, "-b"]),
+            directory: workspace,
+            environment: subjectEnvironment(nil),
+            timeout: 600
+        )
+        guard boot.exitStatus == 0 else {
+            notes.append("simulator helper not used: \(udid) did not boot; using xcodebuild")
+            return nil
+        }
+        let direct = SimulatorDirectHarness(
+            executor: executor,
+            udid: udid,
+            bundles: bundles,
+            helper: helper,
+            workspace: workspace,
+            logs: logs
+        )
+        guard try await direct.probe() else {
+            notes.append("simulator helper not used: its probe failed (logs/simulator-probe.log); using xcodebuild")
+            return nil
+        }
+        notes.append(
+            "hostless test bundles run on simulator \(udid) through Litmus's helper: \(bundles.map(\.module).joined(separator: ", "))"
+        )
+        return direct
+    }
+
     /// In place, each original is made recoverable through `journal` before its file is rewritten.
     private func install(_ group: [Mutation], in snapshot: WorkspaceSnapshot, journal: InPlaceJournal?) throws
         -> InstalledSchema

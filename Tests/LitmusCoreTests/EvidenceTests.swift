@@ -208,3 +208,76 @@ func `xcresult rejects hostile counters before arithmetic`(counter: Int) throws 
     )
     #expect(Array(command.arguments.suffix(2)) == ["-only-testing:ATests", "-only-testing:B Tests"])
 }
+
+/// The simulator helper's harness (t58): which destinations and bundles it takes, and what it tells the helper.
+@Test func `the simulator harness takes hostless bundles on a simulator id, and xcodebuild keeps the rest`() throws {
+    #expect(
+        SimulatorDirectHarness<BoundedExecutor>.simulatorID(
+            "platform=iOS Simulator,id=D9A33F74-0A25-4234-8FA9-5DC935E916BF"
+        )
+            == "D9A33F74-0A25-4234-8FA9-5DC935E916BF"
+    )
+    #expect(SimulatorDirectHarness<BoundedExecutor>.simulatorID("platform=iOS Simulator,name=iPhone 17") == nil)
+    #expect(SimulatorDirectHarness<BoundedExecutor>.simulatorID("platform=macOS") == nil)
+
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "litmus-xctestrun-" + UUID().uuidString
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let plist: [String: Any] = [
+        "__xctestrun_metadata__": ["FormatVersion": 2],
+        "TestConfigurations": [
+            [
+                "TestTargets": [
+                    [
+                        "BlueprintName": "PackageTests",
+                        "TestBundlePath": "__TESTROOT__/Debug-iphonesimulator/PackageTests.xctest",
+                        "TestHostPath": "__PLATFORMS__/iPhoneSimulator.platform/Developer/Library/Xcode/Agents/xctest",
+                        "EnvironmentVariables": ["FIXTURES": "__TESTROOT__/fixtures"],
+                    ],
+                    [
+                        "BlueprintName": "AppTests",
+                        "TestBundlePath": "__TESTROOT__/Debug-iphonesimulator/App.app/PlugIns/AppTests.xctest",
+                        "TestHostPath": "__TESTROOT__/Debug-iphonesimulator/App.app",
+                    ],
+                ]
+            ]
+        ],
+    ]
+    let path = directory.appendingPathComponent("x.xctestrun").path
+    try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(
+        to: URL(fileURLWithPath: path)
+    )
+    let targets = try XCTestRunTarget.targets(xctestrun: path, products: "/P", platforms: "/X/Platforms")
+    #expect(targets.map(\.name) == ["AppTests", "PackageTests"])
+    #expect(targets.map(\.isHostless) == [false, true])
+    #expect(targets[1].environment["FIXTURES"] == "/P/fixtures")
+    #expect(SimulatorDirectHarness<BoundedExecutor>.bundles(targets) == nil)
+    let bundles = try #require(SimulatorDirectHarness<BoundedExecutor>.bundles([targets[1]]))
+    #expect(bundles.first?.binary == "/P/Debug-iphonesimulator/PackageTests.xctest/PackageTests")
+
+    var request = TestRunRequest(
+        name: "r",
+        activeID: "",
+        coverageDirectory: "/c",
+        temporaryDirectory: "/t",
+        deadline: 5,
+        failFast: false
+    )
+    request.onlySwiftTesting = ["PackageTests.`a test`()"]
+    request.repetitions = 3
+    let configuration = SimulatorDirectHarness<BoundedExecutor>.configuration(request)
+    let object = try #require(try JSONSerialization.jsonObject(with: Data(configuration.utf8)) as? [String: Any])
+    #expect(object["repetitions"] as? Int == 3 && object["xctest"] as? Bool == false)
+    #expect((object["filter"] as? [String])?.count == 1)
+
+    let xctest = directory.appendingPathComponent("e.xctest").path
+    try Data(
+        #"{"xctest":{"name":"-[A b]","status":"passed"}}\#n{"xctest":{"name":"-[A c]","status":"failed"}}\#n"#.utf8
+    )
+    .write(to: URL(fileURLWithPath: xctest))
+    #expect(
+        SimulatorDirectHarness<BoundedExecutor>.xctestCounts(xctest) == TestCounts(passed: 1, failed: 1, skipped: 0)
+    )
+}
