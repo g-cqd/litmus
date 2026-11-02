@@ -44,17 +44,3 @@ public struct MutationPlan: Codable, Equatable, Sendable {
         self.mutations = mutations; self.suppressed = suppressed; self.notes = notes
     }
 }
-
-/// Statically discovers mutation candidates without executing the project or its manifest.
-public enum MutationPlanner {
-    /// Plans one source file; used by corpus discovery as well as embedding clients.
-    public static func mutations(in source: String, path: String) throws -> [Mutation] { [] }
-}
-
-/// Forms batches whose edits cannot overlap, bounding source growth independently of expression nesting depth.
-public enum SchemaWriter {
-    /// Partitions sites into deterministic batches. Each site appears exactly once.
-    public static func batches(_ mutations: [Mutation], limit: Int = 64) -> [[Mutation]] { [] }
-    /// Applies one batch, guarding each replacement with a process-lifetime environment selector.
-    public static func render(_ source: String, mutations: [Mutation]) throws -> String { source }
-}
