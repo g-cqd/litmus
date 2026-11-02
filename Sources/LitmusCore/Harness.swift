@@ -73,6 +73,9 @@ public protocol TestHarness: Sendable {
     /// Whether ``TestRunRequest/onlyModules``, `skipSwiftTesting`, `repetitions` and `parallelizationWidth` are
     /// honoured, with ``TestRunResult/moduleCounts`` reported.
     var selectsModules: Bool { get }
+    /// Whether it runs Swift Testing itself and so can repeat the suite, skip tests and cap its width (the direct
+    /// harness); `xcodebuild` cannot.
+    var controlsSwiftTesting: Bool { get }
     func run(_ request: TestRunRequest) async throws -> TestRunResult
 }
 
@@ -184,6 +187,7 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
     public var kind: String { "swiftpm-direct" }
     public var selectsTests: Bool { true }
     public var selectsModules: Bool { true }
+    public var controlsSwiftTesting: Bool { true }
 
     public init(
         executor: Executor,
@@ -404,6 +408,7 @@ public struct SwiftPMToolHarness<Executor: ProcessExecutor>: TestHarness {
     public var kind: String { "swift-test" }
     public var selectsTests: Bool { false }
     public var selectsModules: Bool { false }
+    public var controlsSwiftTesting: Bool { false }
 
     public init(executor: Executor, driver: BuildDriver, workspace: String, artifacts: String, logs: String) {
         self.executor = executor
@@ -464,7 +469,9 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
     public var maximumWorkers: Int { 1 }
     public var kind: String { "xcodebuild" }
     public var selectsTests: Bool { false }
-    public var selectsModules: Bool { false }
+    /// `-only-testing:<target>`, with counts per test bundle from the result bundle.
+    public var selectsModules: Bool { true }
+    public var controlsSwiftTesting: Bool { false }
 
     public init(executor: Executor, driver: BuildDriver, workspace: String, artifacts: String, logs: String) {
         self.executor = executor
@@ -486,7 +493,8 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
             workspace: workspace,
             artifacts: artifacts,
             result: bundle,
-            xctestrun: xctestrun
+            xctestrun: xctestrun,
+            onlyTesting: request.onlyModules.map { Array($0) }
         )
         // The memory limit covers `xcodebuild`'s session; the simulator's test host is outside it, and is ended after
         // the run through the token its `.xctestrun` environment carries.
@@ -527,9 +535,36 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
             options: .atomic
         )
         evidence += ["logs/\(request.name).summary.json", "logs/\(request.name).xcresult"]
-        if counts.failed > 0 { return result(.failed, counts, "a test failed or its host crashed") }
-        if output.exitStatus != 0 { return result(.unusable, counts, "xcodebuild exited \(output.exitStatus)") }
-        return result(.passed, counts, "every test passed")
+        // Counts per test bundle, what `-only-testing` selections are checked against; left out unless they add up
+        // to the summary's.
+        let tests = try await executor.execute(
+            ToolCommand(
+                executable: "/usr/bin/xcrun",
+                arguments: ["xcresulttool", "get", "test-results", "tests", "--path", bundle, "--compact"]
+            ),
+            directory: workspace,
+            environment: subjectEnvironment(nil),
+            timeout: 60
+        )
+        var modules: [String: TestCounts] = [:]
+        if tests.exitStatus == 0, !tests.truncated, let parsed = TestEvidence.xcresultModules(tests.stdout) {
+            let sum = parsed.values.reduce(into: (0, 0, 0)) {
+                $0 = ($0.0 + $1.passed, $0.1 + $1.failed, $0.2 + $1.skipped)
+            }
+            if sum == (counts.passed, counts.failed, counts.skipped) { modules = parsed }
+        }
+        func finished(_ outcome: TestRunOutcome, _ reason: String) -> TestRunResult {
+            var finished = result(outcome, counts, reason)
+            finished.moduleCounts = modules
+            return finished
+        }
+        if counts.failed > 0 {
+            // A crashed runner or host fails every test it was running: a crash, which is rerun as one (ADR 0007).
+            return TestEvidence.xcresultCrashed(summary.stdout)
+                ? finished(.crashed, "the test runner or host crashed") : finished(.failed, "a test failed")
+        }
+        if output.exitStatus != 0 { return finished(.unusable, "xcodebuild exited \(output.exitStatus)") }
+        return finished(.passed, "every test passed")
     }
 
     /// PropertyListSerialization supplies heterogeneous SDK data; the untyped boundary is contained here.

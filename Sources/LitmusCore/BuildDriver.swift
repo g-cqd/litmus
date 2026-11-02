@@ -58,9 +58,14 @@ public struct BuildDriver: Codable, Sendable, Equatable {
     }
 
     /// Runs the same entire selected suite for the baseline, every inactive schema and each active mutant.
-    public func testCommand(workspace: String, artifacts: String, result: String, xctestrun: String? = nil) throws
-        -> ToolCommand
-    {
+    /// - Parameter onlyTesting: Xcode test targets to run (`-only-testing:`); nil runs the whole test plan.
+    public func testCommand(
+        workspace: String,
+        artifacts: String,
+        result: String,
+        xctestrun: String? = nil,
+        onlyTesting: [String]? = nil
+    ) throws -> ToolCommand {
         if usesXcode {
             guard let destination, let xctestrun else { throw LitmusFailure("missing Xcode test artifact/destination") }
             return ToolCommand(
@@ -69,7 +74,7 @@ public struct BuildDriver: Codable, Sendable, Equatable {
                     "xcodebuild", "test-without-building", "-xctestrun", xctestrun,
                     "-destination", destination, "-resultBundlePath", result, "-derivedDataPath",
                     artifacts + "/DerivedData", "-parallel-testing-enabled", "NO",
-                ]
+                ] + (onlyTesting ?? []).sorted().map { "-only-testing:" + $0 }
             )
         }
         return ToolCommand(
