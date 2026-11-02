@@ -1,0 +1,267 @@
+{
+  "degradedFiles" : [],
+  "entries" : [
+    {
+      "blocked" : 0,
+      "mutants" : 1025,
+      "operatorID" : "integer-literal-replace",
+      "shape" : "expression",
+      "sites" : 718
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 978,
+      "operatorID" : "condition-to-constant",
+      "shape" : "expression",
+      "sites" : 489
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 770,
+      "operatorID" : "string-literal-empty",
+      "shape" : "expression",
+      "sites" : 770
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 692,
+      "operatorID" : "void-call-removal",
+      "shape" : "statement",
+      "sites" : 692
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 489,
+      "operatorID" : "negate-condition (current)",
+      "shape" : "expression",
+      "sites" : 489
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 320,
+      "operatorID" : "relational-equality",
+      "shape" : "expression",
+      "sites" : 320
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 306,
+      "operatorID" : "relational-boundary-and-negation",
+      "shape" : "expression",
+      "sites" : 153
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 274,
+      "operatorID" : "optional-binding-to-nil",
+      "shape" : "expression",
+      "sites" : 274
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 216,
+      "operatorID" : "boolean-literal-flip",
+      "shape" : "expression",
+      "sites" : 216
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 211,
+      "operatorID" : "collection-method-swap",
+      "shape" : "expression",
+      "sites" : 211
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 184,
+      "operatorID" : "return-default-bool",
+      "shape" : "statement",
+      "sites" : 92
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 173,
+      "operatorID" : "arithmetic-replace",
+      "shape" : "expression",
+      "sites" : 173
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 167,
+      "operatorID" : "loop-skip (for … where)",
+      "shape" : "clause",
+      "sites" : 167
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 158,
+      "operatorID" : "switch-case-skip (to default)",
+      "shape" : "clause",
+      "sites" : 158
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 140,
+      "operatorID" : "return-default-string",
+      "shape" : "statement",
+      "sites" : 70
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 119,
+      "operatorID" : "logical-replace (current)",
+      "shape" : "expression",
+      "sites" : 119
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 97,
+      "operatorID" : "compound-assignment-replace",
+      "shape" : "expression",
+      "sites" : 97
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 92,
+      "operatorID" : "switch-case-skip (no default: unviable)",
+      "shape" : "clause",
+      "sites" : 92
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 88,
+      "operatorID" : "swap-ternary (current)",
+      "shape" : "expression",
+      "sites" : 88
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 88,
+      "operatorID" : "nil-coalescing-to-default",
+      "shape" : "expression",
+      "sites" : 88
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 86,
+      "operatorID" : "not-removal",
+      "shape" : "expression",
+      "sites" : 86
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 85,
+      "operatorID" : "return-default-empty-collection",
+      "shape" : "statement",
+      "sites" : 85
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 80,
+      "operatorID" : "arithmetic-on-string-literal (unviable)",
+      "shape" : "expression",
+      "sites" : 80
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 78,
+      "operatorID" : "break-continue-swap",
+      "shape" : "statement",
+      "sites" : 78
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 69,
+      "operatorID" : "return-default-nil",
+      "shape" : "statement",
+      "sites" : 69
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 67,
+      "operatorID" : "isEmpty-negation",
+      "shape" : "expression",
+      "sites" : 67
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 66,
+      "operatorID" : "return-early-void",
+      "shape" : "statement",
+      "sites" : 66
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 54,
+      "operatorID" : "range-boundary",
+      "shape" : "expression",
+      "sites" : 54
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 53,
+      "operatorID" : "throw-removal",
+      "shape" : "statement",
+      "sites" : 53
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 51,
+      "operatorID" : "collection-method-removal",
+      "shape" : "expression",
+      "sites" : 51
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 46,
+      "operatorID" : "bitwise-replace",
+      "shape" : "expression",
+      "sites" : 46
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 44,
+      "operatorID" : "return-default-number",
+      "shape" : "statement",
+      "sites" : 22
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 15,
+      "operatorID" : "defer-removal (fcheck)",
+      "shape" : "statement",
+      "sites" : 15
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 14,
+      "operatorID" : "cleanup-call-removal (fcheck)",
+      "shape" : "statement",
+      "sites" : 14
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 2,
+      "operatorID" : "unary-minus-removal",
+      "shape" : "expression",
+      "sites" : 2
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 2,
+      "operatorID" : "string-literal-empty (logging argument)",
+      "shape" : "expression",
+      "sites" : 2
+    },
+    {
+      "blocked" : 0,
+      "mutants" : 0,
+      "operatorID" : "return-default-no-default-value",
+      "shape" : "statement",
+      "sites" : 155
+    }
+  ],
+  "excludedFiles" : 9,
+  "files" : 82,
+  "root" : "/Volumes/Personal/Github/g-cqd/analyzerkit"
+}

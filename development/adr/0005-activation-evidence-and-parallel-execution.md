@@ -56,3 +56,34 @@ fail-fast and direct parallel bundles.
 - Markers are files: a subject whose tests delete the marker directory or run in a sandbox without access to it shows
   `noCoverage` everywhere; the control catches the first case only if it passes. The Xcode path is not yet
   validated on a live simulator (task t5).
+
+## Amendment (2026-11-02, after the fcheck pilot)
+
+The first real-package run (fcheck, 206 mutants) found two defects in this decision's implementation:
+
+- **Reruns were not alone.** Item 3 said crashes and timeouts are "rerun alone"; the rerun ran inside the parallel
+  pass, competing with six workers, so 39 mutants timed out twice before reaching their code (infrastructure errors).
+  Reruns now form a serial pass after each batch's parallel pass. A first run among more than one worker gets twice
+  the derived deadline (`RunPolicy.parallelDeadline`), as swift-mutation-testing allows; the rerun, alone, gets the
+  same twice-the-deadline allowance without contention.
+- **The scratch directory was outside the package.** fcheck's command-line tests run `<package>/.build/debug/fcheck`,
+  a common SwiftPM pattern; with Litmus' scratch directory elsewhere the unmutated suite failed and the run correctly
+  stopped. SwiftPM now builds in the copied workspace's own `.build`, which the snapshot neither copies nor verifies.
+- **Contention made false timeouts.** With reruns in the parallel pass, 25 fcheck mutants were reported `timeout`
+  (detected): rerun alone, they were 9 kills and 16 survivors. A tool that counts parallel-pass timeouts as detected
+  overstates the score. Workers are now sized from the suite's own parallelism, measured as child CPU over wall time
+  during the baseline (`RunPolicy.suiteParallelism`): `workers = ⌊cores ÷ parallelism⌋`, at most `--jobs`.
+- **Flow errors are reported away from the mutant.** Negating `while true` makes the compiler report "missing return"
+  at the end of the function. A lone mutant is now unviable when an error is in its own file, the only file that build
+  changed; with no error, or errors only in other files, it stays an infrastructure error.
+- **Activation is per process, not per test; decision 8 is superseded.** In the third fcheck run, 10 of 180 kills rested
+  only on `CallSiteScalingTests` ("four times the chain costs about four times the time"), a timing test that fails
+  under load whatever the mutant; the mutant's code had run in the same process, in other tests. Kills are now
+  confirmed by default (`--kill-confirmation targeted`): the failing tests (from the Swift Testing event stream) rerun
+  alone with the mutant active (they must fail and write its marker themselves, which attributes the kill to a test
+  that reaches it) and inactive (they must pass). A failure not reproduced that way gets one whole-suite run alone.
+  Harnesses without test identities (XCTest, `swift test`, Xcode) rerun the whole suite alone. `none` restores the
+  first-failure rule; `full` keeps the 0.1 whole-suite control and second run. Each kill names its killing tests.
+  In run 4 the timing test killed nothing: 5 of those 10 mutants survived and 5 were killed by other tests.
+  Swift Testing's `--filter` matches identifiers that may carry `/File.swift:line:column`: the pattern ends at `/` or
+  the end (`$` alone matched nothing, exit 69).

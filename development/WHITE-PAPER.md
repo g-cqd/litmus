@@ -25,9 +25,9 @@ A missing simulator run is an assurance gap, never an implied pass.
 - **R-01 Source preservation.** Litmus never edits a subject's original source. Builds run on an owned independent copy.
 - **R-02 Honest verdicts.** Exit status alone cannot kill a mutant. Structured evidence must contain executed tests.
 - **R-03 Baseline validity.** The original and every inactive schema must pass before active results are interpreted.
-- **R-04 Activation evidence.** A failure, crash or timeout counts only when the mutant's own marker shows its code ran
-  in that process, after a passing inactive control of the same build. Crashes and timeouts repeat alone before they
-  count; `--confirm-kills` adds a control and a second failure around every kill (ADR 0005).
+- **R-04 Activation evidence.** A failure, crash or timeout counts only when the mutant's own marker shows its code ran,
+  after a passing inactive control of the same build. By default the failing tests must, alone, fail again and write
+  the marker themselves, and pass without the mutant; crashes and timeouts repeat alone before they count (ADR 0005).
 - **R-05 Explicit uncertainty.** Missing evidence, failures without activation, a broken control, a build failure not
   attributable to the mutant, and cancellation remain unresolved; they suppress the score and a successful gate.
 - **R-06 Exact reconciliation.** Each planned mutant has one outcome; IDs, source ranges and source hashes are checked.

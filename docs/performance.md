@@ -32,6 +32,10 @@ Effect of the direct harness: per-mutant test time 0.09–0.25 s with bundles ru
 `swift test` (which recompiles the manifest on every call, measured at 2.2 s per invocation against 0.06–0.1 s for the
 bundle itself). Fail-fast and the 7 workers matter more on suites longer than this fixture's.
 
+Caveat added later the same day: these fixture timings predate targeted kill confirmation (now the default), which
+adds two short runs per kill. The debug fixture run's test phase went from 9.5 s to 13.4 s with it; the release
+comparison against swift-mutation-testing was not repeated.
+
 ## The reference app (`example/app`, read-only planning)
 
 | | Litmus 0.2.0-dev | swift-mutation-testing 1.6.4 |
@@ -68,3 +72,17 @@ mutant), not against swift-mutation-testing, which already batches, stops early 
 | Larger default batches | 64 → 256 cuts app builds from 66 to 18 | Plan only; compile-time growth of large SwiftUI schemas unmeasured |
 | Per-test selection from activation markers per test | Run only the tests that reached a mutant | Needs per-test identity in the subject process (ADR 0005 keeps whole suites) |
 | Simulator clones for Xcode workers | Parallel app tests | Not measured; simulator hangs seen on this machine |
+
+## A real package: fcheck (206 mutants, 152 tests), 2026-11-02
+
+Debug Litmus, shared machine. See `docs/research/2026-11-02-mutation-extent-and-thoroughness.md` for the verdicts.
+
+| Run | Workers | Wall | Builds | Tests | Load |
+| --- | --- | --- | --- | --- | --- |
+| 1: reruns among workers | 7 | 1384 s | 171 s | 1208 s | ~10 |
+| 2: serial reruns | 7 | 1564 s | 173 s | 1387 s | ~10 |
+| 3: workers from suite parallelism 3.88 | 2 | **650 s** | 183 s | 462 s | ~12 |
+| 4: targeted kill confirmation, parallelism 2.34 | 3 | 1119 s | 261 s | 850 s | 15–34 |
+
+Seven workers were 2.4× slower than two on a suite that parallelises itself. swift-mutation-testing defaults to
+CPUs − 1 workers too; it was not run on fcheck here.
