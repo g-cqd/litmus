@@ -1,5 +1,3 @@
-internal import AemiFileSystem
-internal import AemiRuntime
 internal import Foundation
 internal import SourceCorpus
 
@@ -15,86 +13,46 @@ public struct WorkspaceSnapshot: Sendable {
     public let root: String
     public let entries: [SnapshotEntry]
     public let digest: String
-    static let skipped: Set<String> = [".git", ".build", ".swiftpm", ".litmus", "DerivedData", "node_modules"]
-    static let entryLimit = 150_000
+    /// What a snapshot copies and how far: at most 100,000 regular files of at most 128 MiB each, 8 GiB in total.
+    static let limits: TreeSnapshot.Limits = {
+        var limits = TreeSnapshot.Limits()
+        limits.skippedNames = [".git", ".build", ".swiftpm", ".litmus", "DerivedData", "node_modules"]
+        limits.maxEntries = 150_000
+        limits.maxFiles = 100_000
+        limits.maxFileBytes = 128 << 20
+        limits.maxTotalBytes = 8 << 30
+        limits.jobs = 8
+        return limits
+    }()
 
-    /// Every regular file under `root` (skipped names pruned), from aemi's `DirectoryWalk`: entry types from directory
-    /// records, no link followed, bounded. A link or a special file is refused, never followed or dropped.
-    /// - Returns: relative directories and files, sorted.
-    static func inventory(_ root: String) throws -> (directories: [String], files: [String]) {
-        let policy = DirectoryWalk.Policy(
-            skippedNames: skipped,
-            includesHidden: true,
-            links: .never,
-            reportsDirectories: true,
-            limit: entryLimit + 1,
-            workers: 4
-        )
-        try Task.checkCancellation()
-        let walk = try DirectoryWalk.walk(root, policy: policy)
-        guard !walk.limited, walk.entries.count <= entryLimit else {
-            throw LitmusFailure("inventory entry limit exceeded")
-        }
-        guard walk.failures.isEmpty else {
-            throw LitmusFailure("inventory could not read \(walk.failures.map(\.relativePath).joined(separator: ", "))")
-        }
-        var directories: [String] = [], files: [String] = []
-        for entry in walk.entries {
-            switch entry.kind {
-            case .directory: directories.append(entry.relativePath)
-            case .file: files.append(entry.relativePath)
-            case .link: throw LitmusFailure("refusing symbolic link: \(entry.relativePath)")
-            case .other: throw LitmusFailure("refusing special file: \(entry.relativePath)")
+    /// Every regular file under `root` (skipped names pruned) with its SHA-256: analyzerkit's `TreeSnapshot`, on aemi's
+    /// `DirectoryWalk`. A link or a special file is refused, never followed or dropped.
+    static func currentEntries(_ root: String) async throws -> [SnapshotEntry] {
+        do {
+            return try await TreeSnapshot.inventory(root, limits: limits).entries.map {
+                SnapshotEntry(path: $0.path, sha256: $0.sha256)
             }
-        }
-        guard files.count <= 100_000 else { throw LitmusFailure("snapshot file limit exceeded") }
-        return (directories.sorted(), files.sorted())
-    }
-
-    /// The SHA-256 of every file of `files` under `root`, hashed in parallel with aemi's bounded `mapConcurrently`.
-    static func hashes(_ files: [String], root: String) async throws -> [SnapshotEntry] {
-        try await mapConcurrently(files, limit: 8) { relative in
-            let bytes = try BoundedFileReader.read(path: root + "/" + relative, cap: 128 << 20)
-            return SnapshotEntry(path: relative, sha256: Digest.sha256(bytes))
+        } catch {
+            throw LitmusFailure("inventory: \(error.reason)")
         }
     }
 
-    /// Copies at most 100,000 regular files of at most 128 MiB each (8 GiB in total), in parallel; rejects links,
-    /// special files and existing destinations; removes a partial copy on failure.
+    /// Copies the tree with analyzerkit's `TreeSnapshot` (ADR-0030 there): files cloned where APFS allows, so the copy
+    /// costs the hashing, not the bytes; links, special files and existing destinations refused; a partial copy
+    /// removed on failure.
     /// - Important: Project execution remains trusted code execution; scripts may access paths outside this tree.
     public static func create(source: String, destination: String) async throws -> Self {
-        let fm = FileManager.default
         let source = SourcePath.canonical(source), destination = SourcePath.canonical(destination)
-        guard source != "/", destination != source, !destination.hasPrefix(source + "/"),
-            !fm.fileExists(atPath: destination), fm.fileExists(atPath: source + "/")
-        else { throw LitmusFailure("snapshot destination must be new and outside the source directory") }
-        try fm.createDirectory(atPath: destination, withIntermediateDirectories: false)
+        let manifest: TreeSnapshot.Manifest
         do {
-            let (directories, files) = try inventory(source)
-            for directory in directories {
-                try fm.createDirectory(atPath: destination + "/" + directory, withIntermediateDirectories: false)
-            }
-            let entries = try await mapConcurrently(files, limit: 8) { relative -> (SnapshotEntry, Int) in
-                let bytes = try BoundedFileReader.read(path: source + "/" + relative, cap: 128 << 20)
-                let target = destination + "/" + relative
-                // Independent data, never a hard link back to the source; no link is followed by this write.
-                try Data(bytes).write(to: URL(fileURLWithPath: target), options: .withoutOverwriting)
-                let attributes = try FileManager.default.attributesOfItem(atPath: source + "/" + relative)
-                if let permissions = attributes[.posixPermissions] {
-                    try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: target)
-                }
-                return (SnapshotEntry(path: relative, sha256: Digest.sha256(bytes)), bytes.count)
-            }
-            guard entries.reduce(0, { $0 + $1.1 }) <= 8 << 30 else { throw LitmusFailure("snapshot exceeds 8 GiB") }
-            let inputs = entries.map(\.0)
-            let digest = Digest.sha256(try ArtifactCodec.json(inputs))
-            return Self(sourceRoot: source, root: destination, entries: inputs, digest: digest)
+            manifest = try await TreeSnapshot.copy(from: source, to: destination, limits: limits).manifest
         } catch {
-            do { try fm.removeItem(atPath: destination) } catch let cleanup {
-                throw LitmusFailure("snapshot failed: \(error); cleanup also failed: \(cleanup)")
-            }
-            throw error
+            throw LitmusFailure("snapshot \(error.reason)")
         }
+        let inputs = manifest.entries.map { SnapshotEntry(path: $0.path, sha256: $0.sha256) }
+        // The digest the run's provenance records and `analyze` checks: SHA-256 of the inputs' JSON, as before.
+        let digest = Digest.sha256(try ArtifactCodec.json(inputs))
+        return Self(sourceRoot: source, root: destination, entries: inputs, digest: digest)
     }
 
     /// Resolves a plan's path within this snapshot, rejecting traversal, aliases and symlink redirection.

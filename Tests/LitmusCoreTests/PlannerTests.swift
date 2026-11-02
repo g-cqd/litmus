@@ -145,3 +145,13 @@ import Testing
     #expect(entries["return-default-bool"]?.mutants == 2)
     #expect(entries["boolean-literal-flip"]?.shape == .expression)
 }
+
+@Test func `the shared configuration's litmus section is read beside the other tools' sections`() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-config-\(UUID().uuidString)").path
+    try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    try Data(#"{"exclude": ["Generated/"], "litmus": {"exclude": ["Fixtures/"]}, "arcleak": {"x": 1}}"#.utf8)
+        .write(to: URL(fileURLWithPath: root + "/.swift-analyzers.json"))
+    let configuration = try LitmusConfiguration.load(root: root, explicit: nil)
+    #expect(Set(configuration.exclude) == ["Generated/", "Fixtures/"])
+}

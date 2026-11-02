@@ -17,6 +17,8 @@ public struct TestRunRequest: Sendable {
     public let failFast: Bool
     /// Run only these Swift Testing tests (identifiers without their source location), and no XCTest; nil runs all.
     public var onlySwiftTesting: [String]? = nil
+    /// The memory limit and priority every process of the run gets; the harness adds its own monitor.
+    public var supervision = Supervision()
 }
 
 /// What a suite execution showed, before activation is considered.
@@ -69,7 +71,7 @@ func subjectEnvironment(_ request: TestRunRequest?) -> [String: String] {
         environment[ActivationEnvironment.coverageDirectory] = request.coverageDirectory
         environment["TMPDIR"] = request.temporaryDirectory
         // Unique per test run; also written into `.xctestrun` environments, so simulator processes carry it.
-        environment[ProcessReaper.tokenVariable] = request.coverageDirectory
+        environment[processTokenVariable] = request.coverageDirectory
     }
     if let developer = ProcessInfo.processInfo.environment["DEVELOPER_DIR"] { environment["DEVELOPER_DIR"] = developer }
     return environment
@@ -81,16 +83,11 @@ func writeLog(_ result: ProcessOutput, path: String) throws {
     try Data(bytes).write(to: URL(fileURLWithPath: path), options: .atomic)
 }
 
-/// Which child of the fail-fast race finished first.
-private enum Race: Sendable {
-    case finished(ProcessOutput)
-    case failure
-    /// The stream could not be read as events; the run continues and is judged by its final evidence.
-    case stoppedWatching
-}
+/// The stop reason of a run stopped at its first failing Swift Testing issue.
+let failFastReason = "Swift Testing recorded a failing issue"
 
-/// Runs a process while watching a Swift Testing event stream; on the first failing issue the process group is
-/// cancelled (analyzerkit's `BoundedProcess` terminates it, TERM then KILL).
+/// Runs a process while watching a Swift Testing event stream; on the first failing issue the run's monitor stops it
+/// (analyzerkit's `BoundedProcess`: TERM then KILL to its group, its session cleaned up after).
 func runWatching(
     _ executor: some ProcessExecutor,
     _ command: ToolCommand,
@@ -98,64 +95,48 @@ func runWatching(
     environment: [String: String],
     deadline: Int,
     events: String?,
-    failFast: Bool
+    failFast: Bool,
+    supervision base: Supervision = Supervision()
 ) async throws -> (output: ProcessOutput?, stoppedOnFailure: Bool) {
-    guard failFast, let events else {
-        let output = try await executor.execute(
-            command,
-            directory: directory,
-            environment: environment,
-            timeout: deadline
-        )
-        return (output, false)
-    }
-    return try await withThrowingTaskGroup(of: Race.self) { group in
-        group.addTask {
-            .finished(
-                try await executor.execute(command, directory: directory, environment: environment, timeout: deadline)
-            )
-        }
-        group.addTask {
+    var supervision = base
+    if failFast, let events {
+        supervision.monitor = { stop in
             var offset: UInt64 = 0
             var pending: [UInt8] = []
             while !Task.isCancelled {
-                try await Task.sleep(for: .milliseconds(15))
+                try? await Task.sleep(for: .milliseconds(15))
                 guard let handle = FileHandle(forReadingAtPath: events) else { continue }
                 defer { try? handle.close() }
-                try handle.seek(toOffset: offset)
-                let chunk = try handle.read(upToCount: 1 << 20) ?? Data()
+                guard (try? handle.seek(toOffset: offset)) != nil,
+                    let chunk = try? handle.read(upToCount: 1 << 20)
+                else { return }
                 offset += UInt64(chunk.count)
                 pending += chunk
-                guard let scan = try? TestEvidence.swiftTestingEvents(pending), pending.count < 4 << 20 else {
-                    return .stoppedWatching
+                // A stream that cannot be read as events: stop watching; the run is judged by its final evidence.
+                guard let scan = try? TestEvidence.swiftTestingEvents(pending), pending.count < 4 << 20 else { return }
+                if scan.failed {
+                    stop(failFastReason)
+                    return
                 }
-                if scan.failed { return .failure }
                 pending.removeFirst(scan.consumed)
             }
-            throw CancellationError()
         }
-        var output: ProcessOutput?
-        var stopped = false
-        while true {
-            do {
-                guard let next = try await group.next() else { break }
-                switch next {
-                case .finished(let finished):
-                    output = finished
-                    group.cancelAll()
-                case .failure:
-                    stopped = true
-                    group.cancelAll()
-                case .stoppedWatching:
-                    break
-                }
-            } catch is CancellationError {
-                // The losing child of the race; a cancellation of the caller is rethrown below.
-            }
-        }
-        try Task.checkCancellation()
-        return (output, stopped)
     }
+    let output = try await executor.execute(
+        command,
+        directory: directory,
+        environment: environment,
+        timeout: deadline,
+        supervision: supervision
+    )
+    return (output, output.stopReason == failFastReason)
+}
+
+/// The reason a process that ended without a structured result gives: its signal, the memory limit, or its status.
+func abnormalEnd(_ output: ProcessOutput, _ name: String) -> String {
+    if output.exceededMemory { return "\(name) exceeded the memory limit (\(output.stopReason ?? ""))" }
+    if let signal = output.terminationSignal { return "\(name) was terminated by signal \(signal)" }
+    return "\(name) exited \(output.exitStatus) without a recorded failure"
 }
 
 /// Runs a SwiftPM package's built test bundles directly, without `swift test`: no manifest evaluation per run and no
@@ -302,7 +283,8 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
                     environment: environment,
                     deadline: remaining(),
                     events: events,
-                    failFast: request.failFast
+                    failFast: request.failFast,
+                    supervision: request.supervision
                 )
                 if let output { try writeLog(output, path: "\(logs)/\(stem).log") }
                 evidence += ["logs/\(stem).events.jsonl", "logs/\(stem).log"]
@@ -317,12 +299,11 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
                     FileManager.default.fileExists(atPath: xunit)
                     ? try? TestEvidence.xunit(BoundedFileReader.read(path: xunit, cap: 16 << 20)) : nil
                 if FileManager.default.fileExists(atPath: xunit) { evidence.append("logs/\(stem).xml") }
+                if output.exceededMemory { return result(.crashed, nil, abnormalEnd(output, "Swift Testing")) }
                 if scan?.failed == true || (counts?.failed ?? 0) > 0 {
                     return result(.failed, nil, "Swift Testing recorded a failing issue")
                 }
-                if output.exitStatus != 0 {
-                    return result(.crashed, nil, "Swift Testing exited \(output.exitStatus) without a recorded failure")
-                }
+                if output.exitStatus != 0 { return result(.crashed, nil, abnormalEnd(output, "Swift Testing")) }
                 guard let counts, scan?.ended == true, counts.total > 0 else {
                     return result(.unusable, nil, "Swift Testing evidence incomplete for \(bundle.module)")
                 }
@@ -339,15 +320,19 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
                     command,
                     directory: workspace,
                     environment: environment,
-                    timeout: remaining()
+                    timeout: remaining(),
+                    supervision: request.supervision
                 )
                 try writeLog(output, path: "\(logs)/\(stem).log")
                 evidence.append("logs/\(stem).log")
                 if output.timedOut { return result(.timedOut, nil, "XCTest exceeded \(request.deadline) s") }
+                // A signal, not a status of 128 or more, tells a crash: a test runner may exit 134 itself.
+                if output.terminationSignal != nil || output.exceededMemory {
+                    return result(.crashed, nil, abnormalEnd(output, "XCTest"))
+                }
                 switch output.exitStatus {
                 case 0: passed += bundle.xcTestCount
                 case 1: return result(.failed, nil, "XCTest reported a failing test (exit 1)")
-                case 128...: return result(.crashed, nil, "XCTest terminated by signal \(output.exitStatus - 128)")
                 default: return result(.unusable, nil, "xctest exited \(output.exitStatus)")
                 }
             }
@@ -384,7 +369,8 @@ public struct SwiftPMToolHarness<Executor: ProcessExecutor>: TestHarness {
             command,
             directory: workspace,
             environment: subjectEnvironment(request),
-            timeout: request.deadline
+            timeout: request.deadline,
+            supervision: request.supervision
         )
         try writeLog(output, path: "\(logs)/\(request.name).log")
         let duration = ContinuousClock.now - start
@@ -400,6 +386,7 @@ public struct SwiftPMToolHarness<Executor: ProcessExecutor>: TestHarness {
             )
         }
         if output.timedOut { return result(.timedOut, nil, "swift test exceeded \(request.deadline) s") }
+        if output.exceededMemory { return result(.crashed, nil, abnormalEnd(output, "swift test")) }
         guard let reports = try? TestEvidence.swiftPM(at: xunit) else {
             return output.exitStatus == 0
                 ? result(.unusable, nil, "no structured test result")
@@ -448,11 +435,14 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
             result: bundle,
             xctestrun: xctestrun
         )
+        // The memory limit covers `xcodebuild`'s session; the simulator's test host is outside it, and is ended after
+        // the run through the token its `.xctestrun` environment carries.
         let output = try await executor.execute(
             command,
             directory: workspace,
             environment: subjectEnvironment(request),
-            timeout: request.deadline
+            timeout: request.deadline,
+            supervision: request.supervision
         )
         try writeLog(output, path: "\(logs)/\(request.name).log")
         var evidence = ["logs/\(request.name).log"]
