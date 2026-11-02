@@ -1,6 +1,5 @@
 internal import AemiKernel
 internal import AemiRuntime
-internal import CryptoKit
 internal import Foundation
 internal import ProjectModel
 internal import SourceCorpus
@@ -265,8 +264,9 @@ private final class Sites: SyntaxVisitor {
 
 /// Cryptographic content identity for execution validity, distinct from fast diagnostic identities.
 public enum Digest {
-    /// Lower-case hexadecimal SHA-256 of `bytes`.
+    /// Lower-case hexadecimal SHA-256 of `bytes`: aemi's `ContentDigest` (CommonCrypto on Apple platforms, a portable
+    /// FIPS 180-4 implementation elsewhere; aemi ADR 0028), where CryptoKit tied Litmus to Apple platforms.
     public static func sha256(_ bytes: [UInt8]) -> String {
-        Hex.encodedString(Array(SHA256.hash(data: bytes)))
+        ContentDigest.sha256Hex(bytes)
     }
 }

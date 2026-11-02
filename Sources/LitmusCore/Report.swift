@@ -139,10 +139,9 @@ public struct MutationReport: Codable, Sendable, ToolReport {
             throw LitmusFailure("duplicate snapshot input paths")
         }
         let expected = Dictionary(uniqueKeysWithValues: entries.map { ($0.path, $0.sha256) })
-        let files = try WorkspaceSnapshot.inventory(root).files
-        let current = try await WorkspaceSnapshot.hashes(files, root: root)
+        let current = try await WorkspaceSnapshot.currentEntries(root)
         var changed = current.filter { expected[$0.path] != $0.sha256 }.map(\.path)
-        changed += Set(expected.keys).subtracting(files)
+        changed += Set(expected.keys).subtracting(current.map(\.path))
         return changed.sorted()
     }
 }

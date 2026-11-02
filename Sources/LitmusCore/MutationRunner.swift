@@ -1,3 +1,4 @@
+internal import AemiIO
 internal import AemiRuntime
 internal import Foundation
 internal import SourceCorpus
@@ -53,13 +54,13 @@ public struct RunOptions: Sendable {
 }
 
 /// A worker's private directory, from aemi's `ResourcePool`: markers and `TMPDIR` of the runs it hosts live under it.
-struct WorkerSlot: PooledResource {
+struct WorkerSlot: Sendable {
     let directory: String
-    init?(path: String) {
-        let directory = path + "/worker-" + UUID().uuidString.prefix(8)
-        guard (try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)) != nil
-        else { return nil }
-        self.directory = directory
+
+    /// The directory of worker `index` under `root`, created.
+    init(root: String, index: Int) throws {
+        directory = root + "/worker-\(index)"
+        try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
     }
 }
 
@@ -171,7 +172,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             artifact.notes += harnessNotes
             account("discovery", since: phase)
             let allowedWorkers = min(options.jobs, harness.maximumWorkers)
-            let pool = try ResourcePool<WorkerSlot>(diagnostic: workers, count: allowedWorkers)
+            let pool = try ResourcePool(count: allowedWorkers) { index in try WorkerSlot(root: workers, index: index) }
             let current = Judge(
                 harness: harness,
                 pool: pool,
@@ -321,27 +322,18 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                     )
                 }
                 let covered = group.filter { control.reached.contains($0.id) }
-                let steps = try await mapConcurrently(covered, limit: workerCount) { site in try await judge.first(site)
-                }
-                var decisions: [Judge.Decision] = []
-                for step in steps {
+                // Each first run's decision is journalled as it comes (aemi's `forEachConcurrently`): a crash of Litmus
+                // loses only the runs in flight. Reruns wait for the parallel pass and run alone, as before.
+                var reruns: [Judge.Pending] = []
+                try await forEachConcurrently(covered, limit: workerCount, { site in try await judge.first(site) }) {
+                    _,
+                    step in
                     switch step {
-                    case .done(let decision): decisions.append(decision)
-                    case .rerun(let pending): decisions.append(try await judge.finish(pending))
+                    case .done(let decision): try record(decision, into: &artifact, journal)
+                    case .rerun(let pending): reruns.append(pending)
                     }
                 }
-                for decision in decisions {
-                    try record(
-                        decision.site,
-                        decision.verdict,
-                        decision.reason,
-                        decision.evidence,
-                        nanoseconds: decision.nanoseconds,
-                        tests: decision.tests,
-                        into: &artifact,
-                        journal
-                    )
-                }
+                for pending in reruns { try record(try await judge.finish(pending), into: &artifact, journal) }
                 account("tests", since: phase)
                 try installed.restore()
                 try ArtifactCodec.write(artifact, path: checkpointPath)
@@ -365,6 +357,19 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             }
             throw error
         }
+    }
+
+    private func record(_ decision: Judge.Decision, into artifact: inout RunArtifact, _ journal: ResultJournal) throws {
+        try record(
+            decision.site,
+            decision.verdict,
+            decision.reason,
+            decision.evidence,
+            nanoseconds: decision.nanoseconds,
+            tests: decision.tests,
+            into: &artifact,
+            journal
+        )
     }
 
     private func record(
@@ -473,7 +478,8 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 guard let source = String(bytes: bytes, encoding: .utf8) else { throw LitmusFailure("not UTF-8") }
                 let schema = try SchemaWriter.schema(source, mutations: sites)
                 originals[path] = Data(bytes)
-                try Data(schema.text.utf8).write(to: URL(fileURLWithPath: path), options: .atomic)
+                // Scratch files the next run re-creates: atomic, not synced.
+                try AtomicFile.replace(at: path, with: Array(schema.text.utf8), durability: .none)
                 rendered[path] = schema
             }
         } catch {
@@ -490,7 +496,7 @@ struct InstalledSchema {
     let rendered: [String: RenderedSchema]
 
     func restore() throws {
-        for (path, data) in originals { try data.write(to: URL(fileURLWithPath: path), options: .atomic) }
+        for (path, data) in originals { try AtomicFile.replace(at: path, with: [UInt8](data), durability: .none) }
     }
 }
 
@@ -592,7 +598,7 @@ struct Judge: Sendable {
         failFast: Bool = false,
         only: [String]? = nil
     ) async throws -> Execution {
-        guard let slot = pool.checkout() else { throw LitmusFailure("internal: no free worker") }
+        let slot = try await pool.acquire()
         defer { pool.checkin(slot) }
         let unique = UUID().uuidString.prefix(8)
         let coverage = "\(slot.directory)/coverage-\(unique)", temporary = "\(slot.directory)/tmp-\(unique)"

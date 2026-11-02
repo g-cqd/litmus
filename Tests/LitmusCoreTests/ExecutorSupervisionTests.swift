@@ -3,38 +3,6 @@ import Testing
 
 @testable import LitmusCore
 
-/// A `KERN_PROCARGS2` record: argc, executable path, padding, arguments, environment.
-private func procargs(arguments: [String], environment: [String]) -> ArraySlice<UInt8> {
-    let argc = UInt32(arguments.count)
-    var bytes: [UInt8] = [UInt8(argc & 0xFF), UInt8(argc >> 8 & 0xFF), UInt8(argc >> 16 & 0xFF), UInt8(argc >> 24)]
-    bytes += Array("/bin/tool".utf8) + [0, 0, 0]
-    for string in arguments + environment { bytes += Array(string.utf8) + [0] }
-    return ArraySlice(bytes + [0])
-}
-
-@Test func `a token is found in the environment, never in the arguments`() {
-    let entry = Array("LITMUS_PROCESS_TOKEN=abc".utf8)
-    #expect(
-        ProcessReaper.holds(
-            procargs: procargs(arguments: ["tool"], environment: ["A=1", "LITMUS_PROCESS_TOKEN=abc"]),
-            entry: entry
-        )
-    )
-    #expect(
-        !ProcessReaper.holds(
-            procargs: procargs(arguments: ["tool", "LITMUS_PROCESS_TOKEN=abc"], environment: ["A=1"]),
-            entry: entry
-        )
-    )
-    #expect(
-        !ProcessReaper.holds(
-            procargs: procargs(arguments: ["tool"], environment: ["LITMUS_PROCESS_TOKEN=abcd"]),
-            entry: entry
-        )
-    )
-    #expect(!ProcessReaper.holds(procargs: ArraySlice([1, 0]), entry: entry))
-}
-
 /// Starts, through the real executor, a shell whose background child leaves the process group (as `swift test`'s
 /// testing helper does), and returns the child's pid once the executor has returned.
 private func escapedChild(shellTail: String, timeout: Int) async throws -> (pid_t, ProcessOutput) {
@@ -77,7 +45,7 @@ private func gone(_ pid: pid_t) async throws -> Bool {
     #expect(try await gone(pid))
 }
 
-@Test func `the session trampoline passes arguments through unchanged`() async throws {
+@Test func `arguments pass through unchanged`() async throws {
     let arguments = ["plain", "with space", "", "quote's \"double\"", "$HOME", "-c", "*"]
     let output = try await BoundedExecutor().execute(
         ToolCommand(executable: "/usr/bin/printf", arguments: ["%s\\n"] + arguments),
@@ -89,7 +57,7 @@ private func gone(_ pid: pid_t) async throws -> Bool {
     #expect(String(decoding: output.stdout, as: UTF8.self) == arguments.map { $0 + "\n" }.joined())
 }
 
-@Test func `a missing executable is an error, as without the trampoline`() async throws {
+@Test func `a missing executable is an error`() async throws {
     await #expect(throws: LitmusFailure.self) {
         try await BoundedExecutor().execute(
             ToolCommand(executable: "/nonexistent/litmus-tool", arguments: []),
@@ -104,7 +72,7 @@ private func gone(_ pid: pid_t) async throws -> Bool {
 private let unprotectedPython = "/Applications/Xcode.app/Contents/Developer/usr/bin/python3"
 
 @Test(.enabled(if: FileManager.default.isExecutableFile(atPath: unprotectedPython)))
-func `DYLD variables reach the command through the SIP-protected shell`() async throws {
+func `DYLD variables reach a command outside SIP`() async throws {
     let output = try await BoundedExecutor().execute(
         ToolCommand(
             executable: unprotectedPython,
@@ -118,4 +86,55 @@ func `DYLD variables reach the command through the SIP-protected shell`() async 
     #expect(lines.contains("DYLD_FRAMEWORK_PATH=/a b/frameworks"))
     #expect(lines.contains("DYLD_LIBRARY_PATH=/lib"))
     #expect(!lines.contains { $0.hasPrefix("LITMUS_TRAMPOLINE_") })
+}
+
+@Test func `a monitor stops the command and its reason is kept`() async throws {
+    var supervision = Supervision()
+    supervision.monitor = { stop in
+        try? await Task.sleep(for: .milliseconds(150))
+        stop(failFastReason)
+    }
+    let output = try await BoundedExecutor().execute(
+        ToolCommand(executable: "/bin/sleep", arguments: ["30"]),
+        directory: "/",
+        environment: [:],
+        timeout: 20,
+        supervision: supervision
+    )
+    #expect(output.stopReason == failFastReason)
+    #expect(output.terminationSignal == SIGTERM)
+}
+
+@Test func `a command past the memory limit is stopped and says so`() async throws {
+    var supervision = Supervision()
+    supervision.memoryLimitBytes = 64 << 20
+    supervision.sampling = .milliseconds(25)
+    let output = try await BoundedExecutor().execute(
+        ToolCommand(executable: "/usr/bin/perl", arguments: ["-e", "my $x = 'a' x 400_000_000; sleep 30"]),
+        directory: "/",
+        environment: [:],
+        timeout: 20,
+        supervision: supervision
+    )
+    #expect(output.exceededMemory)
+    #expect((output.peakFootprintBytes ?? 0) > 64 << 20)
+    #expect(abnormalEnd(output, "XCTest").contains("memory limit"))
+}
+
+@Test func `a crash is told by its signal`() async throws {
+    let output = try await BoundedExecutor().execute(
+        ToolCommand(executable: "/bin/sh", arguments: ["-c", "kill -ABRT $$"]),
+        directory: "/",
+        environment: [:],
+        timeout: 20
+    )
+    #expect(output.terminationSignal == SIGABRT)
+    #expect(abnormalEnd(output, "XCTest") == "XCTest was terminated by signal \(SIGABRT)")
+    let exited = try await BoundedExecutor().execute(
+        ToolCommand(executable: "/bin/sh", arguments: ["-c", "exit 134"]),
+        directory: "/",
+        environment: [:],
+        timeout: 20
+    )
+    #expect(exited.terminationSignal == nil)
 }

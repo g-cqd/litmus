@@ -7,7 +7,7 @@ public struct LitmusConfiguration: Decodable, Sendable {
     public var exclude: [String] = []
 
     /// Resolves the family's shared top-level exclusions plus `.litmus.json`; rejects duplicate/unknown keys.
-    /// The pinned analyzerkit does not yet permit a `litmus` section in `.swift-analyzers.json`.
+    /// A `litmus` section of `.swift-analyzers.json` is read as well (analyzerkit ADR-0030), with the shared keys only.
     public static func load(root: String, explicit: String?) throws -> Self {
         let resolved = try SharedConfiguration.resolve(
             for: SharedConfiguration.Tool(name: "litmus", fileName: ".litmus.json", keys: []),

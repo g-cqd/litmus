@@ -1,3 +1,4 @@
+internal import AemiIO
 internal import AemiJSON
 internal import AemiProtobufCore
 internal import Foundation
@@ -64,9 +65,11 @@ public enum ArtifactCodec {
         let bytes = try BoundedFileReader.read(path: path, cap: ArtifactWire.byteCap)
         return try decode(type, bytes: path.hasSuffix(".pb") ? ArtifactWire.decode(bytes) : bytes)
     }
+    /// Writes the artifact atomically and in order with what came before it: aemi's `AtomicFile` (a temporary beside
+    /// it, synced, renamed, the directory synced), where Foundation's `.atomic` leaves the rename unsynced.
     public static func write<T: Encodable>(_ value: T, path: String) throws {
         let bytes = try json(value)
         let output = path.hasSuffix(".pb") ? ArtifactWire.encode(bytes) : bytes
-        try Data(output).write(to: URL(fileURLWithPath: path), options: .atomic)
+        try AtomicFile.replace(at: path, with: output, durability: .barrier)
     }
 }

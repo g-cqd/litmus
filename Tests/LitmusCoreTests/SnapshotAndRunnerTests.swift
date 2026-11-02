@@ -73,9 +73,13 @@ private final class FakeExecutor: ProcessExecutor {
             .map { directory + "/Sources/" + $0 }
     }
 
-    func execute(_ command: ToolCommand, directory: String, environment: [String: String], timeout: Int) async throws
-        -> ProcessOutput
-    {
+    func execute(
+        _ command: ToolCommand,
+        directory: String,
+        environment: [String: String],
+        timeout: Int,
+        supervision: Supervision
+    ) async throws -> ProcessOutput {
         if command.arguments.contains("--build-tests") {
             builds.withLock { $0 += 1 }
             if let poison = config.poison {
@@ -123,7 +127,10 @@ private final class FakeExecutor: ProcessExecutor {
         let outcome: Active = active ? config.active : (config.failsBaseline ? .fail : .pass)
         switch outcome {
         case .hang: return ProcessOutput(exitStatus: 124, stdout: [], stderr: [], truncated: false, timedOut: true)
-        case .crash: return ProcessOutput(exitStatus: 139, stdout: [], stderr: [], truncated: false, timedOut: false)
+        case .crash:
+            var output = ProcessOutput(exitStatus: 139, stdout: [], stderr: [], truncated: false, timedOut: false)
+            output.terminationSignal = 11
+            return output
         case .fail, .pass:
             let fail = outcome == .fail
             let xml =
