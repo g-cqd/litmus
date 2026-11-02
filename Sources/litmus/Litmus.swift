@@ -211,6 +211,8 @@ private struct Run: AsyncParsableCommand {
     var reachFrom: String?
     @Option(help: "Run shard k of n (k/n): whole module units; put the shards together with `litmus merge`.")
     var shard: String?
+    @Flag(help: "Run Xcode tests through xcodebuild only, not through Litmus's simulator helper for hostless bundles.")
+    var noSimulatorHelper = false
     @Option(
         help:
             "copy (default: a fresh copy), persistent:<dir> (kept and synchronised: incremental builds), or in-place (CI: the checkout itself, originals backed up and restored)."
@@ -257,6 +259,7 @@ private struct Run: AsyncParsableCommand {
         options.storeLimitMiB = storeLimit
         options.resume = resume
         options.reachFrom = reachFrom
+        options.simulatorHarness = !noSimulatorHelper
         do { options.shard = try shard.map(ShardSelection.init(parsing:)) } catch {
             throw ValidationError("\(error)")
         }
