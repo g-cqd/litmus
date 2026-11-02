@@ -286,3 +286,13 @@ private let twoSites = """
     let verdicts = Dictionary(uniqueKeysWithValues: result.results.map { ($0.mutation.original, $0.verdict) })
     #expect(verdicts == ["x": .killed, "y": .unviable])
 }
+
+@Test func `a directory is removed, and a missing one counts as removed`() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-remove-\(UUID().uuidString)")
+        .path
+    try FileManager.default.createDirectory(atPath: directory + "/a/b", withIntermediateDirectories: true)
+    FileManager.default.createFile(atPath: directory + "/a/b/f", contents: Data("x".utf8))
+    #expect(MutationRunner<BoundedExecutor>.remove(directory))
+    #expect(!FileManager.default.fileExists(atPath: directory))
+    #expect(MutationRunner<BoundedExecutor>.remove(directory))
+}

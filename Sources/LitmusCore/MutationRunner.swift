@@ -436,12 +436,15 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             artifact.complete = true
             timings["total"] = seconds(clock.now - started)
             artifact.timings = timings
+            if !options.keepWorkspace {
+                // Every verdict is recorded: a workspace that cannot be removed (Finder or Spotlight writing into it
+                // while it goes, seen 2026-11-02) is noted, never a failed run.
+                for directory in [snapshot.root, workers] where !Self.remove(directory) {
+                    artifact.notes.append("could not remove \(directory); delete it by hand")
+                }
+            }
             try ArtifactCodec.write(artifact, path: checkpointPath)
             try ArtifactCodec.write(artifact, path: output + "/run.pb")
-            if !options.keepWorkspace {
-                try fm.removeItem(atPath: snapshot.root)
-                try fm.removeItem(atPath: workers)
-            }
             return artifact
         } catch {
             artifact.notes.append("run stopped: \(error); partial evidence is not a successful run")
@@ -480,6 +483,19 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         var name = String(target.map { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") ? $0 : "_" })
         if let first = name.first, first.isNumber { name = "_" + name }
         return name
+    }
+
+    /// Removes `directory`, retrying while another process adds to it; true when it is gone.
+    static func remove(_ directory: String) -> Bool {
+        for attempt in 0..<5 {
+            if (try? FileManager.default.removeItem(atPath: directory)) != nil
+                || !FileManager.default.fileExists(atPath: directory)
+            {
+                return true
+            }
+            usleep(UInt32(100_000 << attempt))
+        }
+        return false
     }
 
     private func record(_ decision: Judge.Decision, into artifact: inout RunArtifact, _ journal: ResultJournal) throws {
