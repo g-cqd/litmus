@@ -36,14 +36,16 @@ private func fixture(_ source: String = "public func choice(_ value: Bool) -> In
     }
 }
 
-@Test func `snapshot refuses symlinks instead of following external inputs`() async throws {
+@Test func `snapshot leaves a symlink out, lists it, and never follows it`() async throws {
     let base = try fixture()
     defer { try? FileManager.default.removeItem(at: base) }
-    try FileManager.default.createSymbolicLink(atPath: base.path + "/input/link", withDestinationPath: "/tmp")
-    await #expect(throws: (any Error).self) {
-        try await WorkspaceSnapshot.create(source: base.path + "/input", destination: base.path + "/copy")
-    }
-    #expect(!FileManager.default.fileExists(atPath: base.path + "/copy"))
+    try FileManager.default.createDirectory(atPath: base.path + "/input/.claude", withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(atPath: base.path + "/input/.claude/skills", withDestinationPath: "/tmp")
+    let snapshot = try await WorkspaceSnapshot.create(source: base.path + "/input", destination: base.path + "/copy")
+    #expect(snapshot.skippedLinks == [".claude/skills"])
+    #expect(!snapshot.entries.contains { $0.path.hasPrefix(".claude") })
+    #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: base.path + "/copy/.claude/skills")) == nil)
+    #expect(throws: (any Error).self) { try snapshot.path(for: ".claude/skills") }
 }
 
 /// Simulates SwiftPM: builds fail when a poisoned replacement is present, tests write xUnit and activation markers.

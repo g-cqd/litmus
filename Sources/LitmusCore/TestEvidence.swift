@@ -18,13 +18,33 @@ public enum TestEvidence {
         public let ended: Bool
         /// Bytes consumed: complete lines only, so a partially written line is read on the next scan.
         public let consumed: Int
+        /// Test functions (not suites) that ended, and those of them with a failing issue; skipped functions.
+        public var endedTests: Set<String> = []
+        public var skippedTests: Set<String> = []
+        /// Identifiers the stream declares as test functions (`test` records of kind `function`); empty when it
+        /// declares none, and suites are then told apart by their identifiers (a function's holds `(`).
+        public var functions: Set<String> = []
+
+        /// The counts of test functions, from the stream alone: what xUnit would say, without its XML (which the
+        /// toolchain writes unescaped when a test's name holds a double quote).
+        public var counts: TestCounts {
+            func isFunction(_ id: String) -> Bool { functions.isEmpty ? id.contains("(") : functions.contains(id) }
+            let ended = endedTests.filter(isFunction)
+            let failedEnded = ended.filter { failedTests.contains($0) }
+            return TestCounts(
+                passed: ended.count - failedEnded.count,
+                failed: failedEnded.count,
+                skipped: skippedTests.filter(isFunction).count
+            )
+        }
     }
 
     /// Scans the complete lines of a Swift Testing event stream with AemiJSON's lazy tape: only the touched keys are
     /// materialised. A malformed complete line is rejected, never skipped.
     /// - Complexity: O(*n*) in `bytes`.
     public static func swiftTestingEvents(_ bytes: [UInt8]) throws -> EventScan {
-        var failedTests: Set<String> = []
+        var failedTests: Set<String> = [], endedTests: Set<String> = [], skippedTests: Set<String> = []
+        var functions: Set<String> = []
         var failed = false, ended = false, start = 0, consumed = 0
         var index = 0
         while index < bytes.count {
@@ -43,8 +63,14 @@ public enum TestEvidence {
                                 if let test = payload.testID.string { failedTests.insert(test) }
                             }
                         case "runEnded": ended = true
+                        case "testEnded": if let test = payload.testID.string { endedTests.insert(test) }
+                        case "testSkipped": if let test = payload.testID.string { skippedTests.insert(test) }
                         default: break
                         }
+                    } else if root.kind.string == "test", root.payload.kind.string == "function",
+                        let id = root.payload.id.string
+                    {
+                        functions.insert(id)
                     }
                 }
                 start = index + 1
@@ -52,7 +78,11 @@ public enum TestEvidence {
             }
             index += 1
         }
-        return EventScan(failedTests: failedTests, failed: failed, ended: ended, consumed: consumed)
+        var scan = EventScan(failedTests: failedTests, failed: failed, ended: ended, consumed: consumed)
+        scan.endedTests = endedTests
+        scan.skippedTests = skippedTests
+        scan.functions = functions
+        return scan
     }
 
     /// SwiftPM emits XCTest at the requested path (with --parallel) and Swift Testing at a suffixed path.

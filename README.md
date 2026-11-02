@@ -3,7 +3,7 @@
 Evidence-led mutation testing for Swift packages and Xcode projects, built in the style of `arcleak`, `deadwood`, `dolly`,
 `fcheck`, `modeler` and `analyzerkit`, on **analyzerkit, aemi, AemiJSON and AemiProtobuf**.
 
-**Status: 0.2.0-dev, not production-qualified, safety-certified or military-qualified.** Host Swift packages are
+**Status: 0.3.0-dev, not production-qualified, safety-certified or military-qualified.** Host Swift packages are
 verified end to end on a real fixture; the Xcode path builds for the iOS Simulator but has not run tests on one yet.
 The CLI needs macOS 15+ and Swift 6.4; a subject keeps its own settings.
 
@@ -33,13 +33,19 @@ litmus run . --project App.xcodeproj --scheme AppTests \
 An iOS-only package uses its Xcode scheme (omit `--project`), never host `swift test`.
 
 `run` options: `--jobs N` (default CPUs − 1), `--timeout S` (cap of the derived deadline, 300), `--timeout-factor F`
-(4), `--batch-size N` (64), `--harness automatic|swift-test`, `--no-fail-fast`, `--kill-confirmation targeted|full|none` (targeted), `--keep-workspace`,
-`--swiftpm-build-system native|swiftbuild`, `--exclude-path GLOB`, `--config FILE`.
+(4), `--batch-size N` (64), `--harness automatic|swift-test`, `--no-fail-fast`, `--kill-confirmation targeted|full|none`
+(targeted), `--keep-workspace`, `--swiftpm-build-system native|swiftbuild`, `--exclude-path GLOB`, `--only-path GLOB`
+(mutate only matching files; `include` in `.litmus.json` or the `litmus` section of `.swift-analyzers.json`),
+`--config FILE`, `--memory-limit MiB` (4096; past it, a crash), `--baseline-repetitions N` (3: flaky tests are found and
+left out), `--suite-width N`, `--no-test-target-selection`, `--per-test-reach`, and `--background`. `--background`
+runs builds and first passes at background priority, 2 to 15 times slower: a subject that builds with
+`-warn-long-expression-type-checking` and warnings as errors may then fail its own time limits (the error is in the
+message). SIGINT or SIGTERM ends a run cleanly: exit 128 + signal, children ended, an incomplete checkpoint written.
 
 ## How a run works
 
 1. **Snapshot.** The subject is copied into a new run directory outside it (aemi `DirectoryWalk`, parallel SHA-256);
-   links and special files are refused. Only the copy is ever rewritten. This is not an OS sandbox: manifests, plugins,
+   a symbolic link is left out and listed in the run's notes (never followed), a special file refused. Only the copy is ever rewritten. This is not an OS sandbox: manifests, plugins,
    scripts and tests run with your rights. Use a disposable restricted runner for untrusted code.
 2. **Plan.** Negated conditions, swapped ternaries and swapped `&&`/`||` (operands parenthesised), outside tests,
    previews, debug-only code, generated code, files no target compiles, and macro arguments; every exclusion is noted.

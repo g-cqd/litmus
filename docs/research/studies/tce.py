@@ -8,7 +8,7 @@ Different code proves nothing either way.
 
 Killed mutants are run as a control: a killed mutant reported equivalent would show the comparison unsound.
 
-usage: tce.py RUN_JSON PACKAGE_DIR TARGET OUT_JSON [--killed N]
+usage: tce.py RUN_JSON PACKAGE_DIR DEFAULT_TARGET OUT_JSON [--killed N]
 """
 import hashlib, json, os, random, shutil, subprocess, sys, time
 
@@ -27,48 +27,57 @@ if os.path.exists(mirrors):
     shutil.copy2(mirrors, f'{work}/.swiftpm/configuration/mirrors.json')
 
 
-def build():
-    """Release build of the target; returns (ok, seconds)."""
+def build(target):
+    """Release build of `target`; returns (ok, seconds, log tail)."""
     start = time.time()
     r = subprocess.run(['swift', 'build', '-c', 'release', '--target', target, '-j', '6'], cwd=work,
                        capture_output=True, text=True)
     return r.returncode == 0, time.time() - start, r.stdout[-2000:] + r.stderr[-2000:]
 
 
-def objects():
+def objects(target):
     """The target's object files under .build, sorted."""
     found = []
     for root, _, names in os.walk(f'{work}/.build'):
-        if f'/{target}.build/' in root + '/' or root.endswith(f'/{target}.build') or f'{target}-' in root:
+        # `<Target>.build` (native build system) or `<Target>-t.build` (Swift Build).
+        if f'/{target}.build/' in root + '/' or f'/{target}-t.build/' in root + '/':
             found += [os.path.join(root, n) for n in names if n.endswith('.o')]
+    # No object found would make every digest the empty one, and every mutant "equivalent".
+    assert found, f'no object files for {target} under {work}/.build'
     return sorted(found)
 
 
-def code_digest():
-    """SHA-256 over the objects' code, constant data and relocations, debug information removed."""
+def code_digest(target):
+    """SHA-256 over the target's whole object files with debug information stripped (`strip -S`): code, data,
+    symbols and relocations all count, so a difference anywhere means "not proven equivalent"."""
     h = hashlib.sha256()
-    paths = objects()
+    paths = objects(target)
     for path in paths:
         stripped = path + '.stripped'
         shutil.copy2(path, stripped)
-        # Debug information only: the symbol table stays, because relocations name their targets through it.
-        subprocess.run(['xcrun', 'strip', '-S', stripped], capture_output=True)
-        # The section contents of the stripped object, without load-command addresses that depend on file layout.
-        dump = subprocess.run(['xcrun', 'otool', '-s', '__TEXT', '__text', '-s', '__TEXT', '__cstring',
-                               '-s', '__TEXT', '__const', '-s', '__DATA', '__const', '-s', '__DATA', '__data',
-                               stripped], capture_output=True).stdout
-        # Relocations: a call is `bl 0` plus a relocation naming the callee, so swapping two calls changes only these.
-        relocations = subprocess.run(['xcrun', 'otool', '-r', stripped], capture_output=True).stdout
-        h.update(os.path.basename(path).encode() + b'\0' + dump.split(b'\n', 1)[-1] + b'\0'
-                 + relocations.split(b'\n', 1)[-1])
+        subprocess.run(['xcrun', 'strip', '-S', stripped], capture_output=True, check=True)
+        h.update(os.path.basename(path).encode() + b'\0' + open(stripped, 'rb').read())
         os.remove(stripped)
     return h.hexdigest(), len(paths)
 
 
-ok, seconds, log = build()
-assert ok, log
-original, count = code_digest()
-print(f'original: {count} objects, built in {seconds:.0f} s', flush=True)
+def target_of(path):
+    """`Sources/<Target>/…` -> `<Target>`."""
+    parts = path.split('/')
+    return parts[1] if len(parts) > 2 and parts[0] == 'Sources' else target
+
+
+originals = {}
+
+
+def original_digest(name):
+    if name not in originals:
+        ok, seconds, log = build(name)
+        assert ok, log
+        originals[name] = code_digest(name)
+        print(f'original {name}: {originals[name][1]} objects, built in {seconds:.0f} s', flush=True)
+    return originals[name][0]
+
 
 results = [r for r in run['results']]
 survivors = [r for r in results if r['verdict'] == 'survived']
@@ -81,22 +90,26 @@ for kind, r in cases:
     path = f"{work}/{m['path']}"
     source = open(path, 'rb').read()
     mutated = source[:m['start']] + m['replacement'].encode() + source[m['end']:]
+    name = target_of(m['path'])
+    reference = original_digest(name)
     open(path, 'wb').write(mutated)
     try:
-        ok, seconds, log = build()
-        digest = code_digest()[0] if ok else None
+        ok, seconds, log = build(name)
+        digest = code_digest(name)[0] if ok else None
     finally:
         open(path, 'wb').write(source)
-    verdict = 'unviable' if not ok else ('equivalent' if digest == original else 'different')
+    verdict = 'unviable' if not ok else ('equivalent' if digest == reference else 'different')
     report.append({'kind': kind, 'id': m['id'], 'operator': m['operatorID'], 'path': m['path'], 'line': m['line'],
                    'original': m['original'], 'replacement': m['replacement'], 'tce': verdict,
                    'buildSeconds': round(seconds, 1)})
     print(f"{kind:15} {verdict:10} {m['operatorID']:16} {m['path'].split('/')[-1]}:{m['line']} {m['original'][:50]!r}",
           flush=True)
-# The comparison is deterministic only if the original rebuilds to the same digest.
-build()
-again = code_digest()[0]
-json.dump({'target': target, 'originalDigest': original, 'rebuildMatches': again == original, 'cases': report},
+# The comparison is deterministic only if each original rebuilds to the same digest (the sources were restored).
+matches = {}
+for name in originals:
+    build(name)
+    matches[name] = code_digest(name)[0] == originals[name][0]
+json.dump({'originalDigests': {k: v[0] for k, v in originals.items()}, 'rebuildMatches': matches, 'cases': report},
           open(out, 'w'), indent=1)
-print('rebuild of the original matches:', again == original)
+print('rebuild of the originals matches:', matches)
 shutil.rmtree(work, ignore_errors=True)

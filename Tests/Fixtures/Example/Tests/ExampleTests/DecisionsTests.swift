@@ -18,3 +18,8 @@ import Testing
 @Test func `an index past the end gives nil`() { #expect(element([1], 5) == nil) }
 @Test func `drain reaches zero`() { #expect(drain(3) == 0) }
 @Test func `overlap keeps the common bits`() { #expect(overlap(Mask(0b1100), Mask(0b1010)) == Mask(0b1000)) }
+
+/// A name holding double quotes: the toolchain writes it into its xUnit report unescaped, which is then not XML.
+@Test func `a "quoted" name is counted from the event stream`() {
+    #expect(gated(true, true))
+}

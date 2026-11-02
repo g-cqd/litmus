@@ -27,6 +27,8 @@ public enum KillConfirmation: String, Codable, Sendable {
 /// Execution options; every bound is checked before anything runs.
 public struct RunOptions: Sendable {
     public var exclude: [String] = []
+    /// When not empty, only files matching these substrings or globs are mutated.
+    public var include: [String] = []
     /// Maximum non-overlapping sites per schema build, 1...256.
     public var batchSize = 64
     /// Deadline of one build, in seconds.
@@ -138,7 +140,12 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         let snapshot = try await WorkspaceSnapshot.create(source: root, destination: output + "/workspace")
         account("snapshot", since: phase)
         phase = clock.now
-        let clonePlan = try await MutationPlanner.plan(root: snapshot.root, exclude: options.exclude, jobs: 8)
+        let clonePlan = try await MutationPlanner.plan(
+            root: snapshot.root,
+            exclude: options.exclude,
+            include: options.include,
+            jobs: 8
+        )
         account("plan", since: phase)
         let plan = MutationPlan(
             root: root,
@@ -173,6 +180,9 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             executionPolicy: RunArtifact.executionPolicy
         )
         var artifact = RunArtifact(provenance: provenance, plan: plan)
+        for link in snapshot.skippedLinks {
+            artifact.notes.append("symbolic link left out of the workspace (never followed): \(link)")
+        }
         let checkpointPath = output + "/run.json"
         try ArtifactCodec.write(artifact, path: checkpointPath)
         let journal = try ResultJournal(path: output + "/results.journal")
@@ -192,7 +202,15 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             try writeLog(baselineBuild, path: logs + "/baseline-build.log")
             account("build", since: phase)
             guard baselineBuild.exitStatus == 0, !baselineBuild.timedOut else {
-                throw LitmusFailure("unmutated build failed; no mutant verdicts are valid (logs/baseline-build.log)")
+                let first = CompilerDiagnostics(baselineBuild, snapshotRoot: snapshot.root).errors.first
+                let detail = first.map { ": \($0.path):\($0.line): \($0.message)" } ?? ""
+                let hint =
+                    options.background
+                    ? "; at --background priority a type-check time limit of the subject's can fail it (rerun without)"
+                    : ""
+                throw LitmusFailure(
+                    "unmutated build failed\(detail)\(hint); no mutant verdicts are valid (logs/baseline-build.log)"
+                )
             }
             phase = clock.now
             var harnessNotes: [String] = []

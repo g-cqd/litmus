@@ -13,12 +13,19 @@ import LitmusCore
 
 private struct SubjectOptions: ParsableArguments {
     @Argument(help: "Subject root containing all local dependencies; never modified by Litmus.") var root: String = "."
-    @Option(help: "Configuration file; only exclude is currently supported.") var config: String?
+    @Option(help: "Configuration file: exclude, and include in .litmus.json or the litmus section.") var config: String?
     @Option(name: .customLong("exclude-path"), help: "Exclude a substring/glob from mutation discovery (repeatable).")
     var exclusions: [String] = []
+    @Option(name: .customLong("only-path"), help: "Mutate only files matching a substring/glob (repeatable).")
+    var inclusions: [String] = []
     var absoluteRoot: String { URL(fileURLWithPath: root).standardizedFileURL.resolvingSymlinksInPath().path }
     func excludes() throws -> [String] {
         do { return try LitmusConfiguration.load(root: absoluteRoot, explicit: config).exclude + exclusions } catch {
+            try fail(error, code: .badConfiguration)
+        }
+    }
+    func includes() throws -> [String] {
+        do { return try LitmusConfiguration.load(root: absoluteRoot, explicit: config).include + inclusions } catch {
             try fail(error, code: .badConfiguration)
         }
     }
@@ -35,7 +42,14 @@ private struct Plan: AsyncParsableCommand {
         guard (1...16).contains(jobs) else { throw ValidationError("jobs must be 1...16") }
         let excludes = try subject.excludes()
         let plan: MutationPlan
-        do { plan = try await MutationPlanner.plan(root: subject.absoluteRoot, exclude: excludes, jobs: jobs) } catch {
+        do {
+            plan = try await MutationPlanner.plan(
+                root: subject.absoluteRoot,
+                exclude: excludes,
+                include: try subject.includes(),
+                jobs: jobs
+            )
+        } catch {
             try fail(error, code: .usage)
         }
         do {
@@ -114,7 +128,10 @@ private struct Run: AsyncParsableCommand {
         false
     @Option(help: "Memory limit of a test process and what it starts, in MiB; past it, a crash. 0: none.")
     var memoryLimit: Int = 4096
-    @Flag(help: "Build and run first passes at background priority; reruns that decide timeouts do not.")
+    @Flag(
+        help:
+            "Build and run first passes at background priority (2–15× slower); reruns that decide timeouts do not. A subject built with -warn-long-*-type-checking and warnings as errors may fail to build."
+    )
     var background = false
     @Option(
         help: "Runs of the unmutated suite looking for flaky Swift Testing tests, which are then left out (1: none)."
@@ -173,6 +190,7 @@ private struct Run: AsyncParsableCommand {
             )
         }
         options.exclude = try subject.excludes()
+        options.include = try subject.includes()
         let artifact: RunArtifact
         let (runDriver, runOptions, runOutput) = (driver, options, output)
         do {

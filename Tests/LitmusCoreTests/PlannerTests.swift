@@ -155,3 +155,23 @@ import Testing
     let configuration = try LitmusConfiguration.load(root: root, explicit: nil)
     #expect(Set(configuration.exclude) == ["Generated/", "Fixtures/"])
 }
+
+@Test func `an include list mutates only the files it names, and an empty match is an error`() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-include-\(UUID().uuidString)").path
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    try FileManager.default.createDirectory(atPath: root + "/Sources/Lib", withIntermediateDirectories: true)
+    try Data(
+        "// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: \"Lib\", targets: [.target(name: \"Lib\")])\n"
+            .utf8
+    )
+    .write(to: URL(fileURLWithPath: root + "/Package.swift"))
+    for name in ["A", "B"] {
+        try Data("func \(name.lowercased())(_ x: Bool) -> Bool { x ? true : false }\n".utf8)
+            .write(to: URL(fileURLWithPath: root + "/Sources/Lib/\(name).swift"))
+    }
+    let all = try await MutationPlanner.plan(root: root)
+    let only = try await MutationPlanner.plan(root: root, include: ["Sources/Lib/B.swift"])
+    #expect(Set(all.mutations.map(\.path)) == ["Sources/Lib/A.swift", "Sources/Lib/B.swift"])
+    #expect(Set(only.mutations.map(\.path)) == ["Sources/Lib/B.swift"])
+    await #expect(throws: LitmusFailure.self) { try await MutationPlanner.plan(root: root, include: ["Nowhere.swift"]) }
+}
