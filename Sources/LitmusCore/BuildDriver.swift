@@ -10,6 +10,9 @@ public struct BuildDriver: Codable, Sendable, Equatable {
     /// SwiftPM's `--build-system` (`native` rebuilds small packages about twice as fast; `swiftbuild` is the default);
     /// nil keeps the toolchain's default. Ignored for Xcode.
     public var swiftPMBuildSystem: String?
+    /// Extra `xcodebuild` arguments for builds and test runs (`--xcodebuild-argument`), such as
+    /// `-skipPackagePluginValidation` or `-clonedSourcePackagesDirPath <dir>`; part of provenance and of reuse keys.
+    public var xcodebuildArguments: [String] = []
     public var usesXcode: Bool { scheme != nil }
 
     /// The arguments every SwiftPM invocation of a run shares, so build, bin path, listing and tests agree.
@@ -74,7 +77,7 @@ public struct BuildDriver: Codable, Sendable, Equatable {
                     "xcodebuild", "test-without-building", "-xctestrun", xctestrun,
                     "-destination", destination, "-resultBundlePath", result, "-derivedDataPath",
                     artifacts + "/DerivedData", "-parallel-testing-enabled", "NO",
-                ] + (onlyTesting ?? []).sorted().map { "-only-testing:" + $0 }
+                ] + xcodebuildArguments + (onlyTesting ?? []).sorted().map { "-only-testing:" + $0 }
             )
         }
         return ToolCommand(
@@ -90,6 +93,6 @@ public struct BuildDriver: Codable, Sendable, Equatable {
         if let container { arguments += [container.hasSuffix(".xcworkspace") ? "-workspace" : "-project", container] }
         if let scheme { arguments += ["-scheme", scheme] }
         if let destination { arguments += ["-destination", destination] }
-        return arguments
+        return arguments + xcodebuildArguments
     }
 }

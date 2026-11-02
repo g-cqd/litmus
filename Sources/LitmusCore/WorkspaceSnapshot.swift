@@ -1,6 +1,22 @@
 internal import Foundation
 internal import SourceCorpus
 
+/// The canonical spelling of a path that may not exist yet: its deepest existing ancestor canonicalized, then the rest.
+/// `SourcePath.canonical` (Foundation's symlink resolution) drops the `/private` of `/private/tmp/x` only once `x`
+/// exists, so a destination canonicalized before it is created would be spelled differently afterwards, and an
+/// "outside the root" check could compare two spellings of one directory.
+func canonicalNew(_ path: String) -> String {
+    let absolute = SourcePath.canonical(path)
+    var existing = absolute
+    var rest: [String] = []
+    while !FileManager.default.fileExists(atPath: existing), let slash = existing.lastIndex(of: "/"), existing != "/" {
+        rest.insert(String(existing[existing.index(after: slash)...]), at: 0)
+        existing = slash == existing.startIndex ? "/" : String(existing[..<slash])
+    }
+    let base = SourcePath.canonical(existing)
+    return rest.isEmpty ? base : (base == "/" ? "" : base) + "/" + rest.joined(separator: "/")
+}
+
 /// One copied input and its cryptographic identity; resources/settings/tests are included, not only mutated files.
 public struct SnapshotEntry: Codable, Sendable, Equatable {
     public let path: String
@@ -50,7 +66,7 @@ public struct WorkspaceSnapshot: Sendable {
     /// removed on failure.
     /// - Important: Project execution remains trusted code execution; scripts may access paths outside this tree.
     public static func create(source: String, destination: String) async throws -> Self {
-        let source = SourcePath.canonical(source), destination = SourcePath.canonical(destination)
+        let source = SourcePath.canonical(source), destination = canonicalNew(destination)
         let manifest: TreeSnapshot.Manifest
         do {
             manifest = try await TreeSnapshot.copy(from: source, to: destination, limits: limits).manifest

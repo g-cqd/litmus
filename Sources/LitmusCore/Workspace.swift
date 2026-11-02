@@ -63,7 +63,7 @@ struct PreparedWorkspace {
                 restore: nil
             )
         case .persistent(let directory):
-            let directory = SourcePath.canonical(directory)
+            let directory = canonicalNew(directory)
             guard directory != source, !directory.hasPrefix(source + "/"), !source.hasPrefix(directory + "/") else {
                 throw LitmusFailure("the persistent workspace must be outside the subject root, and not contain it")
             }

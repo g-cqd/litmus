@@ -214,6 +214,18 @@ private struct Run: AsyncParsableCommand {
     @Flag(help: "Run Xcode tests through xcodebuild only, not through Litmus's simulator helper for hostless bundles.")
     var noSimulatorHelper = false
     @Option(
+        name: .customLong("xcodebuild-argument"),
+        parsing: .unconditionalSingleValue,
+        help: "An extra xcodebuild argument for builds and test runs (repeatable), e.g. -skipPackagePluginValidation."
+    )
+    var xcodebuildArguments: [String] = []
+    @Option(help: "Print this report of the run on stdout instead of the artifact: xcode, json, sarif or markdown.")
+    var report: String?
+    @Option(help: "With --report: baseline file whose findings are left out (the base branch's, for the gate).")
+    var baseline: String?
+    @Option(help: "With --report: new-survivors fails on survivors the --baseline does not hold.")
+    var gate: String?
+    @Option(
         help:
             "copy (default: a fresh copy), persistent:<dir> (kept and synchronised: incremental builds), or in-place (CI: the checkout itself, originals backed up and restored)."
     )
@@ -292,6 +304,13 @@ private struct Run: AsyncParsableCommand {
             )
         } catch { try fail(error, code: .usage) }
         driver.swiftPMBuildSystem = swiftpmBuildSystem
+        driver.xcodebuildArguments = xcodebuildArguments
+        guard report.map({ ["xcode", "json", "sarif", "markdown"].contains($0) }) ?? true else {
+            throw ValidationError("report must be xcode, json, sarif or markdown")
+        }
+        guard gate == nil || (gate == "new-survivors" && baseline != nil && report != nil) else {
+            throw ValidationError("--gate new-survivors needs --report and --baseline")
+        }
         if !driver.usesXcode && !FileManager.default.fileExists(atPath: subject.absoluteRoot + "/Package.swift") {
             throw ValidationError(
                 "host package requires Package.swift; Xcode projects need --project, --scheme and --destination"
@@ -317,7 +336,12 @@ private struct Run: AsyncParsableCommand {
             stderr("litmus: interrupted by signal \(interrupted.signal); partial evidence at \(output)/run.json")
             throw ExitCode(interrupted.exitStatus)
         } catch { try fail(error, code: .internalFailure) }
-        print(String(decoding: try ArtifactCodec.json(artifact), as: UTF8.self))
+        if let report {
+            // One step for CI (Danger runs one command per analyzer): the run, then its report as `analyze` gives it.
+            try await printReport(artifact, format: report)
+        } else {
+            print(String(decoding: try ArtifactCodec.json(artifact), as: UTF8.self))
+        }
         if let scope = artifact.plan.scope, artifact.results.isEmpty {
             stderr(
                 "litmus: \(scope.source): \(scope.swiftFiles) changed Swift file(s), no mutable site in scope; "
@@ -346,6 +370,38 @@ private struct Run: AsyncParsableCommand {
             )
         }
         if !artifact.isSuccessfulExecution { throw ExitCode(ExitStatus.internalFailure.rawValue) }
+        if reportFindings { throw ExitCode(ExitStatus.findings.rawValue) }
+    }
+
+    /// Whether the report printed findings that fail the run (errors, and warnings under the gate).
+    private var reportFindings = false
+
+    private mutating func printReport(_ artifact: RunArtifact, format: String) async throws {
+        var accepted: Set<String> = []
+        if let baseline, FileManager.default.fileExists(atPath: baseline) {
+            do {
+                let file = try ArtifactCodec.decode(
+                    BaselineFile.self,
+                    bytes: Array(try Data(contentsOf: URL(fileURLWithPath: baseline)))
+                ).validated(requiringVersion: true)
+                accepted = Set(file.fingerprints)
+            } catch { try fail(error, code: .badConfiguration) }
+        } else if let baseline {
+            // No base baseline yet (no nightly has run): every finding is new, as without one.
+            stderr("litmus: no baseline at \(baseline); every finding counts as new")
+        }
+        let root = subject.absoluteRoot
+        let made: MutationReport
+        do {
+            made = try await MutationReport.make(artifact, root: root, relative: true, baseline: accepted)
+        } catch { try fail(error, code: .internalFailure) }
+        do {
+            switch format {
+            case "markdown": print(MarkdownReport.render(made, artifact: artifact), terminator: "")
+            default: print(try LitmusReportFormat.render(made, format: format, root: root))
+            }
+        } catch { try fail(error, code: .outputFailure) }
+        reportFindings = made.findings.contains { $0.severity == "error" || gate != nil && $0.severity == "warning" }
     }
 }
 

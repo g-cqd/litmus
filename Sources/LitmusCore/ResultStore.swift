@@ -167,7 +167,7 @@ public final class ResultStore: Sendable {
 
     /// Opens or creates the store at `directory` (refused inside `forbidden`, the subject root).
     public init(directory: String, readOnly: Bool, limitMiB: Int, forbidden: String, secret: String? = nil) throws {
-        let directory = SourcePath.canonical(directory)
+        let directory = canonicalNew(directory)
         guard directory != forbidden, !directory.hasPrefix(forbidden + "/"), !forbidden.hasPrefix(directory + "/")
         else { throw LitmusFailure("the result store must be outside the subject root") }
         let records = directory + "/v1/records"
