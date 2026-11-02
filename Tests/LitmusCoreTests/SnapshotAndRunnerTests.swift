@@ -839,3 +839,68 @@ private func runIn(
     #expect(markdown.contains("**Score 100 %**"))
     #expect(markdown.contains("Cost: "))
 }
+
+// MARK: - Sharding (ADR 0007)
+
+@Test func `shards partition by module unit, deterministically and disjointly`() throws {
+    func site(_ path: String, _ n: Int) -> Mutation {
+        Mutation(
+            id: String(repeating: "0", count: 15) + String(n, radix: 16),
+            path: path,
+            line: n,
+            column: 1,
+            operatorID: .negateCondition,
+            start: n,
+            end: n + 1,
+            original: "a",
+            replacement: "!(a)",
+            sourceFingerprint: "f"
+        )
+    }
+    #expect(Sharding.unit(of: "Pkg/Sources/Core/Deep/A.swift") == "Pkg/Sources/Core")
+    #expect(Sharding.unit(of: "Sources/Core/A.swift") == "Sources/Core")
+    #expect(Sharding.unit(of: "App/View.swift") == "App")
+    let mutations =
+        (0..<6).map { site("Sources/A/F\($0).swift", $0) } + (6..<9).map { site("Sources/B/G.swift", $0) }
+        + (9..<11).map { site("Sources/C/H.swift", $0) }
+    let shards = Sharding.partition(mutations, count: 2)
+    #expect(shards == Sharding.partition(mutations.reversed(), count: 2))
+    #expect(shards == [["Sources/A"], ["Sources/B", "Sources/C"]])
+    #expect(Set(shards.flatMap { $0 }).count == 3)
+    #expect(throws: LitmusFailure.self) { try ShardSelection(parsing: "3/2") }
+    #expect(throws: LitmusFailure.self) { try ShardSelection(parsing: "1") }
+}
+
+@Test func `two shards merged decide what one run decides, and mismatched shards are refused`() async throws {
+    let base = try fixture(twoSites)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let root = base.path + "/input"
+    try Data(
+        "// swift-tools-version: 6.4\nimport PackageDescription\nlet package = Package(name: \"Example\", targets: [.target(name: \"Example\"), .target(name: \"Other\")])"
+            .utf8
+    ).write(to: URL(fileURLWithPath: root + "/Package.swift"))
+    try FileManager.default.createDirectory(atPath: root + "/Sources/Other", withIntermediateDirectories: true)
+    try Data("public func c(_ z: Bool) -> Int { z ? 5 : 6 }\n".utf8)
+        .write(to: URL(fileURLWithPath: root + "/Sources/Other/G.swift"))
+    let (whole, _) = try await runIn(base, output: "whole") { _ in }
+    let (one, _) = try await runIn(base, output: "s1") { $0.shard = try? ShardSelection(index: 1, count: 2) }
+    let (two, _) = try await runIn(base, output: "s2") { $0.shard = try? ShardSelection(index: 2, count: 2) }
+    #expect(one.results.count + two.results.count == whole.results.count)
+    #expect(Set(one.results.map(\.mutation.path)).isDisjoint(with: two.results.map(\.mutation.path)))
+    let merged = try ShardMerge.merge(runDirectories: [base.path + "/s2", base.path + "/s1"], output: base.path + "/m")
+    #expect(
+        Set(merged.results.map { "\($0.mutation.id) \($0.verdict)" })
+            == Set(whole.results.map { "\($0.mutation.id) \($0.verdict)" })
+    )
+    #expect(merged.isSuccessfulExecution && merged.shard == nil)
+    #expect(try await MutationReport.make(merged, root: root).successfulExecution)
+    #expect(throws: LitmusFailure.self) {
+        try ShardMerge.merge(runDirectories: [base.path + "/s1"], output: base.path + "/m2")
+    }
+    #expect(throws: LitmusFailure.self) {
+        try ShardMerge.merge(runDirectories: [base.path + "/s1", base.path + "/s1"], output: base.path + "/m3")
+    }
+    #expect(throws: LitmusFailure.self) {
+        try ShardMerge.merge(runDirectories: [base.path + "/s1", base.path + "/whole"], output: base.path + "/m4")
+    }
+}
