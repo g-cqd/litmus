@@ -1,0 +1,33 @@
+name: ExampleApp
+options:
+  bundleIdPrefix: dev.litmus.fixture
+  deploymentTarget:
+    iOS: "18.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGN_IDENTITY: ""
+    GENERATE_INFOPLIST_FILE: "YES"
+targets:
+  ExampleApp:
+    type: application
+    platform: iOS
+    sources: [ExampleApp]
+  ExampleAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [ExampleAppTests]
+    dependencies:
+      - target: ExampleApp
+    settings:
+      base:
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/ExampleApp.app/ExampleApp"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+schemes:
+  ExampleApp:
+    build:
+      targets:
+        ExampleApp: all
+    test:
+      targets: [ExampleAppTests]
