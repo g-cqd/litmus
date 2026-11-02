@@ -15,7 +15,8 @@ public enum WorkspaceStrategy: Sendable, Equatable {
 }
 
 /// An exclusive advisory lock on a file (`flock`), held until released or the process ends: two runs never share a
-/// persistent or in-place workspace.
+/// persistent or in-place workspace. Waiting for upstream: an advisory lock in aemi (AE-11,
+/// docs/upstream-recommendations.md).
 final class WorkspaceLock: Sendable {
     private let file: PosixFile
 

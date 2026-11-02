@@ -4,8 +4,9 @@ Evidence-led mutation testing for Swift packages and Xcode projects, built in th
 `fcheck`, `modeler` and `analyzerkit`, on **analyzerkit, aemi, AemiJSON and AemiProtobuf**.
 
 **Status: 0.3.0-dev, not production-qualified, safety-certified or military-qualified.** Host Swift packages are
-verified end to end on a real fixture; the Xcode path builds for the iOS Simulator but has not run tests on one yet.
-The CLI needs macOS 15+ and Swift 6.4; a subject keeps its own settings.
+verified end to end on a real fixture, and so are Xcode schemes on macOS and on the iOS Simulator (hostless package
+tests through Litmus's simulator helper, app-hosted tests through `xcodebuild`). The CLI needs macOS 15+ and Swift 6.4;
+a subject keeps its own settings.
 
 ## Build and test
 
@@ -42,6 +43,33 @@ runs builds and first passes at background priority, 2 to 15 times slower: a sub
 `-warn-long-expression-type-checking` and warnings as errors may then fail its own time limits (the error is in the
 message). SIGINT or SIGTERM ends a run cleanly: exit 128 + signal, children ended, an incomplete checkpoint written.
 
+## Pull requests and incremental runs (ADR 0007)
+
+```sh
+# The changed lines only; a change reaching no condition ends in about a second, building nothing.
+litmus run . --trust-project --diff-base origin/main --budget 600 --output /tmp/litmus-pr
+# In CI, in the checkout that was just built and tested, gated on the base branch's baseline, one step:
+litmus run Pkg --trust-project --workspace in-place --diff-base HEAD^1 --result-store ~/litmus-store \
+  --report json --baseline ~/litmus/Pkg.json --gate new-survivors --output "$RUNNER_TEMP/litmus"
+# Nightly: whole packages, kept workspaces (incremental builds), verdicts stored, baselines written.
+litmus run Pkg --trust-project --workspace persistent:~/litmus/ws/Pkg --result-store ~/litmus-store \
+  --per-test-reach --output /tmp/litmus-nightly
+litmus analyze Pkg --results /tmp/litmus-nightly/run.pb --write-baseline ~/litmus/Pkg.json
+```
+
+- **Scope**: `--diff FILE` or `--diff-base REV` (merge base to the working tree), `--diff-scope lines|files`; mutants on
+  changed lines run first.
+- **Builds**: the first schema that builds is the baseline (`--unmutated-baseline` for the old order);
+  `--workspace copy|persistent:DIR|in-place`, `--build-directory DIR`, `--xcodebuild-argument ARG`.
+- **Reuse**: `--result-store DIR` (verified records, HMAC-signed with `LITMUS_STORE_KEY`, `--store-read-only`,
+  `--store-limit MiB`), `--resume RUN`, `--reach-from RUN` (a nightly's flaky tests and per-test reach),
+  `--reuse closure|declaration`. A verdict is reused only when nothing that could change it changed (the mutant's
+  package and its local dependencies, the toolchain, the options), and names the run that decided it.
+- **Bounds**: `--budget S`, `--max-mutants N`, `--shard k/n` then `litmus merge`; every run reports its cost (builds,
+  test runs, CPU, peak memory, disk). `litmus restore DIR` puts back what an interrupted in-place run left rewritten.
+- **Reports**: `analyze --format markdown` (job summary) or `stryker` (mutation-testing-report-schema 2),
+  `--baseline`/`--write-baseline` (anchored fingerprints), `--gate new-survivors`, the diff options to scope findings.
+
 ## How a run works
 
 1. **Snapshot.** The subject is copied into a new run directory outside it (aemi `DirectoryWalk`, parallel SHA-256);
@@ -77,7 +105,7 @@ Score = detected ÷ (detected + undetected), as Stryker and swift-mutation-testi
 
 `analyze --results` reports historical evidence and re-hashes every input (tests, resources and settings included):
 a changed input makes the report degraded and exit `70`, never green. Formats: `xcode`, `json` (family envelope v1,
-score, policy, timings), `sarif` (2.1.0). `--only`/`--only-from` scope the report, not the run. `--strict` fails on
+score, policy, timings), `sarif` (2.1.0), `markdown`, `stryker`. `--only`/`--only-from` scope the report, not the run. `--strict` fails on
 survivors and no-coverage mutants (warnings); `unviable` is a note.
 Exit codes: `0` passed, `1` findings, `64` usage, `70` incomplete, stale or unresolved, `74` output, `78` configuration.
 
@@ -89,12 +117,15 @@ Exit codes: `0` passed, `1` findings, `64` usage, `70` incomplete, stale or unre
 ## Configuration and suppression
 
 `.litmus.json`: `{ "exclude": ["**/Generated/**"] }`. `// @lm:accept:next swap-ternary -- reason` suppresses a site;
-it stays listed in the plan. A `litmus` section in `.swift-analyzers.json` waits for analyzerkit (AK-5).
+it stays listed in the plan. A `litmus` section in `.swift-analyzers.json` is read as well (AK-5).
 
 ## Performance
 
 Measured, one run each, same machine (`docs/performance.md`): on the 10-mutant fixture Litmus takes 30–38 s and
-swift-mutation-testing 1.6.4 takes 136 s (3.6–4.5×), with the same 77.8% score. On the reference app's 4152 mutants Litmus needs
+swift-mutation-testing 1.6.4 takes 136 s (3.6–4.5×), with the same 77.8% score. On the iOS Simulator the same fixture
+takes 42.5 s through the simulator helper and 349.6 s through `xcodebuild`, with identical verdicts. A pull request
+whose changed lines hold one mutant costs one build and three test runs (10.8 s on the fixture); an unchanged subject
+with a result store, 1.5 s and no build. On the reference app's 4152 mutants Litmus needs
 18–66 schema builds where swift-mutation-testing needs more than 1832. No tool can be "thousands of times" faster than
 another one that runs the same tests: test time is the floor; the gains come from fewer builds and fewer, shorter runs.
 

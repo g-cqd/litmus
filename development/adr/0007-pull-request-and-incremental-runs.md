@@ -1,6 +1,6 @@
 # ADR 0007 — Pull-request runs: fixed costs first, sound reuse, bounded impact
 
-Status: accepted (plan; implemented by phases)
+Status: accepted, implemented
 Date: 2026-11-02
 
 ## Context
@@ -45,3 +45,21 @@ is sound.
 - The simulator helper depends on Swift Testing's ABI v0; a version it does not know means `xcodebuild`, not a guess.
 - Two upstream candidates: changed-line scope from a unified diff in analyzerkit (every analyzer can use it) and a
   verified, size-bounded content-addressed store in aemi.
+
+## Implementation notes (2026-11-02)
+
+- The inactive schema is the baseline by default (execution policy v4); when the first schema does not build, the
+  unmutated build runs, decides between a broken subject and unviable mutants, and becomes the baseline.
+  `--unmutated-baseline` keeps the old order.
+- Mutant ids are anchored (path, declaration, normalised text and replacement, ordinal); every result carries its
+  reuse key, so any run can be resumed or seed a store.
+- In place, a package whose closure leaves the root, or cannot be read, is never reused: the root's inventory cannot
+  see those files change. A copy cannot build them, so there the whole snapshot is the key.
+- Store records are protobuf envelopes tagged with SHA-256, or HMAC-SHA256 with `LITMUS_STORE_KEY`, so a store that
+  untrusted jobs can write cannot forge verdicts for trusted ones.
+- Per-test reach, when known (this run, or a nightly's for unchanged keys), selects each mutant's tests and decides
+  kills without reruns; a failure by tests that do not reach the mutant is rejected.
+- The simulator helper is compiled by Litmus for the simulator SDK, cached by compiler version, probed before use;
+  anything unknown means `xcodebuild`.
+- Found on the way: a path canonicalized before it exists keeps `/private` (Foundation), so a run directory under
+  `/private/tmp` was refused and an outside-the-root check could be bypassed; fixed with `canonicalNew` (AK-18).

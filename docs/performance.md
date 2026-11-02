@@ -64,13 +64,23 @@ Their product can reach two to three orders of magnitude against a naive tool (o
 mutant), not against swift-mutation-testing, which already batches, stops early and runs workers. Measured against it:
 **3.6–4.5×** on the fixture.
 
+## Pull-request and incremental levers, implemented (ADR 0007)
+
+| Lever | Measured |
+| --- | --- |
+| Zero-mutant fast path | the reference app whole repository: 1.0–1.3 s; fixture: under 0.1 s; no copy, no build |
+| Changed lines only | fixture, one changed-line mutant: 1 build, 3 test runs, 10.8 s |
+| Inactive schema as baseline | one build and one suite run fewer when the first schema builds |
+| Persistent workspace | fixture second build 1.5 s against 9.0 s (ModuleParts phase 0: 19 s against 285 s) |
+| Result store | unchanged fixture: every verdict reused, 0 builds, 0 test runs, 1.5 s |
+| Simulator helper | fixture on iOS 27.2: 42.5 s against 349.6 s through `xcodebuild` (tests 26 s against 336 s) |
+
 ## Next measured levers (not done)
 
 | Lever | Expected effect | Evidence so far |
 | --- | --- | --- |
-| A persistent build directory between runs (weekly runs) | Removes the cold baseline build (18 s debug-fixture, minutes on the app) | Not implemented: needs a stable workspace path and unchanged-file preservation |
 | Larger default batches | 64 → 256 cuts app builds from 66 to 18 | Plan only; compile-time growth of large SwiftUI schemas unmeasured |
-| Per-test selection from activation markers per test | Run only the tests that reached a mutant | Needs per-test identity in the subject process (ADR 0005 keeps whole suites) |
+| Per-test reach without one run per test | Selection by reach at the cost of one suite | Needs per-test identity in the subject process; `--per-test-reach` costs one run per test today |
 | Simulator clones for Xcode workers | Parallel app tests | Not measured; simulator hangs seen on this machine |
 
 ## A real package: fcheck (206 mutants, 152 tests), 2026-11-02

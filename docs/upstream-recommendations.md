@@ -9,7 +9,7 @@ adopted here (ADR 0006). Revisions now pinned:
 | AemiRegex | `cc7deea` | pin only |
 | AemiJSON | `25f59b9` | diary 2026-11-02-01 |
 | AemiProtobuf | `edede35` | pin only |
-| analyzerkit | `d684d7d` | analyzerkit ADR-0030, diary 2026-11-02-01 |
+| analyzerkit | `f339e8f` | analyzerkit ADR-0030, ADR-0031, diary 2026-11-02-01 |
 
 The six family analyzers (arcleak, deadwood, dolly, fcheck, modeler, swift-search) were built and tested against these
 revisions without a source change.
@@ -46,7 +46,7 @@ revisions without a source change.
 | AK-4 | sampled session usage and a memory limit; exact per-child usage waits on swift-subprocess#226 | `--memory-limit` (4096 MiB) |
 | AK-5 | `litmus` known; unknown tools' sections accepted and listed | reads its section of `.swift-analyzers.json` |
 | AK-6 | `formatChecked` throws | (Litmus already rendered with a throwing encoder) |
-| AK-7 | `Fingerprint.anchored`, beside the first in SARIF | not yet used by Litmus' report |
+| AK-7 | `Fingerprint.anchored`, beside the first in SARIF | mutant ids are anchored the same way; SARIF carries `litmus/anchored/v1`; baselines hold it |
 | AK-8 | `testTargets(covering:)`, `XcodeSchemeReader` | per-mutant test-target selection |
 | AK-9 | `ModuleAwareBuildConfiguration`, `sdkModules`, `CompilerConfiguration.read` | not yet used for planning |
 | AK-10 | `TreeSnapshot` | `WorkspaceSnapshot` is built on it |
@@ -56,6 +56,22 @@ revisions without a source change.
 | AK-14 | deadlines on the suspending clock | a sleeping machine does not time tests out |
 | AK-15 | session-only spawn documented (avoids swift-subprocess#382) | — |
 | new | `Options.priority` (Darwin quality of service) | `--background` |
+| AK-16 | `ChangedLines`: new-side changed lines of a unified diff (ADR-0031) | `--diff`, `--diff-base`, change-scoped reports |
+| AK-17 | `ProjectClassification.packageClosure(containing:)` (ADR-0031) | the sound reuse key's closure |
+
+## Proposed (2026-11-02, pull-request runs, ADR 0007): implemented natively in Litmus meanwhile
+
+| Id | Proposal | Litmus now |
+| --- | --- | --- |
+| AE-10 | A verified, size-bounded content-addressed store in aemi: records keyed by a digest, written atomically, checked on read (digest or HMAC), evicted least recently used past a bound, a read-only mode | `ResultStore` (Litmus task t57); bumping aemi means a train through analyzerkit and the six analyzers, so it waits for the next one |
+| AE-11 | An advisory exclusive lock in aemi (`flock`, non-blocking, released with its descriptor) | `WorkspaceLock`, on `PosixFile`'s descriptor |
+| AK-18 | `SourcePath.canonical` spells a path that does not exist yet differently from the same path once it does: Foundation drops `/private` only for existing paths. A run directory under `/private/tmp` was refused, and an "outside the root" check could compare two spellings of one directory | `canonicalNew` (deepest existing ancestor, then the rest) for every directory Litmus creates |
+| AK-19 | `--only-diff`-style changed-line scope in the analyzers, on `ChangedLines` | Litmus only |
+
+## Used as designed
+
+- Swift Testing's ABI entry point (`swt_abiv0_getEntryPoint`, configuration as JSON, records as JSON lines) runs
+  hostless test bundles on the simulator through Litmus's helper (t58), the interface swift-testing exposes for tools.
 
 ## Waiting on swift-subprocess
 
@@ -67,5 +83,4 @@ revisions without a source change.
 
 ## Not used yet
 
-AK-7 (anchored fingerprints in Litmus' SARIF), AK-9 (skip clauses no target compiles) and AK-11 (byte-exact preview
-exclusion) are available and planned (roadmap 0001).
+AK-9 (skip clauses no target compiles) and AK-11 (byte-exact preview exclusion) are available and planned (task t35).

@@ -81,3 +81,26 @@ execution**, active-ID forwarding or app-hosted testing. No simulator was booted
   oversubscribed workers, flow errors away from the mutant, and kills by an unrelated timing test.
 - Not verified: the whole-suite fallback for parameterized Swift Testing tests (28 of 175 kills in run 4 took it);
   repeated runs to measure verdict stability under equal load.
+
+## Pull-request and incremental runs (2026-11-02, ADR 0007)
+
+- 92 tests pass (`swift test --skip-build`), among them: diff scope and the fast path; budgets and resume; reuse keys
+  (closure, options, toolchain, declaration mode, a dependency outside the root in place); the result store (tampered
+  and foreign-signed records refused, read-only, eviction); the inactive schema as baseline and the unmutated fallback;
+  in-place journal fault injection (a crash after the backup, after the rewrite, an edit meanwhile, a later start);
+  persistent synchronisation; per-test reach selection and the reach kill check; Xcode result bundles (counts per
+  bundle, a crashed runner); the simulator harness's parsing; sharding and merge; Markdown and Stryker reports; the
+  `/private` path spelling.
+- `scripts/smoke.sh` passes on the real fixture: the six verdicts; a one-line diff runs one mutant; a comment-only diff
+  ends in under a second with no build; `--max-mutants` then `--resume` then a store-only rerun (no build, no test run)
+  give the full run's verdicts; in place, the checkout is restored, also after SIGINT mid-run; a persistent workspace's
+  second build is incremental (9.0 s then 1.5 s); per-test reach gives the same verdicts; the new-survivor gate passes
+  on a baseline of today's survivors and fails on an empty one; Markdown and Stryker reports render.
+- Real Xcode runs of the fixture: on macOS through `xcodebuild` (`-only-testing:ExampleTests`, the crash reported as a
+  crash), and on an iOS 27.2 simulator through the simulator helper and through `xcodebuild`: identical verdicts,
+  42.5 s against 349.6 s.
+- the reference app: the fast path on the whole repository took 1.0–1.3 s for pull requests without a changed-line mutant;
+  DangerPlugins builds and its 153 tests pass with the integration patch (`the app integration patch`).
+- Not verified: a Litmus run on an the reference app package in CI; the helper on bundles with many XCTest classes or
+  parameterized tests at scale; sharded runs on separate machines; the store across Litmus versions (keys change with
+  the version, by design).

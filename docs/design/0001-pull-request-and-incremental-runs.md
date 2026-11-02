@@ -1,6 +1,7 @@
 # Design 0001 — Mutation testing on every pull request, incrementally
 
-Status: accepted as the plan, 2026-11-02; decisions in ADR 0007. Phase 0 measured (below).
+Status: implemented, 2026-11-02 (phases 0–5); decisions in ADR 0007, measurements in docs/performance.md and
+docs/verification.md. The the reference app integration is prepared as a patch, not applied.
 
 ## Goal
 
