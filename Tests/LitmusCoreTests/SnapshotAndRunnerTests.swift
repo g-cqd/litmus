@@ -792,3 +792,50 @@ private func runIn(
     )
     return (artifact, executor)
 }
+
+// MARK: - Gate and reports (ADR 0007)
+
+@Test func `a baseline of anchored fingerprints gates only new survivors, and a change scopes the findings`()
+    async throws
+{
+    let (artifact, base) = try await run(FakeExecutor(.init(active: .pass)), source: twoSites)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let root = base.path + "/input"
+    let all = try await MutationReport.make(artifact, root: root, relative: true)
+    #expect(all.findings.count == 2 && all.findings.allSatisfy { $0.severity == "warning" })
+    // The base branch held one of them: only the other is new.
+    let held = try #require(all.findings.first?.anchoredFingerprint)
+    let gated = try await MutationReport.make(artifact, root: root, relative: true, baseline: [held])
+    #expect(gated.findings.count == 1 && gated.suppressed.count == 1)
+    // A change touching line 2 only: the finding on line 1 is out of scope.
+    let scope = ChangeScope(
+        changed: ChangedLines(files: ["Sources/Example/F.swift": [2...2]]),
+        breadth: .lines,
+        source: "test",
+        digest: "d"
+    )
+    let scoped = try await MutationReport.make(artifact, root: root, relative: true, change: scope)
+    #expect(scoped.findings.map(\.line) == [2] && scoped.outOfScope.count == 1)
+}
+
+@Test func `Stryker's report schema and a Markdown summary are rendered from a run`() async throws {
+    let (artifact, base) = try await run(FakeExecutor(), source: twoSites)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let root = base.path + "/input"
+    let json = try StrykerReport.render(artifact, root: root)
+    let object = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    #expect(object["schemaVersion"] as? String == "2")
+    let files = try #require(object["files"] as? [String: [String: Any]])
+    let file = try #require(files["Sources/Example/F.swift"])
+    #expect((file["source"] as? String)?.contains("public func a") == true)
+    let mutants = try #require(file["mutants"] as? [[String: Any]])
+    #expect(mutants.compactMap { $0["status"] as? String } == ["Killed", "Killed"])
+    let location = try #require(mutants.first?["location"] as? [String: [String: Int]])
+    #expect(location["start"]?["line"] == 1 && (location["end"]?["column"] ?? 0) > (location["start"]?["column"] ?? 0))
+
+    let report = try await MutationReport.make(artifact, root: root, relative: true)
+    let markdown = MarkdownReport.render(report, artifact: artifact)
+    #expect(markdown.hasPrefix("## Litmus mutation testing"))
+    #expect(markdown.contains("**Score 100 %**"))
+    #expect(markdown.contains("Cost: "))
+}

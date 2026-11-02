@@ -12,6 +12,8 @@ public struct MutationFinding: Codable, Sendable, ReportedFinding {
     public let severity: String
     public let message: String
     public let fingerprint: String
+    /// The mutant's id, to find it in the run.
+    public let mutationID: String
     public var severityName: String { severity }
     public var ruleName: String { rule }
     public var displayMessage: String { message }
@@ -22,6 +24,7 @@ public struct MutationFinding: Codable, Sendable, ReportedFinding {
     /// - Parameter untested: a budget left it untested: a note, not an unresolved outcome.
     init(_ result: MutationResult, root: String?, untested: Bool = false) {
         let site = result.mutation
+        mutationID = site.id
         path = root.map { $0 + "/" + site.path } ?? site.path
         line = site.line; column = site.column
         rule = "litmus/" + result.verdict.rawValue
@@ -78,7 +81,8 @@ public struct MutationReport: Codable, Sendable, ToolReport {
         root: String,
         relative: Bool = false,
         only: Set<String>? = nil,
-        baseline: Set<String> = []
+        baseline: Set<String> = [],
+        change: ChangeScope? = nil
     ) async throws -> Self {
         guard artifact.version == 2, artifact.plan.version == 1,
             artifact.provenance.toolVersion == LitmusVersion.current,
@@ -104,14 +108,20 @@ public struct MutationReport: Codable, Sendable, ToolReport {
         let all = artifact.results.filter { !$0.verdict.isDetected }.map {
             MutationFinding($0, root: relative ? nil : root, untested: artifact.budgetLeftUntested($0))
         }
-        let suppressed = all.filter { baseline.contains($0.fingerprint) }
-        let unsuppressed = all.filter { !baseline.contains($0.fingerprint) }
+        // A baseline holds anchored fingerprints (lines may move) or the classic ones.
+        func baselined(_ finding: MutationFinding) -> Bool {
+            baseline.contains(finding.fingerprint) || finding.anchoredFingerprint.map(baseline.contains) == true
+        }
+        let suppressed = all.filter(baselined)
+        let unsuppressed = all.filter { !baselined($0) }
+        let byID = Dictionary(artifact.results.map { ($0.mutation.id, $0.mutation) }, uniquingKeysWith: { a, _ in a })
         let scoped = unsuppressed.filter { finding in
-            only.map {
-                $0.contains(
-                    finding.path.hasPrefix(root + "/") ? String(finding.path.dropFirst(root.count + 1)) : finding.path
-                )
-            } ?? true
+            let relative =
+                finding.path.hasPrefix(root + "/") ? String(finding.path.dropFirst(root.count + 1)) : finding.path
+            let inFiles = only.map { $0.contains(relative) } ?? true
+            let inChange = change.map { scope in byID[finding.mutationID].map { scope.priority(of: $0) != nil } ?? false
+            }
+            return inFiles && (inChange ?? true)
         }
         let out = unsuppressed.filter { finding in !scoped.contains(where: { $0.fingerprint == finding.fingerprint }) }
         return Self(
