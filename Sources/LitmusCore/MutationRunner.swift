@@ -137,6 +137,18 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         func account(_ phase: String, since start: ContinuousClock.Instant) {
             timings[phase, default: 0] += seconds(clock.now - start)
         }
+        let counter = RunCounter()
+        /// The run's cost now; disk measured before the workspace is removed.
+        func cost(workspace: String?) -> RunCost {
+            var cost = RunCost()
+            cost.sample()
+            cost.wallSeconds = RunCost.rounded(seconds(clock.now - started))
+            cost.runDirectoryMiB = RunCost.diskMiB(output)
+            cost.workspaceMiB = workspace.map(RunCost.diskMiB) ?? 0
+            cost.builds = counter.builds
+            cost.testRuns = counter.tests
+            return cost
+        }
 
         var phase = clock.now
         if let scope = options.scope {
@@ -171,6 +183,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 artifact.complete = true
                 timings["total"] = seconds(clock.now - started)
                 artifact.timings = timings
+                artifact.cost = cost(workspace: nil)
                 try ArtifactCodec.write(artifact, path: output + "/run.json")
                 try ArtifactCodec.write(artifact, path: output + "/run.pb")
                 return artifact
@@ -234,6 +247,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         buildSupervision.background = options.background
         do {
             phase = clock.now
+            counter.build()
             let baselineBuild = try await executor.execute(
                 driver.buildCommand(workspace: snapshot.root, artifacts: artifacts),
                 directory: snapshot.root,
@@ -274,6 +288,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 harness: harness,
                 pool: pool,
                 options: options,
+                counter: counter,
                 baseline: TestCounts(passed: 0, failed: 0, skipped: 0),
                 deadline: options.timeoutCap,
                 parallelDeadline: options.timeoutCap,
@@ -377,6 +392,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 harness: harness,
                 pool: pool,
                 options: options,
+                counter: counter,
                 baseline: baselineCounts,
                 deadline: deadline,
                 parallelDeadline: parallelDeadline,
@@ -413,6 +429,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 let name = "schema-\(buildIndex)"
                 let installed = try install(group, in: snapshot)
                 phase = clock.now
+                counter.build()
                 let build = try await executor.execute(
                     driver.buildCommand(workspace: snapshot.root, artifacts: artifacts),
                     directory: snapshot.root,
@@ -543,6 +560,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             artifact.complete = true
             timings["total"] = seconds(clock.now - started)
             artifact.timings = timings
+            artifact.cost = cost(workspace: snapshot.root)
             if !options.keepWorkspace {
                 // Every verdict is recorded: a workspace that cannot be removed (Finder or Spotlight writing into it
                 // while it goes, seen 2026-11-02) is noted, never a failed run.
@@ -557,6 +575,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             artifact.notes.append("run stopped: \(error); partial evidence is not a successful run")
             timings["total"] = seconds(clock.now - started)
             artifact.timings = timings
+            artifact.cost = cost(workspace: snapshot.root)
             do { try ArtifactCodec.write(artifact, path: checkpointPath) } catch let writeError {
                 throw LitmusFailure("execution failed: \(error); checkpoint failed: \(writeError)")
             }
@@ -844,6 +863,7 @@ struct Judge: Sendable {
     let harness: any TestHarness
     let pool: ResourcePool<WorkerSlot>
     let options: RunOptions
+    let counter: RunCounter
     let baseline: TestCounts
     let deadline: Int
     /// The deadline of a mutant's first run among parallel workers: contention slows every suite.
@@ -894,6 +914,7 @@ struct Judge: Sendable {
     ) async throws -> Execution {
         let slot = try await pool.acquire()
         defer { pool.checkin(slot) }
+        counter.test()
         let unique = UUID().uuidString.prefix(8)
         let coverage = "\(slot.directory)/coverage-\(unique)", temporary = "\(slot.directory)/tmp-\(unique)"
         for directory in [coverage, temporary] {
