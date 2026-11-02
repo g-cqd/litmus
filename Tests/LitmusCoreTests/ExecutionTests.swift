@@ -57,7 +57,17 @@ import Testing
     #expect(try driver.testCommand(workspace: "/w", artifacts: "/a", result: "/r.xml").arguments.contains("native"))
     #expect(
         driver.swiftPMArguments(workspace: "/w", artifacts: "/a") == [
-            "--package-path", "/w", "--scratch-path", "/a/build", "--build-system", "native",
+            "--package-path", "/w", "--scratch-path", "/w/.build", "--build-system", "native",
         ]
     )
+}
+
+@Test(arguments: [(1.0, 8, 7, 7), (5.2, 8, 7, 1), (2.0, 8, 7, 4), (0.3, 8, 7, 7), (16.0, 8, 7, 1)])
+func `workers fit the suite's own parallelism into the cores`(
+    parallelism: Double,
+    cores: Int,
+    limit: Int,
+    expected: Int
+) {
+    #expect(ChildUsage.workers(parallelism: parallelism, cores: cores, limit: limit) == expected)
 }

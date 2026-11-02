@@ -123,3 +123,16 @@ func `xcresult rejects hostile counters before arithmetic`(counter: Int) throws 
     #expect(bundles.first?.swiftTestingCount == 1)
     #expect(SwiftPMDirectHarness<BoundedExecutor>.bundles(listing: "Other.`x`()\nMore.`y`()", binPath: bin) == nil)
 }
+
+@Test func `a test identifier loses its source location for --filter`() {
+    #expect(testName("Mod.Suite/`works`()/File.swift:12:6") == "Mod.Suite/`works`()")
+    #expect(testName("Mod.`plain`()") == "Mod.`plain`()")
+}
+
+@Test func `a filter pattern selects one test whether or not its identifier carries a location`() throws {
+    let pattern = try Regex(filterPattern(for: "Mod.`drain`()"))
+    #expect("Mod.`drain`()".contains(pattern))
+    #expect("Mod.`drain`()/F.swift:3:2".contains(pattern))
+    #expect(!"Mod.`drain`()x".contains(pattern))
+    #expect(!"Other.Mod.`drain`()".contains(pattern))
+}

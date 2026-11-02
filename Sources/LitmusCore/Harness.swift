@@ -15,6 +15,8 @@ public struct TestRunRequest: Sendable {
     public let deadline: Int
     /// Stop at the first structured test failure (Swift Testing event stream).
     public let failFast: Bool
+    /// Run only these Swift Testing tests (identifiers without their source location), and no XCTest; nil runs all.
+    public var onlySwiftTesting: [String]? = nil
 }
 
 /// What a suite execution showed, before activation is considered.
@@ -31,6 +33,21 @@ public struct TestRunResult: Sendable {
     /// Evidence files, relative to the run directory.
     public let evidence: [String]
     public let reason: String
+    /// Swift Testing tests with a failing issue, identifiers without their source location; empty when unknown.
+    public var failingTests: [String] = []
+}
+
+/// A Swift Testing test identifier without its trailing source location (`/File.swift:12:6`), the form `--filter` takes.
+func testName(_ identifier: String) -> String {
+    guard let slash = identifier.lastIndex(of: "/"), identifier[slash...].contains(".swift:") else { return identifier }
+    return String(identifier[..<slash])
+}
+
+/// The `--filter` pattern selecting exactly one test: Swift Testing matches it against identifiers that may still
+/// carry `/File.swift:line:column`, so the pattern ends at a `/` or at the end, never at `$` alone (that matches
+/// nothing: exit 69, probed 2026-11-02).
+func filterPattern(for test: String) -> String {
+    "^" + NSRegularExpression.escapedPattern(for: test) + "(/|$)"
 }
 
 /// Runs the subject's tests against the current build products.
@@ -39,6 +56,8 @@ public protocol TestHarness: Sendable {
     var maximumWorkers: Int { get }
     /// A description for provenance.
     var kind: String { get }
+    /// Whether ``TestRunRequest/onlySwiftTesting`` is honoured, so a kill can be confirmed on its failing tests alone.
+    var selectsTests: Bool { get }
     func run(_ request: TestRunRequest) async throws -> TestRunResult
 }
 
@@ -167,6 +186,7 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
     let logs: String
     public let maximumWorkers: Int
     public var kind: String { "swiftpm-direct" }
+    public var selectsTests: Bool { true }
 
     public init(
         executor: Executor,
@@ -246,19 +266,32 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
         environment["DYLD_LIBRARY_PATH"] = toolchain.libraries
         var passed = 0, skipped = 0
         var evidence: [String] = []
+        var failing: [String] = []
         func result(_ outcome: TestRunOutcome, _ counts: TestCounts?, _ reason: String) -> TestRunResult {
-            TestRunResult(outcome: outcome, counts: counts, nanoseconds: elapsed(), evidence: evidence, reason: reason)
+            var result = TestRunResult(
+                outcome: outcome,
+                counts: counts,
+                nanoseconds: elapsed(),
+                evidence: evidence,
+                reason: reason
+            )
+            result.failingTests = failing
+            return result
         }
         for bundle in bundles {
+            if let only = request.onlySwiftTesting, !only.contains(where: { $0.hasPrefix(bundle.module + ".") }) {
+                continue
+            }
             if bundle.swiftTestingCount > 0 {
                 let stem = "\(request.name)-\(bundle.module)-swift-testing"
                 let events = "\(logs)/\(stem).events.jsonl", xunit = "\(logs)/\(stem).xml"
+                let filters = (request.onlySwiftTesting ?? []).flatMap { ["--filter", filterPattern(for: $0)] }
                 let command = ToolCommand(
                     executable: toolchain.testingHelper,
                     arguments: [
                         "--test-bundle-path", bundle.binaryPath, "--testing-library", "swift-testing",
                         "--event-stream-output-path", events, "--event-stream-version", "0", "--xunit-output", xunit,
-                    ]
+                    ] + filters
                 )
                 let (output, stopped) = try await runWatching(
                     executor,
@@ -271,12 +304,13 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
                 )
                 if let output { try writeLog(output, path: "\(logs)/\(stem).log") }
                 evidence += ["logs/\(stem).events.jsonl", "logs/\(stem).log"]
-                if stopped { return result(.failed, nil, "Swift Testing recorded a failing issue (stopped early)") }
-                guard let output else { return result(.unusable, nil, "Swift Testing produced no process result") }
-                if output.timedOut { return result(.timedOut, nil, "Swift Testing exceeded \(request.deadline) s") }
                 let scan = try? TestEvidence.swiftTestingEvents(
                     BoundedFileReader.read(path: events, cap: 64 << 20)
                 )
+                failing += (scan?.failedTests ?? []).map(testName).sorted()
+                if stopped { return result(.failed, nil, "Swift Testing recorded a failing issue (stopped early)") }
+                guard let output else { return result(.unusable, nil, "Swift Testing produced no process result") }
+                if output.timedOut { return result(.timedOut, nil, "Swift Testing exceeded \(request.deadline) s") }
                 let counts =
                     FileManager.default.fileExists(atPath: xunit)
                     ? try? TestEvidence.xunit(BoundedFileReader.read(path: xunit, cap: 16 << 20)) : nil
@@ -293,7 +327,7 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
                 passed += counts.passed
                 skipped += counts.skipped
             }
-            if !bundle.xcTestClasses.isEmpty {
+            if !bundle.xcTestClasses.isEmpty, request.onlySwiftTesting == nil {
                 let stem = "\(request.name)-\(bundle.module)-xctest"
                 let command = ToolCommand(
                     executable: toolchain.xctest,
@@ -330,6 +364,7 @@ public struct SwiftPMToolHarness<Executor: ProcessExecutor>: TestHarness {
     let logs: String
     public var maximumWorkers: Int { 1 }
     public var kind: String { "swift-test" }
+    public var selectsTests: Bool { false }
 
     public init(executor: Executor, driver: BuildDriver, workspace: String, artifacts: String, logs: String) {
         self.executor = executor
@@ -387,6 +422,7 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
     let logs: String
     public var maximumWorkers: Int { 1 }
     public var kind: String { "xcodebuild" }
+    public var selectsTests: Bool { false }
 
     public init(executor: Executor, driver: BuildDriver, workspace: String, artifacts: String, logs: String) {
         self.executor = executor

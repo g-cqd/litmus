@@ -117,3 +117,31 @@ import Testing
     #expect(schema.text.contains(": (a && b)) { return 1 }"))
     #expect(Set(schema.lines.values) == [1...1])
 }
+
+@Test func `the census counts candidate operators by schema shape and blocks statements in builders`() throws {
+    let source = """
+        func f(_ a: Int, _ b: Int, name: String?) -> Bool {
+            defer { close() }
+            log()
+            if let name, a < b { return name == "x" }
+            return a + b > 0 && true
+        }
+        func close() {}
+        func log() {}
+        struct V {
+            var body: some View { refresh() }
+        }
+        """
+    let entries = try MutationCensus.count(source: source)
+    #expect(entries["relational-boundary-and-negation"]?.sites == 2)
+    #expect(entries["relational-boundary-and-negation"]?.mutants == 4)
+    #expect(entries["relational-equality"]?.sites == 1)
+    #expect(entries["arithmetic-replace"]?.sites == 1)
+    #expect(entries["optional-binding-to-nil"]?.sites == 1)
+    #expect(entries["defer-removal (fcheck)"]?.sites == 1)
+    #expect(entries["cleanup-call-removal (fcheck)"]?.sites == 1)
+    #expect(entries["void-call-removal"]?.sites == 1)
+    #expect(entries["void-call-removal"]?.blocked == 1)
+    #expect(entries["return-default-bool"]?.mutants == 2)
+    #expect(entries["boolean-literal-flip"]?.shape == .expression)
+}
