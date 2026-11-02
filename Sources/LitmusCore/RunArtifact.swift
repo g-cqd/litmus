@@ -25,6 +25,35 @@ public struct RunPolicy: Codable, Sendable, Equatable {
     public var suiteWidth: Int? = nil
     /// Whether each mutant ran only the test targets that can reach its file.
     public var testTargetSelection: Bool? = nil
+    /// Which build the baseline ran on: `inactive-schema` or `unmutated` (ADR 0007); nil before 0.3.
+    public var baselineBuild: String? = nil
+}
+
+/// The limits a run was given, and what they left untested.
+public struct BudgetRecord: Codable, Sendable, Equatable {
+    public var seconds: Int?
+    public var maxMutants: Int?
+    /// `time` or `max-mutants` when a limit was reached; nil when everything ran.
+    public var stoppedBy: String? = nil
+    /// The mutants left `notRun` by a limit: not a failure and not a pass; the gate judges what ran.
+    public var untested: [String] = []
+
+    public init(seconds: Int? = nil, maxMutants: Int? = nil) {
+        self.seconds = seconds
+        self.maxMutants = maxMutants
+    }
+}
+
+/// How verdicts were reused (ADR 0007).
+public struct ReuseRecord: Codable, Sendable, Equatable {
+    public let mode: ReuseContext.Mode
+    /// The digest of the run's verdict-relevant options, toolchain and policy (part of every key).
+    public let context: String
+    public let store: String?
+    public let storeReadOnly: Bool?
+    public let resumedFrom: String?
+    public let resumed: Int
+    public let fromStore: Int
 }
 
 /// Provenance required before a verdict may be presented as current execution evidence.
@@ -36,6 +65,9 @@ public struct RunProvenance: Codable, Sendable {
     public let toolchain: String
     public let startedAt: String
     public let executionPolicy: String
+
+    /// The run's identity: when it started and the first 12 digits of its snapshot digest.
+    public var runID: String { "\(startedAt) \(snapshotSHA256.prefix(12))" }
 }
 
 /// One decision with the test evidence and explanation that justified it.
@@ -47,6 +79,11 @@ public struct MutationResult: Codable, Sendable {
     public let evidence: [String]
     /// Test time spent on this mutant, in nanoseconds, reruns included; zero when it never ran.
     public let nanoseconds: Int64
+    /// The key the verdict is stored and found under (`ReuseContext`); nil when the run had no reuse context.
+    public var reuseKey: String? = nil
+    /// The run that decided this verdict when it was reused rather than tested now (`RunProvenance.runID`), with the
+    /// reuse mode when not the sound one; nil for a verdict decided by this run.
+    public var reusedFrom: String? = nil
 
     public init(
         mutation: Mutation,
@@ -67,7 +104,7 @@ public struct MutationResult: Codable, Sendable {
 
 /// The record of a run. `complete` never means that infrastructure errors were kills.
 public struct RunArtifact: Codable, Sendable {
-    public static let executionPolicy = "activation-markers/no-coverage/unviable-isolation/v3"
+    public static let executionPolicy = "activation-markers/no-coverage/unviable-isolation/inactive-schema-baseline/v4"
     public let version: Int
     public let provenance: RunProvenance
     public let plan: MutationPlan
@@ -83,7 +120,15 @@ public struct RunArtifact: Codable, Sendable {
     public var testNanoseconds: [String: Int64]? = nil
     /// What the run cost the machine (wall, CPU, peak memory, disk, builds, test runs).
     public var cost: RunCost? = nil
-    public var score: MutationScore { MutationScore(results.map(\.verdict)) }
+    /// The limits given (`--budget`, `--max-mutants`) and what they left untested; nil without limits.
+    public var budget: BudgetRecord? = nil
+    /// How verdicts were reused; nil before 0.3.
+    public var reuse: ReuseRecord? = nil
+    /// The score over the mutants that were decided: a budget's untested mutants are outside it, not undetected.
+    public var score: MutationScore {
+        let untested = Set(budget?.untested ?? [])
+        return MutationScore(results.filter { !untested.contains($0.mutation.id) }.map(\.verdict))
+    }
 
     public init(provenance: RunProvenance, plan: MutationPlan) {
         version = 2
@@ -102,6 +147,11 @@ public struct RunArtifact: Codable, Sendable {
             && results.count == plan.mutations.count
             && Set(results.map { $0.mutation.id }).count == results.count
             && Set(results.map { $0.mutation.id }) == Set(plan.mutations.map(\.id))
-            && results.allSatisfy(\.verdict.isResolved)
+            && results.allSatisfy { $0.verdict.isResolved || budgetLeftUntested($0) }
+    }
+
+    /// A mutant a budget left untested: `notRun` and listed in ``budget``.
+    public func budgetLeftUntested(_ result: MutationResult) -> Bool {
+        result.verdict == .notRun && (budget?.untested.contains(result.mutation.id) ?? false)
     }
 }

@@ -60,6 +60,41 @@ python3 - "$WORK/stale.json" <<'PY'
 import json,sys
 r=json.load(open(sys.argv[1])); assert not r['successfulExecution'] and r['degradedFiles']
 PY
+# Pull-request runs (ADR 0007): a diff scopes the run to the changed lines; a change reaching no site costs about a
+# second and builds nothing; a result store reuses every verdict of an unchanged subject; a capped run resumes.
+cp -R "$ROOT/Tests/Fixtures/Example" "$WORK/pr"
+git -C "$WORK/pr" init -q && git -C "$WORK/pr" add -A && git -C "$WORK/pr" -c user.name=s -c user.email=s@s commit -qm base
+sed -i '' 's|{ flag ? 1 : 2 }|{ flag ? 1 : 2 } // touched|' "$WORK/pr/Sources/Example/Decisions.swift"
+grep -q '// touched' "$WORK/pr/Sources/Example/Decisions.swift"
+"$BIN" run "$WORK/pr" --trust-project --diff-base HEAD --output "$WORK/pr-lines" --timeout 120 > /dev/null
+git -C "$WORK/pr" checkout -q -- .
+printf '\n// a comment only\n' >> "$WORK/pr/Sources/Example/Decisions.swift"
+START=$(python3 -c 'import time; print(time.time())')
+"$BIN" run "$WORK/pr" --trust-project --diff-base HEAD --output "$WORK/pr-none" > /dev/null
+python3 - "$START" "$WORK/pr-lines/run.json" "$WORK/pr-none/run.json" <<'PY2'
+import json,sys,time
+elapsed=time.time()-float(sys.argv[1])
+lines=json.load(open(sys.argv[2])); none=json.load(open(sys.argv[3]))
+assert [r['mutation']['original'] for r in lines['results']] == ['flag'], [r['mutation']['original'] for r in lines['results']]
+assert lines['plan']['scope']['onChangedLines'] and lines['policy']['baselineBuild'] == 'inactive-schema', lines['policy']
+assert none['complete'] and none['results'] == [] and none['cost']['builds'] == 0, none.get('cost')
+assert elapsed < 5, elapsed
+print('pull-request scope: one changed-line mutant; a comment-only change in %.2f s' % elapsed)
+PY2
+git -C "$WORK/pr" checkout -q -- .
+"$BIN" run "$WORK/pr" --trust-project --result-store "$WORK/store" --max-mutants 4 --output "$WORK/pr-capped" --timeout 120 > /dev/null
+"$BIN" run "$WORK/pr" --trust-project --result-store "$WORK/store" --resume "$WORK/pr-capped" --output "$WORK/pr-rest" --timeout 120 > /dev/null
+"$BIN" run "$WORK/pr" --trust-project --result-store "$WORK/store" --output "$WORK/pr-again" --timeout 120 > /dev/null
+python3 - "$WORK/pr-capped/run.json" "$WORK/pr-rest/run.json" "$WORK/pr-again/run.json" "$WORK/run/run.json" <<'PY2'
+import json,sys,collections
+capped,rest,again,full=(json.load(open(p)) for p in sys.argv[1:])
+assert capped['budget']['stoppedBy']=='max-mutants' and len(capped['budget']['untested'])==len(capped['results'])-4
+assert rest['reuse']['resumed']==4 and rest['cost']['builds']>=1
+assert again['reuse']['fromStore']==len(again['results']) and again['cost']['builds']==0 and again['cost']['testRuns']==0
+verdicts=lambda a: collections.Counter(r['verdict'] for r in a['results'])
+assert verdicts(rest)==verdicts(again)==verdicts(full), (verdicts(rest), verdicts(full))
+print('budget, resume and store: %d reused without building; verdicts as the full run' % len(again['results']))
+PY2
 # A flaky test is found by the baseline repetitions and left out; SIGINT mid-run ends the run (130), writes its
 # checkpoint as incomplete, and leaves no test helper behind.
 cp -R "$WORK/subject" "$WORK/flaky"
@@ -101,4 +136,4 @@ if [[ -n "${LITMUS_EVIDENCE_DIR:-}" ]]; then
   cp "$WORK/plan.json" "$WORK/report.json" "$WORK/report.sarif" "$WORK/stale.json" "$LITMUS_EVIDENCE_DIR/"
   cp "$WORK/run/"*.json "$WORK/run/"*.pb "$WORK/run/"*.xml "$WORK/run/"*.log "$LITMUS_EVIDENCE_DIR/run/"
 fi
-printf 'Smoke passed: real kill, crash, timeout, survivor, no coverage and unviable verdicts, original-source preservation, JSON/protobuf/SARIF, strict gate, stale-test refusal, flaky-test exclusion, clean interruption.\n'
+printf 'Smoke passed: real kill, crash, timeout, survivor, no coverage and unviable verdicts, original-source preservation, JSON/protobuf/SARIF, strict gate, stale-test refusal, pull-request scope and fast path, budget, resume and result store, flaky-test exclusion, clean interruption.\n'

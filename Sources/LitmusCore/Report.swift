@@ -19,7 +19,8 @@ public struct MutationFinding: Codable, Sendable, ReportedFinding {
     /// SARIF as `litmus/anchored/v1`; what `--gate new-survivors` compares.
     public let anchoredFingerprint: String?
 
-    init(_ result: MutationResult, root: String?) {
+    /// - Parameter untested: a budget left it untested: a note, not an unresolved outcome.
+    init(_ result: MutationResult, root: String?, untested: Bool = false) {
         let site = result.mutation
         path = root.map { $0 + "/" + site.path } ?? site.path
         line = site.line; column = site.column
@@ -28,6 +29,7 @@ public struct MutationFinding: Codable, Sendable, ReportedFinding {
             switch result.verdict {
             case .survived, .noCoverage: "warning"
             case .unviable: "note"
+            case .notRun where untested: "note"
             default: "error"
             }
         message = "\(site.operatorID.rawValue): \(site.original) → \(site.replacement); \(result.reason)"
@@ -100,7 +102,7 @@ public struct MutationReport: Codable, Sendable, ToolReport {
                 )
             } + artifact.plan.notes.filter(\.isDegraded).map { ReportDegradation(path: $0.path, reason: $0.reason) }
         let all = artifact.results.filter { !$0.verdict.isDetected }.map {
-            MutationFinding($0, root: relative ? nil : root)
+            MutationFinding($0, root: relative ? nil : root, untested: artifact.budgetLeftUntested($0))
         }
         let suppressed = all.filter { baseline.contains($0.fingerprint) }
         let unsuppressed = all.filter { !baseline.contains($0.fingerprint) }
@@ -127,7 +129,7 @@ public struct MutationReport: Codable, Sendable, ToolReport {
             verification: "source snapshot checked; historical execution, not a new test run or certification",
             notes: artifact.notes + [
                 "Coverage is the activation markers observed while the tests ran, never a static guess. "
-                    + "No equivalent-mutant pruning or verdict-cache reuse is performed."
+                    + "No equivalent-mutant pruning is performed; a reused verdict names the run that decided it."
             ],
             score: artifact.score,
             policy: artifact.policy,

@@ -10,6 +10,8 @@ struct JournalRecord: Equatable {
     @ProtoField(4) var reason: String = ""
     @ProtoField(5) var evidence: [String] = []
     @ProtoField(6) var nanoseconds: Int64 = 0
+    @ProtoField(7) var reuseKey: String? = nil
+    @ProtoField(8) var reusedFrom: String? = nil
 }
 
 @ProtoMessage(unknownFields: .discard)
@@ -60,6 +62,8 @@ extension JournalRecord {
         reason = result.reason
         evidence = result.evidence
         nanoseconds = result.nanoseconds
+        reuseKey = result.reuseKey
+        reusedFrom = result.reusedFrom
     }
 
     /// The result, or nil when a field holds a value this version does not know (a verdict or operator added later).
@@ -81,7 +85,7 @@ extension JournalRecord {
             declaration: stored.declaration,
             declarationDigest: stored.declarationDigest
         )
-        return MutationResult(
+        var result = MutationResult(
             mutation: mutation,
             verdict: verdict,
             tests: counts.map { TestCounts(passed: Int($0.passed), failed: Int($0.failed), skipped: Int($0.skipped)) },
@@ -89,5 +93,8 @@ extension JournalRecord {
             evidence: evidence,
             nanoseconds: nanoseconds
         )
+        result.reuseKey = reuseKey
+        result.reusedFrom = reusedFrom
+        return result
     }
 }
