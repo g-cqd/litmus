@@ -389,3 +389,14 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(scope(["A.swift": [13...20]], .files).priority(of: site) == 1)
     #expect(scope(["B.swift": [10...10]], .files).priority(of: site) == nil)
 }
+
+@Test func `a run reports its own cost: builds, test runs, CPU, memory and disk`() async throws {
+    let executor = FakeExecutor()
+    let (artifact, base) = try await run(executor)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let cost = try #require(artifact.cost)
+    #expect(cost.builds == executor.builds.withLock { $0 })
+    #expect(cost.testRuns == executor.calls.withLock { $0.count })
+    #expect(cost.wallSeconds > 0 && cost.litmusPeakRSSMiB > 0)
+    #expect(cost.runDirectoryMiB > 0 && cost.runDirectoryMiB >= cost.workspaceMiB)
+}

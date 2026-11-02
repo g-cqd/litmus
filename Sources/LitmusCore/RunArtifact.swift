@@ -81,6 +81,8 @@ public struct RunArtifact: Codable, Sendable {
     /// mutant active), and each test's duration alone in nanoseconds. Nil otherwise.
     public var perTestReach: [String: [String]]? = nil
     public var testNanoseconds: [String: Int64]? = nil
+    /// What the run cost the machine (wall, CPU, peak memory, disk, builds, test runs).
+    public var cost: RunCost? = nil
     public var score: MutationScore { MutationScore(results.map(\.verdict)) }
 
     public init(provenance: RunProvenance, plan: MutationPlan) {

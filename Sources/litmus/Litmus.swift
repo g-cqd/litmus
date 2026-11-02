@@ -270,6 +270,13 @@ private struct Run: AsyncParsableCommand {
             "litmus: \(artifact.results.count) mutants: \(summary.joined(separator: ", ")); score \(score); "
                 + "\(((artifact.timings["total"] ?? 0) * 10).rounded() / 10) s; evidence at \(output)/run.json"
         )
+        if let cost = artifact.cost {
+            stderr(
+                "litmus: cost: \(cost.builds) build(s), \(cost.testRuns) test run(s), CPU \(cost.childCPUSeconds) s "
+                    + "(children) + \(cost.litmusCPUSeconds) s, peak memory \(cost.childPeakRSSMiB) MiB (largest child), "
+                    + "disk \(cost.runDirectoryMiB) MiB"
+            )
+        }
         if !artifact.isSuccessfulExecution { throw ExitCode(ExitStatus.internalFailure.rawValue) }
     }
 }
