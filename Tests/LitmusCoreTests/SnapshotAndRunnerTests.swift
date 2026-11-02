@@ -107,6 +107,10 @@ private final class FakeExecutor: ProcessExecutor {
             }
             return ProcessOutput(exitStatus: 0, stdout: [], stderr: [], truncated: false, timedOut: false)
         }
+        if command.arguments.first == "git" {
+            // A clean, tracked work tree.
+            return ProcessOutput(exitStatus: 0, stdout: [], stderr: [], truncated: false, timedOut: false)
+        }
         guard let index = command.arguments.firstIndex(of: "--xunit-output") else {
             return ProcessOutput(
                 exitStatus: 0,
@@ -652,4 +656,139 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(result.isSuccessfulExecution && result.score.percent == nil)
     // One build at most: under load the setup alone can spend the budget, and then nothing is built.
     #expect(executor.builds.withLock { $0 } <= 1)
+}
+
+// MARK: - Workspaces (ADR 0007)
+
+@Test func `in place, originals are backed up before a rewrite and restored, also by a later start`() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-inplace-" + UUID().uuidString).path
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    try FileManager.default.createDirectory(atPath: root + "/Sources", withIntermediateDirectories: true)
+    let file = root + "/Sources/A.swift"
+    let original = Array("let a = true\n".utf8)
+    try Data(original).write(to: URL(fileURLWithPath: file))
+    let journal = InPlaceJournal(root: root)
+    try journal.rewrite(file, original: original, schema: Array("let a = schema\n".utf8))
+    #expect(try String(contentsOfFile: file, encoding: .utf8) == "let a = schema\n")
+    #expect(journal.outstanding.count == 1)
+    // A crash here: a later start (a new journal) finds the record and restores the original.
+    #expect(try InPlaceJournal(root: root).restoreAll() == 1)
+    #expect(try Data(contentsOf: URL(fileURLWithPath: file)) == Data(original))
+    #expect(journal.outstanding.isEmpty)
+
+    // A crash after the record, before the rewrite: nothing to put back, the record goes.
+    try journal.rewrite(file, original: original, schema: Array("x\n".utf8))
+    try Data(original).write(to: URL(fileURLWithPath: file))
+    #expect(try journal.restoreAll() == 0)
+    #expect(journal.outstanding.isEmpty)
+
+    // Edited meanwhile: left alone, its original kept, the run told.
+    try journal.rewrite(file, original: original, schema: Array("schema\n".utf8))
+    try Data("someone's edit\n".utf8).write(to: URL(fileURLWithPath: file))
+    #expect(throws: LitmusFailure.self) { try journal.restoreAll() }
+    #expect(try String(contentsOfFile: file, encoding: .utf8) == "someone's edit\n")
+    #expect(journal.outstanding.count == 1)
+    try Data("schema\n".utf8).write(to: URL(fileURLWithPath: file))
+    #expect(try InPlaceRestore.restore(root: root) == 1)
+    #expect(try Data(contentsOf: URL(fileURLWithPath: file)) == Data(original))
+    #expect(!FileManager.default.fileExists(atPath: root + "/.litmus"))
+}
+
+@Test func `an in-place run decides the same verdicts and leaves the subject as it was`() async throws {
+    let base = try fixture(twoSites)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let root = base.path + "/input"
+    let before = try Data(contentsOf: URL(fileURLWithPath: root + "/Sources/Example/F.swift"))
+    let (result, _) = try await runIn(base) { $0.workspace = .inPlace }
+    #expect(result.results.map(\.verdict) == [.killed, .killed] && result.isSuccessfulExecution)
+    #expect(try Data(contentsOf: URL(fileURLWithPath: root + "/Sources/Example/F.swift")) == before)
+    #expect(FileManager.default.fileExists(atPath: root + "/Package.swift"))
+    #expect(!FileManager.default.fileExists(atPath: root + "/.litmus"))
+    #expect(result.notes.contains { $0.hasPrefix("in place: 1 mutated file(s) restored and verified") })
+}
+
+@Test func `an in-place run that fails restores the subject before it reports`() async throws {
+    let base = try fixture(twoSites)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let root = base.path + "/input"
+    let before = try Data(contentsOf: URL(fileURLWithPath: root + "/Sources/Example/F.swift"))
+    await #expect(throws: (any Error).self) {
+        try await MutationRunner(executor: FakeExecutor(.init(failsBaseline: true))).run(
+            driver: try BuildDriver(root: root, scheme: nil, destination: nil),
+            outputDirectory: base.path + "/run",
+            options: {
+                var o = options(); o.workspace = .inPlace; return o
+            }()
+        )
+    }
+    #expect(try Data(contentsOf: URL(fileURLWithPath: root + "/Sources/Example/F.swift")) == before)
+    #expect(!FileManager.default.fileExists(atPath: root + "/.litmus"))
+}
+
+@Test func `a persistent workspace is synchronised by manifest, verified, and refused when not Litmus's`() async throws
+{
+    let base = try fixture(twoSites)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let source = base.path + "/input", directory = base.path + "/persistent"
+    try PersistentWorkspace.claim(directory, source: source)
+    let (first, created) = try await PersistentWorkspace.synchronize(source: source, directory: directory)
+    #expect(created == ["persistent workspace created"])
+    let tree = directory + "/tree"
+    // Build state survives; a leftover schema from an interrupted run, an extra file and a source change are repaired.
+    try FileManager.default.createDirectory(atPath: tree + "/.build", withIntermediateDirectories: true)
+    try Data("object".utf8).write(to: URL(fileURLWithPath: tree + "/.build/A.o"))
+    let unchanged =
+        try FileManager.default.attributesOfItem(atPath: tree + "/Package.swift")[.modificationDate] as? Date
+    try Data("leftover schema".utf8).write(to: URL(fileURLWithPath: tree + "/Sources/Example/F.swift"))
+    try FileManager.default.createDirectory(atPath: tree + "/Sources/Gone", withIntermediateDirectories: true)
+    try Data("x".utf8).write(to: URL(fileURLWithPath: tree + "/Sources/Gone/G.swift"))
+    try Data("let added = 1\n".utf8).write(to: URL(fileURLWithPath: source + "/Sources/Example/New.swift"))
+    let (second, notes) = try await PersistentWorkspace.synchronize(source: source, directory: directory)
+    #expect(notes == ["persistent workspace synchronised and verified: 1 changed, 1 added, 1 removed, 1 unchanged"])
+    #expect(second.entries == (try await WorkspaceSnapshot.currentEntries(source)))
+    #expect(second.entries != first.entries)
+    #expect(FileManager.default.fileExists(atPath: tree + "/.build/A.o"))
+    #expect(!FileManager.default.fileExists(atPath: tree + "/Sources/Gone"))
+    #expect(
+        (try FileManager.default.attributesOfItem(atPath: tree + "/Package.swift")[.modificationDate] as? Date)
+            == unchanged
+    )
+    // Not a workspace: refused, nothing written.
+    let foreign = base.path + "/foreign"
+    try FileManager.default.createDirectory(atPath: foreign, withIntermediateDirectories: true)
+    try Data("mine".utf8).write(to: URL(fileURLWithPath: foreign + "/notes.txt"))
+    #expect(throws: LitmusFailure.self) { try PersistentWorkspace.claim(foreign, source: source) }
+    #expect(try FileManager.default.contentsOfDirectory(atPath: foreign) == ["notes.txt"])
+    // One run per workspace.
+    let lock = try WorkspaceLock(path: directory + "/lock")
+    #expect(throws: LitmusFailure.self) { try WorkspaceLock(path: directory + "/lock") }
+    lock.release()
+}
+
+@Test func `a persistent run keeps its workspace and the next run reuses it`() async throws {
+    let base = try fixture(twoSites)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let directory = base.path + "/persistent"
+    let (first, _) = try await runIn(base, output: "run1") { $0.workspace = .persistent(directory) }
+    let (second, _) = try await runIn(base, output: "run2") { $0.workspace = .persistent(directory) }
+    #expect(first.results.map(\.verdict) == second.results.map(\.verdict))
+    #expect(FileManager.default.fileExists(atPath: directory + "/tree/Package.swift"))
+    #expect(second.notes.contains { $0.hasPrefix("persistent workspace synchronised and verified: 0 changed") })
+    #expect(first.cost?.workspaceMiB == 0)
+}
+
+private func runIn(
+    _ base: URL,
+    output: String = "run",
+    configure: (inout RunOptions) -> Void
+) async throws -> (RunArtifact, FakeExecutor) {
+    let executor = FakeExecutor()
+    var options = options()
+    configure(&options)
+    let artifact = try await MutationRunner(executor: executor).run(
+        driver: try BuildDriver(root: base.path + "/input", scheme: nil, destination: nil),
+        outputDirectory: base.path + "/" + output,
+        options: options
+    )
+    return (artifact, executor)
 }

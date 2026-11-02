@@ -7,7 +7,7 @@ import LitmusCore
     static let configuration = CommandConfiguration(
         abstract: "Evidence-led mutation testing for Swift packages and Xcode projects.",
         version: LitmusVersion.current,
-        subcommands: [Plan.self, Run.self, Analyze.self, Census.self]
+        subcommands: [Plan.self, Run.self, Analyze.self, Census.self, Restore.self]
     )
 }
 
@@ -206,6 +206,16 @@ private struct Run: AsyncParsableCommand {
     var reuse: String = "closure"
     @Option(help: "Reuse the decided verdicts of an earlier run directory whose keys still match.")
     var resume: String?
+    @Option(
+        help:
+            "copy (default: a fresh copy), persistent:<dir> (kept and synchronised: incremental builds), or in-place (CI: the checkout itself, originals backed up and restored)."
+    )
+    var workspace: String = "copy"
+    @Option(
+        help:
+            "Directory holding Xcode's DerivedData (reuse a CI job's build); default: the run's or the persistent one."
+    )
+    var buildDirectory: String?
     mutating func run() async throws {
         guard trustProject else {
             throw ValidationError(
@@ -248,6 +258,15 @@ private struct Run: AsyncParsableCommand {
             throw ValidationError("--reuse declaration is for whole-subject (nightly) runs, not --diff/--diff-base")
         }
         options.reuseMode = mode
+        switch workspace {
+        case "copy": options.workspace = .copy
+        case "in-place": options.workspace = .inPlace
+        case let value where value.hasPrefix("persistent:") && value.count > "persistent:".count:
+            let directory = String(value.dropFirst("persistent:".count))
+            options.workspace = .persistent(URL(fileURLWithPath: directory).standardizedFileURL.path)
+        default: throw ValidationError("workspace must be copy, in-place or persistent:<dir>")
+        }
+        options.buildDirectory = buildDirectory.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
         guard swiftpmBuildSystem.map({ ["native", "swiftbuild"].contains($0) }) ?? true else {
             throw ValidationError("swiftpm-build-system must be native or swiftbuild")
         }
@@ -315,6 +334,20 @@ private struct Run: AsyncParsableCommand {
             )
         }
         if !artifact.isSuccessfulExecution { throw ExitCode(ExitStatus.internalFailure.rawValue) }
+    }
+}
+
+private struct Restore: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Restore the files an interrupted in-place run left rewritten (from <root>/.litmus/restore)."
+    )
+    @Argument(help: "Subject root of the in-place run.") var root: String = "."
+    mutating func run() async throws {
+        let root = URL(fileURLWithPath: root).standardizedFileURL.resolvingSymlinksInPath().path
+        do {
+            let restored = try InPlaceRestore.restore(root: root)
+            stderr("litmus: \(restored) file(s) restored in \(root)")
+        } catch { try fail(error, code: .internalFailure) }
     }
 }
 

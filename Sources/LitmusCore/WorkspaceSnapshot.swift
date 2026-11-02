@@ -30,12 +30,16 @@ public struct WorkspaceSnapshot: Sendable {
     }()
 
     /// Every regular file under `root` (skipped names pruned) with its SHA-256: analyzerkit's `TreeSnapshot`, on aemi's
-    /// `DirectoryWalk`. A link or a special file is refused, never followed or dropped.
+    /// `DirectoryWalk`. A link is left out and listed, never followed; a special file is refused.
     static func currentEntries(_ root: String) async throws -> [SnapshotEntry] {
+        try await inventory(root).entries
+    }
+
+    /// The entries under `root` and the links left out.
+    static func inventory(_ root: String) async throws -> (entries: [SnapshotEntry], skippedLinks: [String]) {
         do {
-            return try await TreeSnapshot.inventory(root, limits: limits).entries.map {
-                SnapshotEntry(path: $0.path, sha256: $0.sha256)
-            }
+            let manifest = try await TreeSnapshot.inventory(root, limits: limits)
+            return (manifest.entries.map { SnapshotEntry(path: $0.path, sha256: $0.sha256) }, manifest.skippedLinks)
         } catch {
             throw LitmusFailure("inventory: \(error.reason)")
         }

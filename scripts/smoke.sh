@@ -95,6 +95,35 @@ verdicts=lambda a: collections.Counter(r['verdict'] for r in a['results'])
 assert verdicts(rest)==verdicts(again)==verdicts(full), (verdicts(rest), verdicts(full))
 print('budget, resume and store: %d reused without building; verdicts as the full run' % len(again['results']))
 PY2
+# Workspaces (ADR 0007): in place, the checkout is restored, also after SIGINT; a persistent workspace builds
+# incrementally on its second run.
+"$BIN" run "$WORK/pr" --trust-project --workspace in-place --max-mutants 3 --output "$WORK/ip" --timeout 120 > /dev/null
+[[ -z "$(git -C "$WORK/pr" status --porcelain --untracked-files=no)" && ! -e "$WORK/pr/.litmus" ]]
+"$BIN" run "$WORK/pr" --trust-project --workspace in-place --output "$WORK/ip-int" --timeout 120 > /dev/null 2>&1 &
+LITMUS_PID=$!
+for _ in $(seq 1 600); do
+  ls "$WORK/ip-int/logs" 2>/dev/null | grep -q -- '-build.log$' && break
+  sleep 0.2
+done
+sleep 1
+kill -INT "$LITMUS_PID"
+set +e
+wait "$LITMUS_PID"
+STATUS=$?
+set -e
+[[ "$STATUS" == 130 ]]
+[[ -z "$(git -C "$WORK/pr" status --porcelain --untracked-files=no)" && ! -e "$WORK/pr/.litmus" ]]
+"$BIN" run "$WORK/pr" --trust-project --workspace "persistent:$WORK/persistent" --max-mutants 3 --output "$WORK/ps1" --timeout 120 > /dev/null
+"$BIN" run "$WORK/pr" --trust-project --workspace "persistent:$WORK/persistent" --max-mutants 3 --output "$WORK/ps2" --timeout 120 > /dev/null
+python3 - "$WORK/ip/run.json" "$WORK/ps1/run.json" "$WORK/ps2/run.json" <<'PY2'
+import json,sys
+ip,ps1,ps2=(json.load(open(p)) for p in sys.argv[1:])
+assert any(n.startswith('in place: ') and 'restored and verified' in n for n in ip['notes']), ip['notes']
+assert any('0 changed, 0 added, 0 removed' in n for n in ps2['notes']), ps2['notes']
+b1,b2=ps1['timings']['build'],ps2['timings']['build']
+assert b2 < b1, (b1,b2)
+print('workspaces: in place restored (also on SIGINT); persistent build %.1f s then %.1f s' % (b1,b2))
+PY2
 # A flaky test is found by the baseline repetitions and left out; SIGINT mid-run ends the run (130), writes its
 # checkpoint as incomplete, and leaves no test helper behind.
 cp -R "$WORK/subject" "$WORK/flaky"
@@ -136,4 +165,4 @@ if [[ -n "${LITMUS_EVIDENCE_DIR:-}" ]]; then
   cp "$WORK/plan.json" "$WORK/report.json" "$WORK/report.sarif" "$WORK/stale.json" "$LITMUS_EVIDENCE_DIR/"
   cp "$WORK/run/"*.json "$WORK/run/"*.pb "$WORK/run/"*.xml "$WORK/run/"*.log "$LITMUS_EVIDENCE_DIR/run/"
 fi
-printf 'Smoke passed: real kill, crash, timeout, survivor, no coverage and unviable verdicts, original-source preservation, JSON/protobuf/SARIF, strict gate, stale-test refusal, pull-request scope and fast path, budget, resume and result store, flaky-test exclusion, clean interruption.\n'
+printf 'Smoke passed: real kill, crash, timeout, survivor, no coverage and unviable verdicts, original-source preservation, JSON/protobuf/SARIF, strict gate, stale-test refusal, pull-request scope and fast path, budget, resume and result store, in-place and persistent workspaces, flaky-test exclusion, clean interruption.\n'

@@ -80,6 +80,10 @@ public struct RunOptions: Sendable {
     public var reuseMode = ReuseContext.Mode.closure
     /// An earlier run directory whose decided verdicts are reused when their keys match (`--resume`).
     public var resume: String?
+    /// Where the run builds and mutates (`--workspace`).
+    public var workspace = WorkspaceStrategy.copy
+    /// The directory holding Xcode's `DerivedData` (`--build-directory`); default: the run's or the persistent one.
+    public var buildDirectory: String?
 
     public init() {}
 
@@ -149,8 +153,8 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         guard output != root, !output.hasPrefix(root + "/"), !fm.fileExists(atPath: output) else {
             throw LitmusFailure("run directory must be new and outside original source root")
         }
-        let logs = output + "/logs", artifacts = output + "/artifacts", workers = output + "/workers"
-        for directory in [output, logs, artifacts, workers] {
+        let logs = output + "/logs", workers = output + "/workers"
+        for directory in [output, logs, workers] {
             try fm.createDirectory(atPath: directory, withIntermediateDirectories: true)
         }
         var timings: [String: Double] = [:]
@@ -212,7 +216,25 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             }
             phase = clock.now
         }
-        let snapshot = try await WorkspaceSnapshot.create(source: root, destination: output + "/workspace")
+        let prepared = try await PreparedWorkspace.prepare(
+            options.workspace,
+            source: root,
+            output: output,
+            buildDirectory: options.buildDirectory.map(SourcePath.canonical)
+        )
+        let snapshot = prepared.snapshot
+        let artifacts = prepared.buildDirectory
+        try fm.createDirectory(atPath: artifacts, withIntermediateDirectories: true)
+        /// Ends the workspace: restores what is still rewritten (in place), releases the lock.
+        func releaseWorkspace() {
+            if let journal = prepared.restore {
+                _ = try? journal.restoreAll()
+                prepared.lock?.release()
+                journal.tidy()
+            } else {
+                prepared.lock?.release()
+            }
+        }
         account("snapshot", since: phase)
         phase = clock.now
         let clonePlan = try await MutationPlanner.plan(
@@ -259,6 +281,15 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         var artifact = RunArtifact(provenance: provenance, plan: plan)
         for link in snapshot.skippedLinks {
             artifact.notes.append("symbolic link left out of the workspace (never followed): \(link)")
+        }
+        artifact.notes += prepared.notes
+        if prepared.restore != nil {
+            // In place: every file to mutate must be tracked and unmodified, so git can restore it as a last resort.
+            try await requireCleanGit(Set(plan.mutations.map(\.path)).sorted(), root: root)
+            artifact.notes.append(
+                "in place: the subject root is the workspace; originals are backed up in .litmus/restore before each "
+                    + "rewrite and restored after each batch"
+            )
         }
 
         // Reuse (ADR 0007): every result carries its key, so any run can be resumed or seed a store; a verdict is
@@ -371,11 +402,29 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             }
             timings["total"] = seconds(clock.now - started)
             artifact.timings = timings
-            artifact.cost = cost(workspace: snapshot.root)
+            artifact.cost = cost(workspace: prepared.removable ? snapshot.root : nil)
+            if let journal = prepared.restore {
+                // In place: nothing may stay rewritten, and every mutated file must hold its original bytes again.
+                try journal.restoreAll()
+                let mutated = Set(plan.mutations.map(\.path))
+                let expected = Dictionary(
+                    snapshot.entries.map { ($0.path, $0.sha256) },
+                    uniquingKeysWith: { a, _ in a }
+                )
+                for path in mutated.sorted() {
+                    let bytes = try BoundedFileReader.read(path: root + "/" + path, cap: 64 << 20)
+                    guard Digest.sha256(bytes) == expected[path] else {
+                        throw LitmusFailure("in place: \(path) does not hold its original bytes after the run")
+                    }
+                }
+                artifact.notes.append("in place: \(mutated.count) mutated file(s) restored and verified")
+            }
+            releaseWorkspace()
             if !options.keepWorkspace {
                 // Every verdict is recorded: a workspace that cannot be removed (Finder or Spotlight writing into it
                 // while it goes, seen 2026-11-02) is noted, never a failed run.
-                for directory in [snapshot.root, workers] where !Self.remove(directory) {
+                for directory in (prepared.removable ? [snapshot.root] : []) + [workers]
+                where !Self.remove(directory) {
                     artifact.notes.append("could not remove \(directory); delete it by hand")
                 }
             }
@@ -383,6 +432,8 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             try ArtifactCodec.write(artifact, path: output + "/run.pb")
             return artifact
         }
+        /// The schema currently written into the workspace, restored on any exit.
+        var installed: InstalledSchema?
         do {
             guard !toRun.isEmpty else { return try finish() }
 
@@ -606,7 +657,8 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 }
                 buildIndex += 1
                 let name = "schema-\(buildIndex)"
-                let installed = try install(group, in: snapshot)
+                let installedGroup = try install(group, in: snapshot, journal: prepared.restore)
+                installed = installedGroup
                 phase = clock.now
                 counter.build()
                 let build = try await executor.execute(
@@ -620,7 +672,8 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 try writeLog(build, path: "\(logs)/\(name)-build.log")
                 account("build", since: phase)
                 guard build.exitStatus == 0, !build.timedOut else {
-                    try installed.restore()
+                    try installedGroup.restore()
+                    installed = nil
                     if established == nil, !unmutatedBuilt {
                         // No baseline yet: the unmutated build tells a broken subject (the run stops) from mutants
                         // that do not compile (the group is split below), and becomes the baseline.
@@ -645,7 +698,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                         // Unviable only when the compiler reports an error in the mutant's own file: this build changed
                         // nothing else. Flow errors ("missing return" after a negated `while true`) point at the end
                         // of the function, not at the mutant's lines. No error, or errors only elsewhere: not its doing.
-                        let mutated = Set(installed.rendered.keys)
+                        let mutated = Set(installedGroup.rendered.keys)
                         let own = diagnostics.errors.first { mutated.contains($0.path) }
                         let message = (own ?? diagnostics.errors.first)?.message ?? "no compiler diagnostic"
                         try record(
@@ -657,7 +710,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                             sink
                         )
                     } else {
-                        let suspects = Set(diagnostics.suspects(in: installed.rendered))
+                        let suspects = Set(diagnostics.suspects(in: installedGroup.rendered))
                         let named = group.filter { suspects.contains($0.id) }
                         if !named.isEmpty, named.count < group.count {
                             pending.append(named)
@@ -692,7 +745,8 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                                 sink
                             )
                         }
-                        try installed.restore()
+                        try installedGroup.restore()
+                        installed = nil
                         account("tests", since: phase)
                         continue
                     }
@@ -784,15 +838,23 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                     )
                 }
                 account("tests", since: phase)
-                try installed.restore()
+                try installedGroup.restore()
+                installed = nil
                 try ArtifactCodec.write(artifact, path: checkpointPath)
             }
             return try finish()
         } catch {
+            try? installed?.restore()
+            releaseWorkspace()
+            if let journal = prepared.restore, !journal.outstanding.isEmpty {
+                artifact.notes.append(
+                    "in place: \(journal.outstanding.count) file(s) could not be restored; run `litmus restore \(root)`"
+                )
+            }
             artifact.notes.append("run stopped: \(error); partial evidence is not a successful run")
             timings["total"] = seconds(clock.now - started)
             artifact.timings = timings
-            artifact.cost = cost(workspace: snapshot.root)
+            artifact.cost = cost(workspace: prepared.removable ? snapshot.root : nil)
             do { try ArtifactCodec.write(artifact, path: checkpointPath) } catch let writeError {
                 throw LitmusFailure("execution failed: \(error); checkpoint failed: \(writeError)")
             }
@@ -1046,7 +1108,10 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
     }
 
     /// Writes one batch's schemas into the snapshot, keeping the originals to restore.
-    private func install(_ group: [Mutation], in snapshot: WorkspaceSnapshot) throws -> InstalledSchema {
+    /// In place, each original is made recoverable through `journal` before its file is rewritten.
+    private func install(_ group: [Mutation], in snapshot: WorkspaceSnapshot, journal: InPlaceJournal?) throws
+        -> InstalledSchema
+    {
         var originals: [String: Data] = [:]
         var rendered: [String: RenderedSchema] = [:]
         do {
@@ -1056,15 +1121,43 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 guard let source = String(bytes: bytes, encoding: .utf8) else { throw LitmusFailure("not UTF-8") }
                 let schema = try SchemaWriter.schema(source, mutations: sites)
                 originals[path] = Data(bytes)
-                // Scratch files the next run re-creates: atomic, not synced.
-                try AtomicFile.replace(at: path, with: Array(schema.text.utf8), durability: .none)
+                if let journal {
+                    try journal.rewrite(path, original: bytes, schema: Array(schema.text.utf8))
+                } else {
+                    // Scratch files the next run re-creates: atomic, not synced.
+                    try AtomicFile.replace(at: path, with: Array(schema.text.utf8), durability: .none)
+                }
                 rendered[path] = schema
             }
         } catch {
-            try InstalledSchema(originals: originals, rendered: rendered).restore()
+            try InstalledSchema(originals: originals, rendered: rendered, journal: journal).restore()
             throw error
         }
-        return InstalledSchema(originals: originals, rendered: rendered)
+        return InstalledSchema(originals: originals, rendered: rendered, journal: journal)
+    }
+
+    /// Refuses an in-place run when a file to mutate is untracked or modified in git: then `git checkout` could not be
+    /// the last resort that restores it.
+    private func requireCleanGit(_ paths: [String], root: String) async throws {
+        func git(_ arguments: [String]) async throws -> ProcessOutput {
+            try await executor.execute(
+                ToolCommand(executable: "/usr/bin/xcrun", arguments: ["git"] + arguments),
+                directory: root,
+                environment: subjectEnvironment(nil),
+                timeout: 120
+            )
+        }
+        let tracked = try await git(["ls-files", "--error-unmatch", "--"] + paths)
+        guard tracked.exitStatus == 0 else {
+            throw LitmusFailure("--workspace in-place needs a git work tree whose files to mutate are all tracked")
+        }
+        let status = try await git(["status", "--porcelain=v1", "--"] + paths)
+        guard status.exitStatus == 0, !status.truncated, status.stdout.isEmpty else {
+            let changed = String(decoding: status.stdout.prefix(400), as: UTF8.self)
+            throw LitmusFailure(
+                "--workspace in-place needs the files to mutate unmodified (commit or stash first): \(changed)"
+            )
+        }
     }
 }
 
@@ -1072,8 +1165,14 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
 struct InstalledSchema {
     let originals: [String: Data]
     let rendered: [String: RenderedSchema]
+    /// In place: restores go through the journal, which puts an original back only over the schema it recorded.
+    var journal: InPlaceJournal? = nil
 
     func restore() throws {
+        if let journal {
+            try journal.restoreAll()
+            return
+        }
         for (path, data) in originals { try AtomicFile.replace(at: path, with: [UInt8](data), durability: .none) }
     }
 }
