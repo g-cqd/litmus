@@ -95,6 +95,21 @@ verdicts=lambda a: collections.Counter(r['verdict'] for r in a['results'])
 assert verdicts(rest)==verdicts(again)==verdicts(full), (verdicts(rest), verdicts(full))
 print('budget, resume and store: %d reused without building; verdicts as the full run' % len(again['results']))
 PY2
+# Per-test reach (t37, t38, t49): the same verdicts with each mutant running only its reaching tests; a later run
+# takes the nightly's flaky tests (no probe) and its reach where keys match.
+"$BIN" run "$WORK/pr" --trust-project --per-test-reach --output "$WORK/reach" --timeout 120 > /dev/null
+"$BIN" run "$WORK/pr" --trust-project --reach-from "$WORK/reach/run.json" --output "$WORK/reach2" --timeout 120 > /dev/null
+python3 - "$WORK/reach/run.json" "$WORK/reach2/run.json" "$WORK/run/run.json" <<'PY2'
+import json,sys,collections
+reach,again,full=(json.load(open(p)) for p in sys.argv[1:])
+verdicts=lambda a: collections.Counter(r['verdict'] for r in a['results'])
+assert verdicts(reach)==verdicts(again)==verdicts(full), (verdicts(reach), verdicts(again), verdicts(full))
+assert reach['perTestReach'] and reach['testCounts']
+assert any('the probe was not run' in n for n in again['notes']), again['notes']
+used=[n for n in again['notes'] if n.startswith('per-test reach from')]
+assert used and ' used for 0 ' not in used[0], used
+print('per-test reach: verdicts as the full run;', used[0].split(' used for ')[1])
+PY2
 # Workspaces (ADR 0007): in place, the checkout is restored, also after SIGINT; a persistent workspace builds
 # incrementally on its second run.
 "$BIN" run "$WORK/pr" --trust-project --workspace in-place --max-mutants 3 --output "$WORK/ip" --timeout 120 > /dev/null
@@ -165,4 +180,4 @@ if [[ -n "${LITMUS_EVIDENCE_DIR:-}" ]]; then
   cp "$WORK/plan.json" "$WORK/report.json" "$WORK/report.sarif" "$WORK/stale.json" "$LITMUS_EVIDENCE_DIR/"
   cp "$WORK/run/"*.json "$WORK/run/"*.pb "$WORK/run/"*.xml "$WORK/run/"*.log "$LITMUS_EVIDENCE_DIR/run/"
 fi
-printf 'Smoke passed: real kill, crash, timeout, survivor, no coverage and unviable verdicts, original-source preservation, JSON/protobuf/SARIF, strict gate, stale-test refusal, pull-request scope and fast path, budget, resume and result store, in-place and persistent workspaces, flaky-test exclusion, clean interruption.\n'
+printf 'Smoke passed: real kill, crash, timeout, survivor, no coverage and unviable verdicts, original-source preservation, JSON/protobuf/SARIF, strict gate, stale-test refusal, pull-request scope and fast path, budget, resume and result store, in-place and persistent workspaces, per-test reach selection and reuse, flaky-test exclusion, clean interruption.\n'

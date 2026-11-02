@@ -80,6 +80,9 @@ public struct RunOptions: Sendable {
     public var reuseMode = ReuseContext.Mode.closure
     /// An earlier run directory whose decided verdicts are reused when their keys match (`--resume`).
     public var resume: String?
+    /// A nightly run whose flaky tests are reused (the probe is skipped) and whose per-test reach is used for the
+    /// mutants whose reuse keys still match (`--reach-from`, t49).
+    public var reachFrom: String?
     /// Where the run builds and mutates (`--workspace`).
     public var workspace = WorkspaceStrategy.copy
     /// The directory holding Xcode's `DerivedData` (`--build-directory`); default: the run's or the persistent one.
@@ -334,6 +337,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             )
         }
         let previous = try options.resume.map { try Self.previousResults(runDirectory: $0) } ?? [:]
+        let nightly = try options.reachFrom.map { try ArtifactCodec.read(RunArtifact.self, path: $0) }
         let checkpointPath = output + "/run.json"
         try ArtifactCodec.write(artifact, path: checkpointPath)
         let sink = Sink(
@@ -511,7 +515,33 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 // Flaky tests: the unmutated suite, repeated; a test failing in any repetition would make a kill that
                 // is not the mutant's (the fcheck pilot's timing test), so it is left out of every later run.
                 var flaky: [String] = []
-                if harness.controlsSwiftTesting, options.baselineRepetitions > 1 {
+                if harness.controlsSwiftTesting, let nightly, let known = nightly.policy?.flakyTests {
+                    // The nightly's flaky tests, its probe not repeated (t49): a test that became flaky since is
+                    // caught only by kill confirmation.
+                    flaky = known
+                    artifact.notes.append(
+                        "flaky tests from \(options.reachFrom ?? "the nightly run") (\(known.count)); the probe was not run"
+                    )
+                    if !known.isEmpty {
+                        var withoutFlaky = current
+                        withoutFlaky.skip = known
+                        let rebaseline = try await withoutFlaky.execute(
+                            name: "baseline-without-flaky",
+                            activeID: "",
+                            deadline: options.timeoutCap
+                        )
+                        guard rebaseline.result.outcome == .passed, let counts = rebaseline.result.counts,
+                            counts.passed > 0
+                        else {
+                            throw LitmusFailure(
+                                "the unmutated suite without its flaky tests did not pass: \(rebaseline.result.reason)"
+                            )
+                        }
+                        baselineCounts = counts
+                        baselineByModule = rebaseline.result.moduleCounts
+                        baseline = rebaseline
+                    }
+                } else if harness.controlsSwiftTesting, options.baselineRepetitions > 1 {
                     phase = clock.now
                     let probe = try await current.execute(
                         name: "baseline-repetitions",
@@ -604,6 +634,32 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 )
                 judge.skip = flaky
                 judge.baselineByModule = baselineByModule
+                if let nightly, nightly.reuse?.mode == .closure, let reach = nightly.perTestReach,
+                    let counts = nightly.testCounts
+                {
+                    // The nightly's per-test reach, for the mutants whose key is the same: nothing that could change
+                    // which tests reach them changed (t49).
+                    let keys = Dictionary(
+                        nightly.results.compactMap { result in result.reuseKey.map { (result.mutation.id, $0) } },
+                        uniquingKeysWith: { first, _ in first }
+                    )
+                    var used = 0, changed = 0
+                    let running = Set(toRun.map(\.id))
+                    for result in artifact.results where running.contains(result.mutation.id) {
+                        guard let key = result.reuseKey, keys[result.mutation.id] == key else {
+                            changed += 1
+                            continue
+                        }
+                        guard let tests = reach[result.mutation.id] else { continue }
+                        judge.reach[result.mutation.id] = Set(tests)
+                        used += 1
+                    }
+                    judge.testCounts = counts
+                    artifact.notes.append(
+                        "per-test reach from \(options.reachFrom ?? "the nightly run") used for \(used) of \(toRun.count) "
+                            + "mutants (\(changed) with a changed key; the rest not reached by any test alone)"
+                    )
+                }
                 if harness.selectsModules, options.selectTestTargets {
                     judge.covering = Self.coveringModules(
                         toRun,
@@ -627,6 +683,8 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
 
             var established: Established?
             var unmutatedBuilt = false
+            /// Each test's counts alone (per-test reach), across schemas.
+            var perTestCounts: [String: TestCounts] = [:]
             if !options.inactiveSchemaBaseline {
                 try await buildUnmutated()
                 unmutatedBuilt = true
@@ -760,7 +818,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                     control = current.baseline
                     phase = clock.now
                 }
-                let judge = current.judge
+                var judge = current.judge
                 let deadline = current.deadline
                 let workerCount = current.workerCount
                 for site in group where !control.reached.contains(site.id) {
@@ -779,11 +837,12 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                     var reach: [String: [String]] = artifact.perTestReach ?? [:]
                     var durations: [String: Int64] = artifact.testNanoseconds ?? [:]
                     let runs = Array(current.testFunctions.enumerated())
+                    let probing = judge
                     try await forEachConcurrently(
                         runs,
                         limit: workerCount,
                         { pair in
-                            try await judge.execute(
+                            try await probing.execute(
                                 name: "\(name)-reach-\(pair.offset)",
                                 activeID: "",
                                 deadline: deadline,
@@ -799,11 +858,17 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                             return
                         }
                         durations[test] = max(durations[test] ?? 0, execution.result.nanoseconds)
+                        if let counts = execution.result.counts { perTestCounts[test] = counts }
                         for id in execution.reached.intersection(ids) { reach[id, default: []].append(test) }
                     }
                     artifact.perTestReach = reach.mapValues { $0.sorted() }
                     artifact.testNanoseconds = durations
+                    artifact.testCounts = perTestCounts
+                    // This schema's reach decides its mutants: selection and the kill check (t37, t38).
+                    for site in covered { judge.reach[site.id] = Set(reach[site.id] ?? []) }
                 }
+                judge.testCounts.merge(perTestCounts) { _, new in new }
+                let deciding = judge
                 // Each first run's decision is journalled as it comes (aemi's `forEachConcurrently`): a crash of Litmus
                 // loses only the runs in flight. Reruns wait for the parallel pass and run alone, as before.
                 var reruns: [Judge.Pending] = []
@@ -813,7 +878,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                     limit: workerCount,
                     { site in
                         if let budgetEnd, ContinuousClock.now >= budgetEnd { return Judge.Step.notStarted(site) }
-                        return try await judge.first(site)
+                        return try await deciding.first(site)
                     }
                 ) { _, step in
                     switch step {
@@ -1271,9 +1336,30 @@ struct Judge: Sendable {
     var covering: [String: Set<String>] = [:]
     /// The unmutated suite's counts per module, what a mutant's selected modules must pass.
     var baselineByModule: [String: TestCounts] = [:]
+    /// For each mutant whose per-test reach is known (this run's `--per-test-reach`, or a matching `--reach-from`):
+    /// the Swift Testing tests that reach it when run alone, no mutant active (t37, t38).
+    var reach: [String: Set<String>] = [:]
+    /// Each test's counts when it ran alone (with per-test reach): what a run of selected tests must pass.
+    var testCounts: [String: TestCounts] = [:]
 
-    /// The counts a passing run of `site` must have: its selected modules', or the whole baseline.
+    /// The reaching tests a mutant's runs are limited to: known, not empty, every count known; nil runs the modules.
+    func selected(_ site: Mutation) -> [String]? {
+        guard harness.selectsTests, let tests = reach[site.id], !tests.isEmpty,
+            tests.allSatisfy({ testCounts[$0] != nil })
+        else { return nil }
+        return tests.sorted()
+    }
+
+    /// The counts a passing run of `site` must have: its reaching tests', its selected modules', or the baseline's.
     func expected(_ site: Mutation) -> TestCounts {
+        if let tests = selected(site) {
+            var passed = 0, skipped = 0
+            for test in tests {
+                passed += testCounts[test]?.passed ?? 0
+                skipped += testCounts[test]?.skipped ?? 0
+            }
+            return TestCounts(passed: passed, failed: 0, skipped: skipped)
+        }
         guard let modules = covering[site.id] else { return baseline }
         var passed = 0, skipped = 0
         for module in modules {
@@ -1396,12 +1482,13 @@ struct Judge: Sendable {
         only: [String]? = nil,
         ledger: inout Ledger
     ) async throws -> Execution {
+        // Every run of a mutant uses the same tests: its reaching ones when selected, so counts compare.
         let execution = try await execute(
             name: "mutant-\(site.id)\(suffix)",
             activeID: active ? site.id : "",
             deadline: deadline,
             failFast: active && options.failFast,
-            only: only,
+            only: only ?? selected(site),
             modules: covering[site.id],
             alone: !suffix.isEmpty
         )
@@ -1410,7 +1497,15 @@ struct Judge: Sendable {
         return execution
     }
 
-    /// The first run of one reached mutant, among the parallel workers, with `parallelDeadline`.
+    /// Whether per-test reach rejects a failure: it is known for the mutant, the failing tests are named, and none of
+    /// them reaches the mutant (the fcheck timing test's false kills, study 4).
+    func reachRejects(_ site: Mutation, failing: [String]) -> Bool {
+        guard let tests = reach[site.id], !failing.isEmpty else { return false }
+        return tests.isDisjoint(with: failing)
+    }
+
+    /// The first run of one reached mutant, among the parallel workers, with `parallelDeadline`. With its per-test
+    /// reach known, only the reaching tests run, in one process.
     func first(_ site: Mutation) async throws -> Step {
         var ledger = Ledger(site: site, baseline: expected(site), evidence: [], nanoseconds: 0)
         let first = try await run(site, "", active: true, deadline: parallelDeadline, ledger: &ledger)
@@ -1418,7 +1513,9 @@ struct Judge: Sendable {
         switch first.result.outcome {
         case .passed: return .done(ledger.passing(first))
         case .unusable: return .done(ledger.decision(.infrastructureError, first.result.reason))
-        case .failed where activated && options.killConfirmation == .none:
+        case .failed
+        where activated && options.killConfirmation == .none
+            && !reachRejects(site, failing: first.result.failingTests):
             return .done(ledger.decision(.killed, first.result.reason, first.result.counts))
         case .failed, .crashed, .timedOut:
             return .rerun(
@@ -1453,7 +1550,18 @@ struct Judge: Sendable {
             }
             return ledger.decision(.killed, "two failing active runs around a passing inactive control")
         }
-        if pending.outcome == .failed, pending.activated, harness.selectsTests, !pending.failingTests.isEmpty {
+        if pending.outcome == .failed, pending.activated, let tests = reach[site.id], !pending.failingTests.isEmpty {
+            // Per-test reach decides without reruns (t37): each reaching test passed alone with no mutant active and
+            // reached this one; a failing test among them is a kill. None among them: not the mutant's doing, and the
+            // whole suite, alone, decides below.
+            let killers = pending.failingTests.filter(tests.contains)
+            if !killers.isEmpty {
+                return ledger.decision(
+                    .killed,
+                    "killed by \(killers.joined(separator: ", ")), which reach the mutant (per-test reach)"
+                )
+            }
+        } else if pending.outcome == .failed, pending.activated, harness.selectsTests, !pending.failingTests.isEmpty {
             // The failing tests alone: they must fail with the mutant and reach it, and pass without it.
             let tests = pending.failingTests
             let active = try await run(

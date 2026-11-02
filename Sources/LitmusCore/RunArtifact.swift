@@ -118,6 +118,8 @@ public struct RunArtifact: Codable, Sendable {
     /// mutant active), and each test's duration alone in nanoseconds. Nil otherwise.
     public var perTestReach: [String: [String]]? = nil
     public var testNanoseconds: [String: Int64]? = nil
+    /// With `--per-test-reach`: each test's counts when it ran alone (what a run of selected tests must pass).
+    public var testCounts: [String: TestCounts]? = nil
     /// What the run cost the machine (wall, CPU, peak memory, disk, builds, test runs).
     public var cost: RunCost? = nil
     /// The limits given (`--budget`, `--max-mutants`) and what they left untested; nil without limits.
