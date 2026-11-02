@@ -8,7 +8,7 @@ import ReportSupport
     static let configuration = CommandConfiguration(
         abstract: "Evidence-led mutation testing for Swift packages and Xcode projects.",
         version: LitmusVersion.current,
-        subcommands: [Plan.self, Run.self, Analyze.self, Census.self, Restore.self]
+        subcommands: [Plan.self, Run.self, Analyze.self, Census.self, Restore.self, Merge.self]
     )
 }
 
@@ -209,6 +209,8 @@ private struct Run: AsyncParsableCommand {
     var resume: String?
     @Option(help: "A nightly run artifact: its flaky tests (probe skipped) and, where keys match, its per-test reach.")
     var reachFrom: String?
+    @Option(help: "Run shard k of n (k/n): whole module units; put the shards together with `litmus merge`.")
+    var shard: String?
     @Option(
         help:
             "copy (default: a fresh copy), persistent:<dir> (kept and synchronised: incremental builds), or in-place (CI: the checkout itself, originals backed up and restored)."
@@ -255,6 +257,9 @@ private struct Run: AsyncParsableCommand {
         options.storeLimitMiB = storeLimit
         options.resume = resume
         options.reachFrom = reachFrom
+        do { options.shard = try shard.map(ShardSelection.init(parsing:)) } catch {
+            throw ValidationError("\(error)")
+        }
         guard let mode = ReuseContext.Mode(rawValue: reuse) else {
             throw ValidationError("reuse must be closure or declaration")
         }
@@ -338,6 +343,20 @@ private struct Run: AsyncParsableCommand {
             )
         }
         if !artifact.isSuccessfulExecution { throw ExitCode(ExitStatus.internalFailure.rawValue) }
+    }
+}
+
+private struct Merge: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Merge the run directories of every shard of one run (--shard k/n) into one artifact."
+    )
+    @Argument(help: "The shards' run directories.") var runs: [String]
+    @Option(help: "New directory for the merged run.json and run.pb.") var output: String
+    mutating func run() async throws {
+        do {
+            let merged = try ShardMerge.merge(runDirectories: runs, output: output)
+            stderr("litmus: \(merged.results.count) mutants from \(runs.count) shards; evidence at \(output)/run.json")
+        } catch { try fail(error, code: .usage) }
     }
 }
 

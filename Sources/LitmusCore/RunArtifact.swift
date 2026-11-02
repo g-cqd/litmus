@@ -126,6 +126,8 @@ public struct RunArtifact: Codable, Sendable {
     public var budget: BudgetRecord? = nil
     /// How verdicts were reused; nil before 0.3.
     public var reuse: ReuseRecord? = nil
+    /// The shard this run is (`--shard k/n`); nil for a whole run or a merged one.
+    public var shard: ShardRecord? = nil
     /// The score over the mutants that were decided: a budget's untested mutants are outside it, not undetected.
     public var score: MutationScore {
         let untested = Set(budget?.untested ?? [])

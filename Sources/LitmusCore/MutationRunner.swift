@@ -83,6 +83,8 @@ public struct RunOptions: Sendable {
     /// A nightly run whose flaky tests are reused (the probe is skipped) and whose per-test reach is used for the
     /// mutants whose reuse keys still match (`--reach-from`, t49).
     public var reachFrom: String?
+    /// Run one shard of the plan (`--shard k/n`): whole module units, merged later with `litmus merge`.
+    public var shard: ShardSelection?
     /// Where the run builds and mutates (`--workspace`).
     public var workspace = WorkspaceStrategy.copy
     /// The directory holding Xcode's `DerivedData` (`--build-directory`); default: the run's or the persistent one.
@@ -259,6 +261,10 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         guard !plan.mutations.isEmpty else {
             throw LitmusFailure("no mutable production sites; inspect plan exclusions")
         }
+        var shardRecord: ShardRecord?
+        if let shard = options.shard {
+            (plan, shardRecord) = Sharding.select(plan, shard)
+        }
         guard Set(plan.mutations.map(\.id)).count == plan.mutations.count else {
             throw LitmusFailure("mutation ID collision")
         }
@@ -282,6 +288,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             executionPolicy: RunArtifact.executionPolicy
         )
         var artifact = RunArtifact(provenance: provenance, plan: plan)
+        artifact.shard = shardRecord
         for link in snapshot.skippedLinks {
             artifact.notes.append("symbolic link left out of the workspace (never followed): \(link)")
         }
