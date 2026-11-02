@@ -59,7 +59,10 @@ let package = Package(
         ),
         .testTarget(
             name: "LitmusCoreTests",
-            dependencies: ["LitmusCore", .product(name: "ProjectModel", package: "analyzerkit")],
+            dependencies: [
+                "LitmusCore", .product(name: "ProjectModel", package: "analyzerkit"),
+                .product(name: "AemiRuntime", package: "aemi"),
+            ],
             swiftSettings: strict
         ),
     ],

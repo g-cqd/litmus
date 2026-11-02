@@ -206,6 +206,8 @@ private struct Run: AsyncParsableCommand {
     var reuse: String = "closure"
     @Option(help: "Reuse the decided verdicts of an earlier run directory whose keys still match.")
     var resume: String?
+    @Option(help: "A nightly run artifact: its flaky tests (probe skipped) and, where keys match, its per-test reach.")
+    var reachFrom: String?
     @Option(
         help:
             "copy (default: a fresh copy), persistent:<dir> (kept and synchronised: incremental builds), or in-place (CI: the checkout itself, originals backed up and restored)."
@@ -251,6 +253,7 @@ private struct Run: AsyncParsableCommand {
         options.storeReadOnly = storeReadOnly
         options.storeLimitMiB = storeLimit
         options.resume = resume
+        options.reachFrom = reachFrom
         guard let mode = ReuseContext.Mode(rawValue: reuse) else {
             throw ValidationError("reuse must be closure or declaration")
         }
