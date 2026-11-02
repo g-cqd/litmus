@@ -23,7 +23,18 @@ Strict memory safety and warnings-as-errors are enabled. Two imported Foundation
 2. `PropertyListSerialization.propertyList` exposes an optional output-format pointer. Litmus passes `nil` and owned,
    size-bounded `Data`; no caller-owned pointer is dereferenced or retained.
 
+3. `PosixFile.pwrite` (aemi `AemiIO`) takes a raw buffer. `ResultJournal.append` passes the buffer of an owned array
+   inside `withUnsafeBytes`, synchronously, under the journal's mutex; nothing escapes (upstream AE-1 asks for a safe
+   overload).
+
 No custom raw-pointer kernel, `unsafeBitCast`, force cast or `@unchecked Sendable` is introduced by Litmus.
+
+## Subject processes
+
+Direct execution sets `DYLD_FRAMEWORK_PATH` and `DYLD_LIBRARY_PATH` to the selected Xcode's macOS platform directories
+for `swiftpm-testing-helper` and `xctest`, as SwiftPM does, and gives every run its own `TMPDIR` and marker directory.
+The activation code compiled into the subject reads two environment variables and creates empty files named after
+mutant identifiers (16 hexadecimal characters) in the marker directory; it never writes elsewhere.
 Dependency code has its own audited unsafe surfaces; enabling strict memory safety here does not qualify dependencies.
 
 ## Resource and failure policy

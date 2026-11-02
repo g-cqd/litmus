@@ -25,9 +25,11 @@ A missing simulator run is an assurance gap, never an implied pass.
 - **R-01 Source preservation.** Litmus never edits a subject's original source. Builds run on an owned independent copy.
 - **R-02 Honest verdicts.** Exit status alone cannot kill a mutant. Structured evidence must contain executed tests.
 - **R-03 Baseline validity.** The original and every inactive schema must pass before active results are interpreted.
-- **R-04 Failure confirmation.** A kill needs two active failures separated by a passing inactive control.
-- **R-05 Explicit uncertainty.** Timeout, unsupported schema, missing evidence, cancellation and infrastructure error
-  remain unresolved; they cannot inflate a score or yield a successful execution gate.
+- **R-04 Activation evidence.** A failure, crash or timeout counts only when the mutant's own marker shows its code ran
+  in that process, after a passing inactive control of the same build. Crashes and timeouts repeat alone before they
+  count; `--confirm-kills` adds a control and a second failure around every kill (ADR 0005).
+- **R-05 Explicit uncertainty.** Missing evidence, failures without activation, a broken control, a build failure not
+  attributable to the mutant, and cancellation remain unresolved; they suppress the score and a successful gate.
 - **R-06 Exact reconciliation.** Each planned mutant has one outcome; IDs, source ranges and source hashes are checked.
 - **R-07 Bounded consumption.** Source, artifact, XML depth, filesystem inventory, concurrency, process output and
   deadlines have explicit bounds. Exceeding one is a visible error, not an empty success.
@@ -36,8 +38,8 @@ A missing simulator run is an assurance gap, never an implied pass.
 - **R-09 Safe process boundary.** No shell interpretation. Absolute executable paths, scrubbed environment,
   process-group teardown and explicit execution permission.
 - **R-10 Determinism.** Stable discovery order, deterministic batching and canonical artifact encoding.
-- **R-11 No unjustified selection.** Missing name/index references are not absence of coverage. Run the full suite
-  until runtime attribution and conservative fallbacks are independently established.
+- **R-11 Observed coverage only.** `noCoverage` means the batch's inactive control ran the suite and the mutant's marker
+  was never written. Missing name or index references never imply it; a reached mutant runs the full suite.
 - **R-12 No false equivalence.** Static analyzer warnings and clone similarity do not remove mutation sites from a score.
 
 ## 4. Fault and threat model
@@ -56,15 +58,17 @@ Simulator services can outlive a killed xcodebuild process; no claim of global s
 `litmus` owns CLI parsing, exit status and explicit permission to execute project code.
 
 The pipeline is discovery → plan → independent snapshot → original build/test → conflict-free schema batches →
-inactive schema test → one active mutant per fresh test process → confirmation/control → checkpointed artifact → report.
+build with unviable isolation → inactive control recording activation → reached mutants in parallel fresh processes →
+reruns of crashes, timeouts and unattributed failures → journal and checkpoint → report.
 The run plans the copied bytes so its source offsets refer to what is actually built.
 
 The first tier negates Boolean expression conditions, negates ternary conditions and replaces logical operators.
 Bindings, availability clauses and preprocessor conditions are never wrapped as runtime Bool expressions.
 Syntax is not type resolution: custom operators, builders, ownership and effect rules remain compiler-validation gates.
 Non-overlapping batches prevent nested-expression duplication from growing exponentially.
-A file-private immutable startup selector avoids changing an active mutant during evaluation.
-No persistent test workers or simultaneous mutants are part of the initial design.
+Each mutant's once-initialised activation reads the selector at first use and never changes in a process.
+Mutants on the same range share a replacement; nested ones never share a batch.
+No persistent test workers, and never two active mutants in one process.
 
 ## 6. Reuse without dependency inflation
 
@@ -87,8 +91,9 @@ No other analyzer is run on every mutant and no model/embedding dependency enter
 
 Correctness checks are not disabled for speed. Measure separate discovery, snapshot, compile, install/launch,
 test, evidence parsing and artifact costs. Report worker time separately from CPU time and wall time.
-Initial optimizations are bounded parallel discovery, schema batching and build-for-testing reuse inside a run.
-Execution is serial initially: simulator concurrency must be measured under resource and reliability budgets first.
+Optimisations in place: bounded parallel discovery and hashing, schema batching, no run for unreached mutants,
+direct bundle execution on CPUs − 1 workers for host packages, Swift Testing fail-fast, deadlines derived from the
+baseline. Xcode runs one worker until simulator concurrency is measured under resource and reliability budgets.
 Verdict caches require all dependency/test/build/toolchain/environment inputs, not just an unchanged source file.
 No cached verdict reuse or per-test runtime mapping is claimed in this implementation.
 The benchmark must report sample size, machine, toolchain, corpus, cold/warm state, median and dispersion.
