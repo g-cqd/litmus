@@ -62,7 +62,7 @@ let package = Package(
             name: "LitmusCoreTests",
             dependencies: [
                 "LitmusCore", .product(name: "ProjectModel", package: "analyzerkit"),
-                .product(name: "AemiRuntime", package: "aemi"),
+                .product(name: "SourceCorpus", package: "analyzerkit"), .product(name: "AemiRuntime", package: "aemi"),
             ],
             swiftSettings: strict
         ),

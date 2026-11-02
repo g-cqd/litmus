@@ -156,7 +156,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         let clock = ContinuousClock()
         let started = clock.now
         let fm = FileManager.default
-        let output = SourcePath.canonical(outputDirectory), root = SourcePath.canonical(driver.root)
+        let output = canonicalNew(outputDirectory), root = SourcePath.canonical(driver.root)
         guard output != root, !output.hasPrefix(root + "/"), !fm.fileExists(atPath: output) else {
             throw LitmusFailure("run directory must be new and outside original source root")
         }
@@ -227,7 +227,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             options.workspace,
             source: root,
             output: output,
-            buildDirectory: options.buildDirectory.map(SourcePath.canonical)
+            buildDirectory: options.buildDirectory.map(canonicalNew)
         )
         let snapshot = prepared.snapshot
         let artifacts = prepared.buildDirectory

@@ -1,5 +1,6 @@
 import Foundation
 import ProjectModel
+import SourceCorpus
 import Synchronization
 import Testing
 
@@ -903,4 +904,14 @@ private func runIn(
     #expect(throws: LitmusFailure.self) {
         try ShardMerge.merge(runDirectories: [base.path + "/s1", base.path + "/whole"], output: base.path + "/m4")
     }
+}
+
+@Test func `a path that does not exist yet is spelled as it will be once it does`() throws {
+    let parent = "/private/tmp/litmus-canonical-" + UUID().uuidString
+    try FileManager.default.createDirectory(atPath: parent, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(atPath: parent) }
+    let future = canonicalNew(parent + "/run/workspace")
+    try FileManager.default.createDirectory(atPath: parent + "/run/workspace", withIntermediateDirectories: true)
+    #expect(future == SourcePath.canonical(parent + "/run/workspace"))
+    #expect(!future.hasPrefix("/private/"))
 }
