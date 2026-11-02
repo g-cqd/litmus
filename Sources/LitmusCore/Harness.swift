@@ -68,6 +68,8 @@ func subjectEnvironment(_ request: TestRunRequest?) -> [String: String] {
     if let request {
         environment[ActivationEnvironment.coverageDirectory] = request.coverageDirectory
         environment["TMPDIR"] = request.temporaryDirectory
+        // Unique per test run; also written into `.xctestrun` environments, so simulator processes carry it.
+        environment[ProcessReaper.tokenVariable] = request.coverageDirectory
     }
     if let developer = ProcessInfo.processInfo.environment["DEVELOPER_DIR"] { environment["DEVELOPER_DIR"] = developer }
     return environment

@@ -21,19 +21,44 @@ public protocol ProcessExecutor: Sendable {
         -> ProcessOutput
 }
 
-/// Uses analyzerkit's session-scoped subprocess runner, TERM/KILL escalation, output limits and scrubbed environment.
+/// Uses analyzerkit's session-scoped subprocess runner, TERM/KILL escalation, output limits and scrubbed environment,
+/// then kills any process that escaped the session's process group (`ProcessReaper`).
 public struct BoundedExecutor: ProcessExecutor {
     public init() {}
     public func execute(_ command: ToolCommand, directory: String, environment: [String: String], timeout: Int)
         async throws -> ProcessOutput
     {
         guard timeout > 0, timeout <= 86_400 else { throw LitmusFailure("timeout outside 1...86400 seconds") }
-        let overrides = environment
-        let env = BoundedProcess.scrubbedEnvironment(overrides: overrides, source: ProcessInfo.processInfo.environment)
+        // The trampoline turns a launch failure into an exit status; a missing tool stays an error, as before.
+        guard FileManager.default.isExecutableFile(atPath: command.executable) else {
+            throw LitmusFailure("cannot launch \(command.executable): not an executable file")
+        }
+        var overrides = environment
+        // Whatever the outcome, nothing of this command's session or carrying its token outlives it (`ProcessReaper`).
+        let token = overrides[ProcessReaper.tokenVariable] ?? UUID().uuidString
+        let sessionFile = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "litmus-session-\(UUID().uuidString)"
+        ).path
+        overrides[ProcessReaper.tokenVariable] = token
+        overrides[ProcessReaper.sessionFileVariable] = sessionFile
+        // One second of slack: start times are whole seconds.
+        let started = Int(Date().timeIntervalSince1970) - 1
+        defer {
+            let recorded = try? String(contentsOfFile: sessionFile, encoding: .utf8)
+            ProcessReaper.reap(session: recorded.flatMap { pid_t($0) }, token: token, since: started)
+            try? FileManager.default.removeItem(atPath: sessionFile)
+        }
+        let (launched, env) = ProcessReaper.trampoline(
+            command,
+            environment: BoundedProcess.scrubbedEnvironment(
+                overrides: overrides,
+                source: ProcessInfo.processInfo.environment
+            )
+        )
         do {
             let result = try await BoundedProcess.run(
-                command.executable,
-                command.arguments,
+                launched.executable,
+                launched.arguments,
                 directory: directory,
                 environment: env,
                 timeout: .seconds(timeout),
