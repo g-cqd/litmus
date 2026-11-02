@@ -19,6 +19,14 @@ public struct TestRunRequest: Sendable {
     public var onlySwiftTesting: [String]? = nil
     /// The memory limit and priority every process of the run gets; the harness adds its own monitor.
     public var supervision = Supervision()
+    /// Run only the test bundles of these modules (the test targets that can reach the mutant); nil runs every one.
+    public var onlyModules: Set<String>? = nil
+    /// Swift Testing tests not to run (flaky at baseline), identifiers without their source location.
+    public var skipSwiftTesting: [String] = []
+    /// Run every Swift Testing test this many times (`--repetitions`): the flakiness probe.
+    public var repetitions: Int? = nil
+    /// The most Swift Testing tests run at once in one process (`--experimental-maximum-parallelization-width`).
+    public var parallelizationWidth: Int? = nil
 }
 
 /// What a suite execution showed, before activation is considered.
@@ -37,6 +45,8 @@ public struct TestRunResult: Sendable {
     public let reason: String
     /// Swift Testing tests with a failing issue, identifiers without their source location; empty when unknown.
     public var failingTests: [String] = []
+    /// Counts per test module, for a harness that runs modules separately; empty otherwise.
+    public var moduleCounts: [String: TestCounts] = [:]
 }
 
 /// A Swift Testing test identifier without its trailing source location (`/File.swift:12:6`), the form `--filter` takes.
@@ -60,6 +70,9 @@ public protocol TestHarness: Sendable {
     var kind: String { get }
     /// Whether ``TestRunRequest/onlySwiftTesting`` is honoured, so a kill can be confirmed on its failing tests alone.
     var selectsTests: Bool { get }
+    /// Whether ``TestRunRequest/onlyModules``, `skipSwiftTesting`, `repetitions` and `parallelizationWidth` are
+    /// honoured, with ``TestRunResult/moduleCounts`` reported.
+    var selectsModules: Bool { get }
     func run(_ request: TestRunRequest) async throws -> TestRunResult
 }
 
@@ -170,6 +183,7 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
     public let maximumWorkers: Int
     public var kind: String { "swiftpm-direct" }
     public var selectsTests: Bool { true }
+    public var selectsModules: Bool { true }
 
     public init(
         executor: Executor,
@@ -259,16 +273,32 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
                 reason: reason
             )
             result.failingTests = failing
+            result.moduleCounts = moduleCounts
             return result
+        }
+        var moduleCounts: [String: TestCounts] = [:]
+        func count(_ module: String, passed: Int, skipped: Int) {
+            let previous = moduleCounts[module] ?? TestCounts(passed: 0, failed: 0, skipped: 0)
+            moduleCounts[module] = TestCounts(
+                passed: previous.passed + passed,
+                failed: 0,
+                skipped: previous.skipped + skipped
+            )
         }
         for bundle in bundles {
             if let only = request.onlySwiftTesting, !only.contains(where: { $0.hasPrefix(bundle.module + ".") }) {
                 continue
             }
+            if let modules = request.onlyModules, !modules.contains(bundle.module) { continue }
             if bundle.swiftTestingCount > 0 {
                 let stem = "\(request.name)-\(bundle.module)-swift-testing"
                 let events = "\(logs)/\(stem).events.jsonl", xunit = "\(logs)/\(stem).xml"
-                let filters = (request.onlySwiftTesting ?? []).flatMap { ["--filter", filterPattern(for: $0)] }
+                var filters = (request.onlySwiftTesting ?? []).flatMap { ["--filter", filterPattern(for: $0)] }
+                filters += request.skipSwiftTesting.flatMap { ["--skip", filterPattern(for: $0)] }
+                if let repetitions = request.repetitions { filters += ["--repetitions", String(repetitions)] }
+                if let width = request.parallelizationWidth {
+                    filters += ["--experimental-maximum-parallelization-width", String(width)]
+                }
                 let command = ToolCommand(
                     executable: toolchain.testingHelper,
                     arguments: [
@@ -309,6 +339,7 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
                 }
                 passed += counts.passed
                 skipped += counts.skipped
+                count(bundle.module, passed: counts.passed, skipped: counts.skipped)
             }
             if !bundle.xcTestClasses.isEmpty, request.onlySwiftTesting == nil {
                 let stem = "\(request.name)-\(bundle.module)-xctest"
@@ -331,7 +362,9 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
                     return result(.crashed, nil, abnormalEnd(output, "XCTest"))
                 }
                 switch output.exitStatus {
-                case 0: passed += bundle.xcTestCount
+                case 0:
+                    passed += bundle.xcTestCount
+                    count(bundle.module, passed: bundle.xcTestCount, skipped: 0)
                 case 1: return result(.failed, nil, "XCTest reported a failing test (exit 1)")
                 default: return result(.unusable, nil, "xctest exited \(output.exitStatus)")
                 }
@@ -352,6 +385,7 @@ public struct SwiftPMToolHarness<Executor: ProcessExecutor>: TestHarness {
     public var maximumWorkers: Int { 1 }
     public var kind: String { "swift-test" }
     public var selectsTests: Bool { false }
+    public var selectsModules: Bool { false }
 
     public init(executor: Executor, driver: BuildDriver, workspace: String, artifacts: String, logs: String) {
         self.executor = executor
@@ -412,6 +446,7 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
     public var maximumWorkers: Int { 1 }
     public var kind: String { "xcodebuild" }
     public var selectsTests: Bool { false }
+    public var selectsModules: Bool { false }
 
     public init(executor: Executor, driver: BuildDriver, workspace: String, artifacts: String, logs: String) {
         self.executor = executor
