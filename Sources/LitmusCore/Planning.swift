@@ -63,15 +63,19 @@ public enum MutationPlanner {
     /// Uses bounded Aemi concurrency on large stacks; unreadable inputs are explicit degradation, not silent omissions.
     /// - Parameter include: when not empty, only files matching one of these substrings or globs (`PathFilter`'s
     ///   rules; a matching directory covers what is under it) are mutated: "mutate what this change touched".
+    /// - Parameter scope: when set, only the changed Swift files are read and only the sites the change reaches are
+    ///   planned, those on changed lines first; a change reaching no site is an empty plan, not an error.
     public static func plan(
         root: String,
         exclude: [String] = [],
         include: [String] = [],
-        jobs: Int = 4
+        jobs: Int = 4,
+        scope: ChangeScope? = nil
     ) async throws -> MutationPlan {
         let root = SourcePath.canonical(root)
         guard FileManager.default.fileExists(atPath: root) else { throw LitmusFailure("root does not exist: \(root)") }
         let filter = PathFilter(exclude + ["Package.swift", "Dangerfile.swift", "**/Plugins/**"], root: root)
+        if let scope { return try await plan(root: root, filter: filter, include: include, jobs: jobs, scope: scope) }
         let discovery = SourceDiscovery.discover(under: root, isExcluded: filter.excludes)
         guard !discovery.files.isEmpty else { throw LitmusFailure("no Swift source files under \(root)") }
         var discovered = discovery.files
@@ -103,6 +107,67 @@ public enum MutationPlanner {
             suppressed: files.flatMap(\.suppressed),
             notes: issues + files.flatMap(\.notes)
         )
+    }
+
+    /// The plan of the changed Swift files only: no directory walk, so a change touching no Swift file costs nothing.
+    private static func plan(
+        root: String,
+        filter: PathFilter,
+        include: [String],
+        jobs: Int,
+        scope: ChangeScope
+    ) async throws -> MutationPlan {
+        let wanted = include.isEmpty ? nil : PathFilter(include, root: root)
+        var files: [String] = []
+        var notes: [PlanNote] = []
+        for relative in scope.swiftFiles.sorted() {
+            let path = root + "/" + relative
+            if filter.excludes(path) || wanted.map({ !$0.excludes(path) }) == true {
+                notes.append(PlanNote(path: relative, reason: "changed, but excluded by the configuration"))
+                continue
+            }
+            // `attributesOfItem` does not follow a final link: a link is not a regular file.
+            let type = (try? FileManager.default.attributesOfItem(atPath: path))?[.type] as? FileAttributeType
+            guard type == .typeRegular, SourcePath.canonical(path) == path else {
+                // The diff names a file the tree does not have as a regular file: a stale diff, or a link.
+                notes.append(
+                    PlanNote(path: relative, reason: "changed in the diff, not a regular file here", isDegraded: true)
+                )
+                continue
+            }
+            files.append(path)
+        }
+        let classification = ProjectLayout.discover(paths: [root]).map(ProjectClassification.load) ?? .conventionsOnly
+        let planned = try await mapConcurrently(files, limit: min(max(jobs, 1), 16)) { path in
+            try Task.checkCancellation()
+            return await LargeStack.run { planFile(path: path, root: root, classification: classification) }
+        }
+        var ranked: [(priority: Int, mutation: Mutation)] = []
+        for mutation in planned.flatMap(\.mutations) {
+            if let priority = scope.priority(of: mutation) { ranked.append((priority, mutation)) }
+        }
+        ranked.sort {
+            ($0.priority, $0.mutation.path, $0.mutation.start, $0.mutation.id) < (
+                $1.priority, $1.mutation.path, $1.mutation.start, $1.mutation.id
+            )
+        }
+        var plan = MutationPlan(
+            root: root,
+            analyzedFiles: planned.count,
+            mutations: ranked.map(\.mutation),
+            suppressed: planned.flatMap(\.suppressed).filter { scope.priority(of: $0) != nil },
+            notes: notes + planned.flatMap(\.notes)
+        )
+        plan.scope = PlanScope(
+            source: scope.source,
+            digest: scope.digest,
+            breadth: scope.breadth,
+            changedFiles: scope.changed.files.count,
+            changedLines: scope.changed.lineCount,
+            swiftFiles: scope.swiftFiles.count,
+            onChangedLines: ranked.filter { $0.priority == 0 }.map(\.mutation.id)
+        )
+        return plan
     }
 
     /// A file a mutation tool may mutate, or why not.

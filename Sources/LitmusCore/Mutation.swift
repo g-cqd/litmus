@@ -74,6 +74,8 @@ public struct MutationPlan: Codable, Equatable, Sendable {
     public let mutations: [Mutation]
     public let suppressed: [Mutation]
     public let notes: [PlanNote]
+    /// The change the plan is limited to (`--diff`, `--diff-base`); nil for a whole-subject plan.
+    public var scope: PlanScope? = nil
 
     public init(
         root: String,
