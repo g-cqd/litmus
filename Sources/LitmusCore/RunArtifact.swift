@@ -77,6 +77,10 @@ public struct RunArtifact: Codable, Sendable {
     public var notes: [String]
     /// Seconds per phase.
     public var timings: [String: Double]
+    /// With `--per-test-reach`: for each reached mutant, the Swift Testing tests that reach it when run alone (no
+    /// mutant active), and each test's duration alone in nanoseconds. Nil otherwise.
+    public var perTestReach: [String: [String]]? = nil
+    public var testNanoseconds: [String: Int64]? = nil
     public var score: MutationScore { MutationScore(results.map(\.verdict)) }
 
     public init(provenance: RunProvenance, plan: MutationPlan) {

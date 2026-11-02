@@ -1,4 +1,5 @@
 internal import AemiIO
+internal import AemiJSON
 internal import AemiRuntime
 internal import Foundation
 internal import ProjectModel
@@ -56,6 +57,10 @@ public struct RunOptions: Sendable {
     public var suiteWidth: Int?
     /// Run, for each mutant, only the test targets that can reach its file (from the manifests, without building).
     public var selectTestTargets = true
+    /// After each schema's control run, run every Swift Testing test alone, no mutant active, and record which tests
+    /// reach which mutants (`RunArtifact.perTestReach`): the data per-test selection would use. Costs one run per test
+    /// and schema build.
+    public var perTestReach = false
 
     public init() {}
 
@@ -223,6 +228,9 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 throw LitmusFailure("unmutated suite did not pass with executed tests: \(baseline.result.reason)")
             }
             var baselineByModule = baseline.result.moduleCounts
+            // The Swift Testing test functions, from the baseline's event streams (for `perTestReach`).
+            let testFunctions =
+                options.perTestReach ? Self.testFunctions(in: baseline.result.evidence, logs: output) : []
             // Flaky tests: the unmutated suite, repeated; a test failing in any repetition would make a kill that is
             // not the mutant's (the fcheck pilot's timing test), so it is left out of every later run.
             var flaky: [String] = []
@@ -417,6 +425,36 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                     )
                 }
                 let covered = group.filter { control.reached.contains($0.id) }
+                if options.perTestReach, harness.selectsTests, !testFunctions.isEmpty, !covered.isEmpty {
+                    let ids = Set(covered.map(\.id))
+                    var reach: [String: [String]] = artifact.perTestReach ?? [:]
+                    var durations: [String: Int64] = artifact.testNanoseconds ?? [:]
+                    let runs = Array(testFunctions.enumerated())
+                    try await forEachConcurrently(
+                        runs,
+                        limit: workerCount,
+                        { pair in
+                            try await judging.execute(
+                                name: "\(name)-reach-\(pair.offset)",
+                                activeID: "",
+                                deadline: deadline,
+                                only: [pair.element]
+                            )
+                        }
+                    ) { index, execution in
+                        let test = runs[index].element
+                        guard execution.result.outcome == .passed else {
+                            artifact.notes.append(
+                                "per-test reach: \(test) did not pass alone (\(execution.result.reason))"
+                            )
+                            return
+                        }
+                        durations[test] = max(durations[test] ?? 0, execution.result.nanoseconds)
+                        for id in execution.reached.intersection(ids) { reach[id, default: []].append(test) }
+                    }
+                    artifact.perTestReach = reach.mapValues { $0.sorted() }
+                    artifact.testNanoseconds = durations
+                }
                 // Each first run's decision is journalled as it comes (aemi's `forEachConcurrently`): a crash of Litmus
                 // loses only the runs in flight. Reruns wait for the parallel pass and run alone, as before.
                 var reruns: [Judge.Pending] = []
@@ -483,6 +521,24 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         var name = String(target.map { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") ? $0 : "_" })
         if let first = name.first, first.isNumber { name = "_" + name }
         return name
+    }
+
+    /// The test functions (not suites) declared in the Swift Testing event streams among `evidence`, identifiers
+    /// without their source location, sorted.
+    static func testFunctions(in evidence: [String], logs root: String) -> [String] {
+        var tests: Set<String> = []
+        for path in evidence where path.hasSuffix(".events.jsonl") {
+            guard let bytes = try? BoundedFileReader.read(path: root + "/" + path, cap: 64 << 20) else { continue }
+            for line in bytes.split(separator: UInt8(ascii: "\n")) where !line.isEmpty {
+                guard let document = try? AemiJSON.parse(Array(line)) else { continue }
+                let root = document.root
+                guard root.kind.string == "test", root.payload.kind.string == "function",
+                    let id = root.payload.id.string
+                else { continue }
+                tests.insert(testName(id))
+            }
+        }
+        return tests.sorted()
     }
 
     /// Removes `directory`, retrying while another process adds to it; true when it is gone.

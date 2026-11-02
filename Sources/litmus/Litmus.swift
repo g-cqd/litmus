@@ -124,6 +124,8 @@ private struct Run: AsyncParsableCommand {
     var suiteWidth: Int?
     @Flag(help: "Run every test module for every mutant, not only the test targets that can reach its file.")
     var noTestTargetSelection = false
+    @Flag(help: "Record which Swift Testing tests reach which mutants, running each test alone per schema (slow).")
+    var perTestReach = false
     mutating func run() async throws {
         guard trustProject else {
             throw ValidationError(
@@ -151,6 +153,7 @@ private struct Run: AsyncParsableCommand {
         options.baselineRepetitions = baselineRepetitions
         options.suiteWidth = suiteWidth
         options.selectTestTargets = !noTestTargetSelection
+        options.perTestReach = perTestReach
         guard swiftpmBuildSystem.map({ ["native", "swiftbuild"].contains($0) }) ?? true else {
             throw ValidationError("swiftpm-build-system must be native or swiftbuild")
         }
