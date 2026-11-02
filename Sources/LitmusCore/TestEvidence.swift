@@ -1,8 +1,9 @@
 internal import Foundation
-#if canImport(FoundationXML)
-internal import FoundationXML
-#endif
 internal import SourceCorpus
+
+#if canImport(FoundationXML)
+    internal import FoundationXML
+#endif
 
 /// Parses structured execution evidence, never greps human build logs for a kill.
 public enum TestEvidence {
@@ -23,8 +24,12 @@ public enum TestEvidence {
     /// xUnit testcase elements are counted, not aggregate testsuite attributes (which may nest).
     public static func xunit(_ bytes: [UInt8]) throws -> TestCounts {
         guard bytes.count <= 16 << 20 else { throw LitmusFailure("test report exceeds 16 MiB") }
-        guard !bytes.contains(0), let text = String(bytes: bytes, encoding: .utf8) else { throw LitmusFailure("xUnit evidence must be UTF-8 without NUL bytes") }
-        guard !text.contains("<!DOCTYPE"), !text.contains("<!ENTITY") else { throw LitmusFailure("XML entities and doctypes are not accepted") }
+        guard !bytes.contains(0), let text = String(bytes: bytes, encoding: .utf8) else {
+            throw LitmusFailure("xUnit evidence must be UTF-8 without NUL bytes")
+        }
+        guard !text.contains("<!DOCTYPE"), !text.contains("<!ENTITY") else {
+            throw LitmusFailure("XML entities and doctypes are not accepted")
+        }
         let delegate = XUnitReader()
         let parser = XMLParser(data: Data(bytes))
         parser.shouldResolveExternalEntities = false
@@ -65,7 +70,13 @@ private struct XcodeSummary: Decodable {
 private final class XUnitReader: NSObject, XMLParserDelegate {
     var passed = 0, failed = 0, skipped = 0, depth = 0
     var inCase = false, caseFailed = false, caseSkipped = false, invalid = false
-    func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String]) {
+    func parser(
+        _ parser: XMLParser,
+        didStartElement name: String,
+        namespaceURI: String?,
+        qualifiedName: String?,
+        attributes: [String: String]
+    ) {
         depth += 1
         if depth > 64 { invalid = true; parser.abortParsing(); return }
         switch name {
@@ -74,7 +85,7 @@ private final class XUnitReader: NSObject, XMLParserDelegate {
             inCase = true; caseFailed = false; caseSkipped = false
         case "failure":
             if !inCase { invalid = true }; caseFailed = true
-        case "error": invalid = true // Runner/process errors are not assertions.
+        case "error": invalid = true  // Runner/process errors are not assertions.
         case "skipped":
             if !inCase { invalid = true }; caseSkipped = true
         default: break

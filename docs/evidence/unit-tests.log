@@ -1,60 +1,60 @@
-Test Suite 'All tests' started at 2026-11-02 10:52:33.533.
-Test Suite 'All tests' passed at 2026-11-02 10:52:33.538.
+Test Suite 'All tests' started at 2026-11-02 10:57:19.812.
+Test Suite 'All tests' passed at 2026-11-02 10:57:19.818.
 	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.006) seconds
 􀟈  Test run started.
 􀄵  Testing Library Version: 2403
 􀄵  Target Platform: arm64e-apple-macos14.0
-􀟈  Test "host packages and iOS packages use different build drivers" started.
-􀟈  Test "zero tests and contradictory success are infrastructure errors" started.
-􀟈  Test "a nonzero process exit without a test failure is never a kill" started.
 􀟈  Test "strings comments and conditional compilation conditions are not operators" started.
-􀟈  Test "overlapping expressions are placed in different schema batches" started.
-􀟈  Test "schema ranges cannot be stacked or duplicated" started.
-􀟈  Test "xcresult requires consistent structured totals" started.
-􀟈  Test "malformed source is rejected rather than partially planned" started.
-􀟈  Test "wire artifacts round trip and reject a truncated payload" started.
-􀟈  Test "xcresult rejects hostile counters before arithmetic" started.
-􀟈  Test "plans the three default operators without mutating bindings" started.
-􀟈  Test "SwiftPM combines XCTest and Swift Testing reports without mistaking missing primary XML for zero tests" started.
-􀟈  Test "a real test failure kills and a passing execution survives" started.
-􀟈  Test "schema uses immutable startup selection and refuses stale input" started.
-􀟈  Test "wire rejects unknown versions duplicate payloads and corruption" started.
-􀟈  Test "failed baseline preserves an incomplete checkpoint with no kills" started.
-􀟈  Test "runner confirms a kill with an intervening inactive control" started.
-􀟈  Test "malformed and infrastructure XML cannot be test evidence" started.
-􀟈  Test "xunit counts cases once under nested suites" started.
-􀟈  Test "discovery is deterministic and UTF8 ranges preserve Unicode" started.
-􀟈  Test "snapshot edits cannot change original and traversal is rejected" started.
 􀟈  Test "snapshot refuses symlinks instead of following external inputs" started.
+􀟈  Test "host packages and iOS packages use different build drivers" started.
+􀟈  Test "SwiftPM combines XCTest and Swift Testing reports without mistaking missing primary XML for zero tests" started.
+􀟈  Test "a nonzero process exit without a test failure is never a kill" started.
+􀟈  Test "xcresult rejects hostile counters before arithmetic" started.
+􀟈  Test "zero tests and contradictory success are infrastructure errors" started.
+􀟈  Test "overlapping expressions are placed in different schema batches" started.
+􀟈  Test "xunit counts cases once under nested suites" started.
+􀟈  Test "snapshot edits cannot change original and traversal is rejected" started.
+􀟈  Test "xcresult requires consistent structured totals" started.
+􀟈  Test "schema ranges cannot be stacked or duplicated" started.
+􀟈  Test "discovery is deterministic and UTF8 ranges preserve Unicode" started.
+􀟈  Test "malformed source is rejected rather than partially planned" started.
+􀟈  Test "wire rejects unknown versions duplicate payloads and corruption" started.
+􀟈  Test "schema uses immutable startup selection and refuses stale input" started.
+􀟈  Test "a real test failure kills and a passing execution survives" started.
+􀟈  Test "runner confirms a kill with an intervening inactive control" started.
+􀟈  Test "failed baseline preserves an incomplete checkpoint with no kills" started.
+􀟈  Test "plans the three default operators without mutating bindings" started.
+􀟈  Test "malformed and infrastructure XML cannot be test evidence" started.
+􀟈  Test "wire artifacts round trip and reject a truncated payload" started.
 􀟈  Test case passing 1 argument counter → 9223372036854775807 to "xcresult rejects hostile counters before arithmetic" started.
 􀟈  Test case passing 1 argument counter → -1 to "xcresult rejects hostile counters before arithmetic" started.
-􀟈  Test case passing 1 argument xml → "<testsuite><testcase>" to "malformed and infrastructure XML cannot be test evidence" started.
-􀟈  Test case passing 1 argument xml → "<!DOCTYPE x><testsuite/>" to "malformed and infrastructure XML cannot be test evidence" started.
 􀟈  Test case passing 1 argument counter → 10000001 to "xcresult rejects hostile counters before arithmetic" started.
 􀟈  Test case passing 1 argument swiftTestingOnly → false to "runner confirms a kill with an intervening inactive control" started.
+􀟈  Test case passing 1 argument swiftTestingOnly → true to "runner confirms a kill with an intervening inactive control" started.
+􀟈  Test case passing 1 argument xml → "<testsuite><testcase>" to "malformed and infrastructure XML cannot be test evidence" started.
+􀟈  Test case passing 1 argument xml → "<!DOCTYPE x><testsuite/>" to "malformed and infrastructure XML cannot be test evidence" started.
 􀟈  Test case passing 1 argument xml → "<testsuite><testcase><error/></testcase></testsuite>" to "malformed and infrastructure XML cannot be test evidence" started.
 􀟈  Test case passing 1 argument xml → "<testcase><testcase/></testcase>" to "malformed and infrastructure XML cannot be test evidence" started.
-􀟈  Test case passing 1 argument swiftTestingOnly → true to "runner confirms a kill with an intervening inactive control" started.
-􁁛  Test "a nonzero process exit without a test failure is never a kill" passed after 0.005 seconds.
 􁁛  Test "zero tests and contradictory success are infrastructure errors" passed after 0.005 seconds.
-􁁛  Test "xcresult requires consistent structured totals" passed after 0.005 seconds.
-􁁛  Test "a real test failure kills and a passing execution survives" passed after 0.005 seconds.
-􁁛  Test "host packages and iOS packages use different build drivers" passed after 0.005 seconds.
-􁁛  Test "wire artifacts round trip and reject a truncated payload" passed after 0.005 seconds.
-􁁛  Test "xcresult rejects hostile counters before arithmetic" with 3 test cases passed after 0.005 seconds.
-􁁛  Test "wire rejects unknown versions duplicate payloads and corruption" passed after 0.005 seconds.
+􁁛  Test "a nonzero process exit without a test failure is never a kill" passed after 0.005 seconds.
 􁁛  Test "xunit counts cases once under nested suites" passed after 0.005 seconds.
-􁁛  Test "malformed and infrastructure XML cannot be test evidence" with 4 test cases passed after 0.005 seconds.
+􁁛  Test "host packages and iOS packages use different build drivers" passed after 0.005 seconds.
+􁁛  Test "wire rejects unknown versions duplicate payloads and corruption" passed after 0.005 seconds.
+􁁛  Test "xcresult requires consistent structured totals" passed after 0.005 seconds.
 􁁛  Test "malformed source is rejected rather than partially planned" passed after 0.005 seconds.
 􁁛  Test "SwiftPM combines XCTest and Swift Testing reports without mistaking missing primary XML for zero tests" passed after 0.005 seconds.
+􁁛  Test "a real test failure kills and a passing execution survives" passed after 0.005 seconds.
+􁁛  Test "xcresult rejects hostile counters before arithmetic" with 3 test cases passed after 0.005 seconds.
+􁁛  Test "snapshot refuses symlinks instead of following external inputs" passed after 0.005 seconds.
 􁁛  Test "strings comments and conditional compilation conditions are not operators" passed after 0.005 seconds.
-􁁛  Test "plans the three default operators without mutating bindings" passed after 0.005 seconds.
-􁁛  Test "overlapping expressions are placed in different schema batches" passed after 0.005 seconds.
+􁁛  Test "schema uses immutable startup selection and refuses stale input" passed after 0.005 seconds.
 􁁛  Test "schema ranges cannot be stacked or duplicated" passed after 0.005 seconds.
+􁁛  Test "overlapping expressions are placed in different schema batches" passed after 0.005 seconds.
+􁁛  Test "malformed and infrastructure XML cannot be test evidence" with 4 test cases passed after 0.005 seconds.
 􁁛  Test "discovery is deterministic and UTF8 ranges preserve Unicode" passed after 0.005 seconds.
-􁁛  Test "schema uses immutable startup selection and refuses stale input" passed after 0.006 seconds.
-􁁛  Test "snapshot refuses symlinks instead of following external inputs" passed after 0.007 seconds.
-􁁛  Test "snapshot edits cannot change original and traversal is rejected" passed after 0.009 seconds.
-􁁛  Test "failed baseline preserves an incomplete checkpoint with no kills" passed after 0.798 seconds.
-􁁛  Test "runner confirms a kill with an intervening inactive control" with 2 test cases passed after 0.801 seconds.
-􁁛  Test run with 22 tests in 0 suites passed after 0.801 seconds.
+􁁛  Test "wire artifacts round trip and reject a truncated payload" passed after 0.006 seconds.
+􁁛  Test "plans the three default operators without mutating bindings" passed after 0.006 seconds.
+􁁛  Test "snapshot edits cannot change original and traversal is rejected" passed after 0.007 seconds.
+􁁛  Test "failed baseline preserves an incomplete checkpoint with no kills" passed after 0.792 seconds.
+􁁛  Test "runner confirms a kill with an intervening inactive control" with 2 test cases passed after 0.796 seconds.
+􁁛  Test run with 22 tests in 0 suites passed after 0.796 seconds.

@@ -7,10 +7,15 @@ public enum SchemaWriter {
         var result: [[Mutation]] = []
         for mutation in mutations.sorted(by: { ($0.path, $0.start, $0.id) < ($1.path, $1.start, $1.id) }) {
             if let index = result.firstIndex(where: { batch in
-                batch.count < max(1, limit) && !batch.contains { other in
-                    other.path == mutation.path && other.start < mutation.end && mutation.start < other.end
-                }
-            }) { result[index].append(mutation) } else { result.append([mutation]) }
+                batch.count < max(1, limit)
+                    && !batch.contains { other in
+                        other.path == mutation.path && other.start < mutation.end && mutation.start < other.end
+                    }
+            }) {
+                result[index].append(mutation)
+            } else {
+                result.append([mutation])
+            }
         }
         return result
     }
@@ -41,7 +46,8 @@ public enum SchemaWriter {
             output.replaceSubrange(site.start..<site.end, with: replacement.utf8)
         }
         // Appending preserves the original first line, shebang and source locations preceding the edit.
-        let runtime = "\nimport Foundation\nprivate let \(symbol): Swift.String = Foundation.ProcessInfo.processInfo.environment[\"LITMUS_ACTIVE_ID\"] ?? \"\"\n"
+        let runtime =
+            "\nimport Foundation\nprivate let \(symbol): Swift.String = Foundation.ProcessInfo.processInfo.environment[\"LITMUS_ACTIVE_ID\"] ?? \"\"\n"
         return String(decoding: output, as: UTF8.self) + runtime
     }
 }

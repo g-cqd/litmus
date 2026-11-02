@@ -1,13 +1,17 @@
 import Foundation
-
 import Testing
+
 @testable import LitmusCore
 
 @Test func `xunit counts cases once under nested suites`() throws {
-    let xml = "<testsuites><testsuite><testsuite><testcase/><testcase><failure/></testcase><testcase><skipped/></testcase></testsuite></testsuite></testsuites>"
+    let xml =
+        "<testsuites><testsuite><testsuite><testcase/><testcase><failure/></testcase><testcase><skipped/></testcase></testsuite></testsuite></testsuites>"
     #expect(try TestEvidence.xunit(Array(xml.utf8)) == TestCounts(passed: 1, failed: 1, skipped: 1))
 }
-@Test(arguments: ["<testsuite><testcase>", "<!DOCTYPE x><testsuite/>", "<testsuite><testcase><error/></testcase></testsuite>", "<testcase><testcase/></testcase>"])
+@Test(arguments: [
+    "<testsuite><testcase>", "<!DOCTYPE x><testsuite/>", "<testsuite><testcase><error/></testcase></testsuite>",
+    "<testcase><testcase/></testcase>",
+])
 func `malformed and infrastructure XML cannot be test evidence`(xml: String) throws {
     #expect(throws: (any Error).self) { try TestEvidence.xunit(Array(xml.utf8)) }
 }
@@ -33,7 +37,9 @@ func `malformed and infrastructure XML cannot be test evidence`(xml: String) thr
     #expect(throws: (any Error).self) { try SchemaWriter.render(source, mutations: [first, first]) }
 }
 
-@Test func `SwiftPM combines XCTest and Swift Testing reports without mistaking missing primary XML for zero tests`() throws {
+@Test func `SwiftPM combines XCTest and Swift Testing reports without mistaking missing primary XML for zero tests`()
+    throws
+{
     let base = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-xml-" + UUID().uuidString)
     try FileManager.default.createDirectory(at: base, withIntermediateDirectories: false)
     defer { try? FileManager.default.removeItem(at: base) }
@@ -47,6 +53,7 @@ func `malformed and infrastructure XML cannot be test evidence`(xml: String) thr
 
 @Test(arguments: [Int.max, -1, 10_000_001])
 func `xcresult rejects hostile counters before arithmetic`(counter: Int) throws {
-    let json = "{\"result\":\"Failed\",\"passedTests\":\(counter),\"failedTests\":\(counter),\"skippedTests\":0,\"totalTestCount\":1}"
+    let json =
+        "{\"result\":\"Failed\",\"passedTests\":\(counter),\"failedTests\":\(counter),\"skippedTests\":0,\"totalTestCount\":1}"
     #expect(throws: (any Error).self) { try TestEvidence.xcresult(Array(json.utf8)) }
 }

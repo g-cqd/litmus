@@ -1,10 +1,16 @@
 import Testing
+
 @testable import LitmusCore
 
 @Test func `plans the three default operators without mutating bindings`() throws {
-    let source = "func f(_ a: Bool, _ b: Bool, _ v: Int?) -> Bool { if let v, a && b { return v > 0 }; return a ? b : a }"
+    let source =
+        "func f(_ a: Bool, _ b: Bool, _ v: Int?) -> Bool { if let v, a && b { return v > 0 }; return a ? b : a }"
     let sites = try MutationPlanner.mutations(in: source, path: "Sources/F.swift")
-    #expect(sites.map(\.operatorID).sorted { $0.rawValue < $1.rawValue } == [.negateCondition, .replaceLogical, .swapTernary])
+    #expect(
+        sites.map(\.operatorID).sorted { $0.rawValue < $1.rawValue } == [
+            .negateCondition, .replaceLogical, .swapTernary,
+        ]
+    )
     #expect(sites.contains { $0.original == "a && b" && $0.replacement == "a || b" })
 }
 
@@ -19,12 +25,12 @@ import Testing
 
 @Test func `strings comments and conditional compilation conditions are not operators`() throws {
     let source = """
-    // if a && b
-    let text = "a || b"
-    #if DEBUG && os(iOS)
-    func f(a: Bool) -> Int { a ? 1 : 2 }
-    #endif
-    """
+        // if a && b
+        let text = "a || b"
+        #if DEBUG && os(iOS)
+        func f(a: Bool) -> Int { a ? 1 : 2 }
+        #endif
+        """
     let sites = try MutationPlanner.mutations(in: source, path: "F.swift")
     #expect(sites.count == 1)
     #expect(sites.first?.operatorID == .swapTernary)
@@ -35,14 +41,19 @@ import Testing
 }
 
 @Test func `overlapping expressions are placed in different schema batches`() throws {
-    let sites = try MutationPlanner.mutations(in: "func f(a: Bool,b: Bool,c: Bool)->Bool { a && (b || c) }", path: "F.swift")
+    let sites = try MutationPlanner.mutations(
+        in: "func f(a: Bool,b: Bool,c: Bool)->Bool { a && (b || c) }",
+        path: "F.swift"
+    )
     let batches = SchemaWriter.batches(sites)
     #expect(batches.count == 2)
     #expect(batches.flatMap { $0 }.count == sites.count)
     for batch in batches {
-        for left in batch { for right in batch where left.id != right.id {
-            #expect(left.path != right.path || left.end <= right.start || right.end <= left.start)
-        }}
+        for left in batch {
+            for right in batch where left.id != right.id {
+                #expect(left.path != right.path || left.end <= right.start || right.end <= left.start)
+            }
+        }
     }
 }
 

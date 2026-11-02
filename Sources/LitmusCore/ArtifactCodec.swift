@@ -1,6 +1,6 @@
-internal import Foundation
 internal import AemiJSON
 internal import AemiProtobufCore
+internal import Foundation
 internal import SourceCorpus
 
 /// Versioned protobuf envelope: field 1 version, field 2 JSON payload, field 3 SHA-256 integrity digest.
@@ -19,7 +19,8 @@ public enum ArtifactWire {
     /// Rejects unknown versions, duplicate required fields, corruption and oversized/truncated messages.
     public static func decode(_ bytes: [UInt8]) throws -> [UInt8] {
         guard bytes.count <= byteCap else { throw LitmusFailure("artifact exceeds 32 MiB") }
-        let fields = try WireReader.withReader(over: bytes, limits: WireLimits(maxDepth: 8, maxMessageBytes: byteCap)) { (reader: inout WireReader) throws(WireError) -> (UInt64?, [UInt8]?, String?, Bool) in
+        let fields = try WireReader.withReader(over: bytes, limits: WireLimits(maxDepth: 8, maxMessageBytes: byteCap)) {
+            (reader: inout WireReader) throws(WireError) -> (UInt64?, [UInt8]?, String?, Bool) in
             var version: UInt64?, payload: [UInt8]?, digest: String?, duplicate = false
             while let tag = try reader.nextTag() {
                 switch (tag.fieldNumber, tag.wireType) {
@@ -32,7 +33,8 @@ public enum ArtifactWire {
             return (version, payload, digest, duplicate)
         }
         guard fields.0 == 1, let payload = fields.1, let digest = fields.2, !fields.3,
-            Digest.sha256(payload) == digest else { throw LitmusFailure("unsupported, duplicate or corrupt artifact envelope") }
+            Digest.sha256(payload) == digest
+        else { throw LitmusFailure("unsupported, duplicate or corrupt artifact envelope") }
         return payload
     }
 }

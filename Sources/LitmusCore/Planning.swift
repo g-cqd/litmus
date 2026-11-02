@@ -1,13 +1,13 @@
-internal import Foundation
-internal import CryptoKit
 internal import AemiKernel
 internal import AemiRuntime
-internal import SwiftSyntax
-internal import SwiftParser
-internal import SwiftOperators
-internal import SourceCorpus
+internal import CryptoKit
+internal import Foundation
 internal import ProjectModel
+internal import SourceCorpus
 internal import Suppression
+internal import SwiftOperators
+internal import SwiftParser
+internal import SwiftSyntax
 
 /// A failure that invalidates an operation rather than manufacturing a partial success.
 public struct LitmusFailure: Error, Sendable, CustomStringConvertible {
@@ -27,7 +27,9 @@ public enum MutationPlanner {
         let tree = try OperatorTable.standardOperators.foldAll(parsed)
         let visitor = Sites(path: path, source: source, tree: tree)
         visitor.walk(tree)
-        return visitor.sites.sorted { ($0.start, $0.end, $0.operatorID.rawValue) < ($1.start, $1.end, $1.operatorID.rawValue) }
+        return visitor.sites.sorted {
+            ($0.start, $0.end, $0.operatorID.rawValue) < ($1.start, $1.end, $1.operatorID.rawValue)
+        }
     }
 
     /// Discovers the complete corpus without running package manifests or project scripts.
@@ -45,14 +47,20 @@ public enum MutationPlanner {
                 planFile(path: path, root: root, classification: classification)
             }
         }
-        let issues = discovery.unreadableDirectories.map {
-            PlanNote(path: $0, reason: "directory could not be read", isDegraded: true)
-        } + classification.unknownProjects.map {
-            PlanNote(path: $0.path, reason: "classification uses conventions: \($0.reason)")
-        }
-        return MutationPlan(root: root, analyzedFiles: files.count,
-            mutations: files.flatMap(\.mutations), suppressed: files.flatMap(\.suppressed),
-            notes: issues + files.flatMap(\.notes))
+        let issues =
+            discovery.unreadableDirectories.map {
+                PlanNote(path: $0, reason: "directory could not be read", isDegraded: true)
+            }
+            + classification.unknownProjects.map {
+                PlanNote(path: $0.path, reason: "classification uses conventions: \($0.reason)")
+            }
+        return MutationPlan(
+            root: root,
+            analyzedFiles: files.count,
+            mutations: files.flatMap(\.mutations),
+            suppressed: files.flatMap(\.suppressed),
+            notes: issues + files.flatMap(\.notes)
+        )
     }
 
     private static func planFile(path: String, root: String, classification: ProjectClassification) -> MutationPlan {
@@ -61,15 +69,26 @@ public enum MutationPlanner {
             let bytes = try BoundedFileReader.read(path: path, cap: 2 << 20)
             guard let source = String(bytes: bytes, encoding: .utf8) else { throw LitmusFailure("not UTF-8") }
             let tree = Parser.parse(source: source)
-            guard !SyntaxDepth.exceeds(tree, limit: 256), !tree.hasError else { throw LitmusFailure("invalid or deeply nested syntax") }
+            guard !SyntaxDepth.exceeds(tree, limit: 256), !tree.hasError else {
+                throw LitmusFailure("invalid or deeply nested syntax")
+            }
             let region = classification.classify(path).region
-            if !region.isEmpty || TestConventions.isTestFile(path: path, tree: tree) || GeneratedCode.isGenerated(path: path, tree: tree) {
-                return MutationPlan(root: root, analyzedFiles: 1, mutations: [], notes: [PlanNote(path: relative, reason: "non-production region")])
+            if !region.isEmpty || TestConventions.isTestFile(path: path, tree: tree)
+                || GeneratedCode.isGenerated(path: path, tree: tree)
+            {
+                return MutationPlan(
+                    root: root,
+                    analyzedFiles: 1,
+                    mutations: [],
+                    notes: [PlanNote(path: relative, reason: "non-production region")]
+                )
             }
             let converter = SourceLocationConverter(fileName: path, tree: tree)
             let spans = CodeRegionScanner.scan(tree, converter: converter)
             let grammar = DirectiveGrammar(namespaces: ["lm:", "litmus:"])
-            let directives: [Directive<MutationOperator>] = grammar.scan(tree: tree, converter: converter) { comment, line in
+            let directives: [Directive<MutationOperator>] = grammar.scan(tree: tree, converter: converter) {
+                comment,
+                line in
                 grammar.parse(comment: comment, line: line, rule: MutationOperator.init(rawValue:))
             }
             let table = SuppressionTable(directives: directives)
@@ -77,14 +96,23 @@ public enum MutationPlanner {
             var active: [Mutation] = [], suppressed: [Mutation] = [], notes: [PlanNote] = []
             for mutation in all {
                 if spans.contains(where: { $0.startLine <= mutation.line && mutation.line <= $0.endLine }) {
-                    notes.append(PlanNote(path: relative, reason: "\(mutation.id): preview/debug-only site excluded by policy"))
+                    notes.append(
+                        PlanNote(path: relative, reason: "\(mutation.id): preview/debug-only site excluded by policy")
+                    )
                 } else if table.suppression(for: mutation.operatorID, line: mutation.line) != nil {
                     suppressed.append(mutation)
-                } else { active.append(mutation) }
+                } else {
+                    active.append(mutation)
+                }
             }
             return MutationPlan(root: root, analyzedFiles: 1, mutations: active, suppressed: suppressed, notes: notes)
         } catch {
-            return MutationPlan(root: root, analyzedFiles: 1, mutations: [], notes: [PlanNote(path: relative, reason: "\(error)", isDegraded: true)])
+            return MutationPlan(
+                root: root,
+                analyzedFiles: 1,
+                mutations: [],
+                notes: [PlanNote(path: relative, reason: "\(error)", isDegraded: true)]
+            )
         }
     }
 }
@@ -109,9 +137,20 @@ private final class Sites: SyntaxVisitor {
         let location = converter.location(for: expression.positionAfterSkippingLeadingTrivia)
         let key = "\(path)\u{0}\(start)\u{0}\(end)\u{0}\(operatorID.rawValue)\u{0}\(original)"
         let id = String(XXH64.hash(Array(key.utf8)), radix: 16)
-        sites.append(Mutation(id: id, path: path, line: location.line, column: location.column,
-            operatorID: operatorID, start: start, end: end, original: original, replacement: replacement,
-            sourceFingerprint: fingerprint))
+        sites.append(
+            Mutation(
+                id: id,
+                path: path,
+                line: location.line,
+                column: location.column,
+                operatorID: operatorID,
+                start: start,
+                end: end,
+                original: original,
+                replacement: replacement,
+                sourceFingerprint: fingerprint
+            )
+        )
     }
 
     override func visit(_ node: IfExprSyntax) -> SyntaxVisitorContinueKind {
@@ -135,10 +174,15 @@ private final class Sites: SyntaxVisitor {
         return .visitChildren
     }
     override func visit(_ node: InfixOperatorExprSyntax) -> SyntaxVisitorContinueKind {
-        guard let op = node.operator.as(BinaryOperatorExprSyntax.self), ["&&", "||"].contains(op.operator.text) else { return .visitChildren }
+        guard let op = node.operator.as(BinaryOperatorExprSyntax.self), ["&&", "||"].contains(op.operator.text) else {
+            return .visitChildren
+        }
         let other = op.operator.text == "&&" ? "||" : "&&"
-        add(ExprSyntax(node), operatorID: .replaceLogical,
-            replacement: "\(node.leftOperand.trimmedDescription) \(other) \(node.rightOperand.trimmedDescription)")
+        add(
+            ExprSyntax(node),
+            operatorID: .replaceLogical,
+            replacement: "\(node.leftOperand.trimmedDescription) \(other) \(node.rightOperand.trimmedDescription)"
+        )
         return .visitChildren
     }
     override func visit(_ node: IfConfigClauseSyntax) -> SyntaxVisitorContinueKind {

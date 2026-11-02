@@ -39,7 +39,13 @@ public struct MutationPlan: Codable, Equatable, Sendable {
     public let suppressed: [Mutation]
     public let notes: [PlanNote]
 
-    public init(root: String, analyzedFiles: Int, mutations: [Mutation], suppressed: [Mutation] = [], notes: [PlanNote] = []) {
+    public init(
+        root: String,
+        analyzedFiles: Int,
+        mutations: [Mutation],
+        suppressed: [Mutation] = [],
+        notes: [PlanNote] = []
+    ) {
         version = 1; self.root = root; self.analyzedFiles = analyzedFiles
         self.mutations = mutations; self.suppressed = suppressed; self.notes = notes
     }
