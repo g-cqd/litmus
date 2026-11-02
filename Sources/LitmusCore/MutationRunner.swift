@@ -1,6 +1,7 @@
 internal import AemiIO
 internal import AemiRuntime
 internal import Foundation
+internal import ProjectModel
 internal import SourceCorpus
 
 /// Which test harness a host package uses.
@@ -42,14 +43,39 @@ public struct RunOptions: Sendable {
     /// How a first failing run is confirmed (the fcheck pilot found load-sensitive tests making false kills).
     public var killConfirmation = KillConfirmation.targeted
     public var keepWorkspace = false
+    /// The most memory one test process and what it starts may use, in MiB; past it the run is stopped and counts as
+    /// a crash (a mutant that allocates without bound). 0: no limit.
+    public var memoryLimitMiB = 4096
+    /// Run builds and first runs at background priority, to leave a shared machine usable. Reruns, which decide
+    /// timeouts, run at the normal priority: background stretches wall time 2 to 15 times (measured).
+    public var background = false
+    /// Runs of the unmutated suite looking for flaky Swift Testing tests (`--repetitions`); a test that fails in any is
+    /// left out of every later run. 1: no probe.
+    public var baselineRepetitions = 3
+    /// The most Swift Testing tests one suite runs at once; workers are then sized from it. Nil: the suite decides.
+    public var suiteWidth: Int?
+    /// Run, for each mutant, only the test targets that can reach its file (from the manifests, without building).
+    public var selectTestTargets = true
 
     public init() {}
+
+    /// The supervision every test and build process gets.
+    func supervision(background: Bool? = nil) -> Supervision {
+        var supervision = Supervision()
+        supervision.memoryLimitBytes = memoryLimitMiB > 0 ? UInt64(memoryLimitMiB) << 20 : nil
+        supervision.sampling = memoryLimitMiB > 0 ? .milliseconds(100) : nil
+        supervision.background = background ?? self.background
+        return supervision
+    }
 
     func validate() throws {
         guard (1...256).contains(batchSize), (1...86_400).contains(buildTimeout), (1...86_400).contains(timeoutCap),
             (1...100).contains(timeoutFactor), (1...86_400).contains(minimumTimeout), minimumTimeout <= timeoutCap,
-            (1...256).contains(jobs)
-        else { throw LitmusFailure("batch size, deadlines or jobs outside documented bounds") }
+            (1...256).contains(jobs), (0...1_048_576).contains(memoryLimitMiB), (1...100).contains(baselineRepetitions),
+            suiteWidth.map({ (1...256).contains($0) }) ?? true
+        else {
+            throw LitmusFailure("batch size, deadlines, jobs, memory, repetitions or width outside documented bounds")
+        }
     }
 }
 
@@ -146,13 +172,17 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         try ArtifactCodec.write(artifact, path: checkpointPath)
         let journal = try ResultJournal(path: output + "/results.journal")
 
+        // Builds run at the run's priority, without the memory limit: a compiler may use more than a test should.
+        var buildSupervision = Supervision()
+        buildSupervision.background = options.background
         do {
             phase = clock.now
             let baselineBuild = try await executor.execute(
                 driver.buildCommand(workspace: snapshot.root, artifacts: artifacts),
                 directory: snapshot.root,
                 environment: subjectEnvironment(nil),
-                timeout: options.buildTimeout
+                timeout: options.buildTimeout,
+                supervision: buildSupervision
             )
             try writeLog(baselineBuild, path: logs + "/baseline-build.log")
             account("build", since: phase)
@@ -187,15 +217,58 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             let baseline = try await current.execute(name: "baseline", activeID: "", deadline: options.timeoutCap)
             let suiteCPU = ChildUsage.cpuSeconds() - usageBefore
             account("tests", since: phase)
-            guard baseline.result.outcome == .passed, let baselineCounts = baseline.result.counts,
+            guard baseline.result.outcome == .passed, var baselineCounts = baseline.result.counts,
                 baselineCounts.passed > 0
             else {
                 throw LitmusFailure("unmutated suite did not pass with executed tests: \(baseline.result.reason)")
             }
+            var baselineByModule = baseline.result.moduleCounts
+            // Flaky tests: the unmutated suite, repeated; a test failing in any repetition would make a kill that is
+            // not the mutant's (the fcheck pilot's timing test), so it is left out of every later run.
+            var flaky: [String] = []
+            if harness.selectsModules, options.baselineRepetitions > 1 {
+                phase = clock.now
+                let probe = try await current.execute(
+                    name: "baseline-repetitions",
+                    activeID: "",
+                    deadline: options.timeoutCap,
+                    repetitions: options.baselineRepetitions
+                )
+                flaky = probe.result.failingTests
+                if probe.result.outcome != .passed, flaky.isEmpty {
+                    artifact.notes.append(
+                        "the flakiness probe (\(options.baselineRepetitions) repetitions) ended "
+                            + "\(probe.result.outcome.rawValue) without naming a test: \(probe.result.reason)"
+                    )
+                }
+                if !flaky.isEmpty {
+                    artifact.notes.append(
+                        "\(flaky.count) flaky test(s) left out of every run (failed in \(options.baselineRepetitions) "
+                            + "repetitions of the unmutated suite): \(flaky.joined(separator: ", "))"
+                    )
+                    var withoutFlaky = current
+                    withoutFlaky.skip = flaky
+                    let rebaseline = try await withoutFlaky.execute(
+                        name: "baseline-without-flaky",
+                        activeID: "",
+                        deadline: options.timeoutCap
+                    )
+                    guard rebaseline.result.outcome == .passed, let counts = rebaseline.result.counts, counts.passed > 0
+                    else {
+                        throw LitmusFailure(
+                            "the unmutated suite without its flaky tests did not pass: \(rebaseline.result.reason)"
+                        )
+                    }
+                    baselineCounts = counts
+                    baselineByModule = rebaseline.result.moduleCounts
+                }
+                account("tests", since: phase)
+            }
             // The suite's own parallelism (child CPU ÷ wall, alone) bounds the workers: 7 copies of a suite that
             // already keeps 5 cores busy only queue for the same cores (fcheck pilot, 2026-11-02).
             let wall = max(Double(baseline.result.nanoseconds) / 1e9, 0.001)
-            let parallelism = max(1, suiteCPU / wall)
+            // With a width set, each suite runs at most that many tests at once, which bounds its parallelism.
+            let parallelism = min(max(1, suiteCPU / wall), Double(options.suiteWidth ?? Int.max))
             let workerCount = ChildUsage.workers(
                 parallelism: parallelism,
                 cores: ProcessInfo.processInfo.activeProcessorCount,
@@ -224,7 +297,13 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 baselineNanoseconds: baseline.result.nanoseconds,
                 suiteParallelism: (parallelism * 100).rounded() / 100
             )
-            let judge = Judge(
+            artifact.policy?.memoryLimitMiB = options.memoryLimitMiB > 0 ? options.memoryLimitMiB : nil
+            artifact.policy?.background = options.background
+            artifact.policy?.baselineRepetitions = harness.selectsModules ? options.baselineRepetitions : nil
+            artifact.policy?.flakyTests = flaky
+            artifact.policy?.suiteWidth = options.suiteWidth
+            artifact.policy?.testTargetSelection = harness.selectsModules && options.selectTestTargets
+            var judge = Judge(
                 harness: harness,
                 pool: pool,
                 options: options,
@@ -233,6 +312,21 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 parallelDeadline: parallelDeadline,
                 rerunDeadline: rerunDeadline
             )
+            judge.skip = flaky
+            judge.baselineByModule = baselineByModule
+            if harness.selectsModules, options.selectTestTargets {
+                judge.covering = Self.coveringModules(
+                    plan.mutations,
+                    root: snapshot.root,
+                    modules: Set(baselineByModule.keys)
+                )
+                let selected = judge.covering.count
+                artifact.notes.append(
+                    "test targets selected per mutant from the manifests for \(selected) of \(plan.mutations.count) "
+                        + "mutants; the others run every test module"
+                )
+            }
+            let judging = judge
 
             var pending = Array(SchemaWriter.batches(plan.mutations, limit: options.batchSize).reversed())
             var buildIndex = 0
@@ -246,7 +340,8 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                     driver.buildCommand(workspace: snapshot.root, artifacts: artifacts),
                     directory: snapshot.root,
                     environment: subjectEnvironment(nil),
-                    timeout: options.buildTimeout
+                    timeout: options.buildTimeout,
+                    supervision: buildSupervision
                 )
                 try writeLog(build, path: "\(logs)/\(name)-build.log")
                 account("build", since: phase)
@@ -325,7 +420,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 // Each first run's decision is journalled as it comes (aemi's `forEachConcurrently`): a crash of Litmus
                 // loses only the runs in flight. Reruns wait for the parallel pass and run alone, as before.
                 var reruns: [Judge.Pending] = []
-                try await forEachConcurrently(covered, limit: workerCount, { site in try await judge.first(site) }) {
+                try await forEachConcurrently(covered, limit: workerCount, { site in try await judging.first(site) }) {
                     _,
                     step in
                     switch step {
@@ -357,6 +452,34 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             }
             throw error
         }
+    }
+
+    /// For each mutant, the test modules that can reach its file: the test targets analyzerkit finds from the
+    /// manifests (`ProjectClassification.testTargets(covering:)`, ADR-0030 there), as module names, among `modules`
+    /// (those the suite has). A mutant whose file no target claims, or whose targets are not among them, is left out:
+    /// it runs every module.
+    static func coveringModules(_ mutations: [Mutation], root: String, modules: Set<String>) -> [String: Set<String>] {
+        guard !modules.isEmpty, let layout = ProjectLayout.discover(paths: [root]) else { return [:] }
+        let classification = ProjectClassification.load(layout)
+        var byPath: [String: Set<String>?] = [:]
+        var covering: [String: Set<String>] = [:]
+        for mutation in mutations {
+            if byPath[mutation.path] == nil {
+                let targets = classification.testTargets(covering: SourcePath.canonical(root + "/" + mutation.path))
+                let names = Set(targets.map { moduleName($0.name) }).intersection(modules)
+                byPath[mutation.path] = .some(names.isEmpty ? nil : names)
+            }
+            if let names = byPath[mutation.path] ?? nil { covering[mutation.id] = names }
+        }
+        return covering
+    }
+
+    /// SwiftPM's module name for a target: every character outside `[A-Za-z0-9_]` becomes `_`, and a leading digit
+    /// gets one before it.
+    static func moduleName(_ target: String) -> String {
+        var name = String(target.map { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") ? $0 : "_" })
+        if let first = name.first, first.isNumber { name = "_" + name }
+        return name
     }
 
     private func record(_ decision: Judge.Decision, into artifact: inout RunArtifact, _ journal: ResultJournal) throws {
@@ -575,6 +698,23 @@ struct Judge: Sendable {
     /// The deadline of a mutant's first run among parallel workers: contention slows every suite.
     let parallelDeadline: Int
     let rerunDeadline: Int
+    /// Swift Testing tests left out of every run: they failed in the unmutated suite's repetitions.
+    var skip: [String] = []
+    /// For each mutant, the test modules that can reach its file; a mutant without an entry runs every module.
+    var covering: [String: Set<String>] = [:]
+    /// The unmutated suite's counts per module, what a mutant's selected modules must pass.
+    var baselineByModule: [String: TestCounts] = [:]
+
+    /// The counts a passing run of `site` must have: its selected modules', or the whole baseline.
+    func expected(_ site: Mutation) -> TestCounts {
+        guard let modules = covering[site.id] else { return baseline }
+        var passed = 0, skipped = 0
+        for module in modules {
+            passed += baselineByModule[module]?.passed ?? 0
+            skipped += baselineByModule[module]?.skipped ?? 0
+        }
+        return TestCounts(passed: passed, failed: 0, skipped: skipped)
+    }
 
     struct Execution {
         let result: TestRunResult
@@ -596,7 +736,10 @@ struct Judge: Sendable {
         activeID: String,
         deadline: Int,
         failFast: Bool = false,
-        only: [String]? = nil
+        only: [String]? = nil,
+        modules: Set<String>? = nil,
+        repetitions: Int? = nil,
+        alone: Bool = false
     ) async throws -> Execution {
         let slot = try await pool.acquire()
         defer { pool.checkin(slot) }
@@ -618,6 +761,14 @@ struct Judge: Sendable {
             failFast: failFast
         )
         request.onlySwiftTesting = only
+        // A run alone decides a timeout: never at background priority.
+        request.supervision = options.supervision(background: alone ? false : nil)
+        if harness.selectsModules {
+            request.onlyModules = only == nil ? modules : nil
+            request.skipSwiftTesting = skip
+            request.repetitions = repetitions
+            request.parallelizationWidth = options.suiteWidth
+        }
         let result = try await harness.run(request)
         return Execution(result: result, reached: ActivationEnvironment.reached(in: coverage))
     }
@@ -680,7 +831,9 @@ struct Judge: Sendable {
             activeID: active ? site.id : "",
             deadline: deadline,
             failFast: active && options.failFast,
-            only: only
+            only: only,
+            modules: covering[site.id],
+            alone: !suffix.isEmpty
         )
         ledger.evidence += execution.result.evidence
         ledger.nanoseconds += execution.result.nanoseconds
@@ -689,7 +842,7 @@ struct Judge: Sendable {
 
     /// The first run of one reached mutant, among the parallel workers, with `parallelDeadline`.
     func first(_ site: Mutation) async throws -> Step {
-        var ledger = Ledger(site: site, baseline: baseline, evidence: [], nanoseconds: 0)
+        var ledger = Ledger(site: site, baseline: expected(site), evidence: [], nanoseconds: 0)
         let first = try await run(site, "", active: true, deadline: parallelDeadline, ledger: &ledger)
         let activated = first.reached.contains(site.id)
         switch first.result.outcome {
@@ -716,14 +869,14 @@ struct Judge: Sendable {
         let site = pending.site
         var ledger = Ledger(
             site: site,
-            baseline: baseline,
+            baseline: expected(site),
             evidence: pending.evidence,
             nanoseconds: pending.nanoseconds
         )
         if pending.outcome == .failed, pending.activated, options.killConfirmation == .full {
             let control = try await run(site, "-control", active: false, deadline: rerunDeadline, ledger: &ledger)
             let again = try await run(site, "-confirm", active: true, deadline: rerunDeadline, ledger: &ledger)
-            guard control.result.outcome == .passed, control.result.counts == baseline,
+            guard control.result.outcome == .passed, control.result.counts == ledger.baseline,
                 again.result.outcome == .failed, again.reached.contains(site.id)
             else {
                 return ledger.decision(.infrastructureError, "kill not reproduced around a passing inactive control")

@@ -60,10 +60,45 @@ python3 - "$WORK/stale.json" <<'PY'
 import json,sys
 r=json.load(open(sys.argv[1])); assert not r['successfulExecution'] and r['degradedFiles']
 PY
+# A flaky test is found by the baseline repetitions and left out; SIGINT mid-run ends the run (130), writes its
+# checkpoint as incomplete, and leaves no test helper behind.
+cp -R "$WORK/subject" "$WORK/flaky"
+cat > "$WORK/flaky/Tests/ExampleTests/FlakyTests.swift" <<'SWIFT'
+import Example
+import Testing
+
+nonisolated(unsafe) var flakyRuns = 0
+
+/// Passes alone, fails on its second run in one process: flaky under repetition.
+@Test func `a flaky check`() {
+    flakyRuns += 1
+    #expect(flakyRuns != 2)
+    #expect(gated(true, true))
+}
+SWIFT
+"$BIN" run "$WORK/flaky" --trust-project --output "$WORK/interrupted" > /dev/null 2> "$WORK/interrupted.err" &
+LITMUS_PID=$!
+for _ in $(seq 1 600); do
+  ls "$WORK/interrupted/logs" 2>/dev/null | grep -q '^mutant-' && break
+  sleep 0.5
+done
+kill -INT "$LITMUS_PID"
+set +e
+wait "$LITMUS_PID"
+STATUS=$?
+set -e
+[[ "$STATUS" == 130 ]]
+sleep 1
+! pgrep -f "swiftpm-testing-helper.*$WORK/interrupted" > /dev/null
+python3 - "$WORK/interrupted/run.json" <<'PY'
+import json,sys
+a=json.load(open(sys.argv[1]))
+assert not a['complete'] and a['policy']['flakyTests'] == ['ExampleTests.`a flaky check`()'], a.get('policy')
+PY
 if [[ -n "${LITMUS_EVIDENCE_DIR:-}" ]]; then
   [[ ! -e "$LITMUS_EVIDENCE_DIR" ]]
   mkdir -p "$LITMUS_EVIDENCE_DIR/run"
   cp "$WORK/plan.json" "$WORK/report.json" "$WORK/report.sarif" "$WORK/stale.json" "$LITMUS_EVIDENCE_DIR/"
   cp "$WORK/run/"*.json "$WORK/run/"*.pb "$WORK/run/"*.xml "$WORK/run/"*.log "$LITMUS_EVIDENCE_DIR/run/"
 fi
-printf 'Smoke passed: real kill, crash, timeout, survivor, no coverage and unviable verdicts, original-source preservation, JSON/protobuf/SARIF, strict gate, stale-test refusal.\n'
+printf 'Smoke passed: real kill, crash, timeout, survivor, no coverage and unviable verdicts, original-source preservation, JSON/protobuf/SARIF, strict gate, stale-test refusal, flaky-test exclusion, clean interruption.\n'

@@ -112,6 +112,18 @@ private struct Run: AsyncParsableCommand {
     ) var trustProject = false
     @Flag(help: "Retain the workspace after a completed run; failed runs are always retained.") var keepWorkspace =
         false
+    @Option(help: "Memory limit of a test process and what it starts, in MiB; past it, a crash. 0: none.")
+    var memoryLimit: Int = 4096
+    @Flag(help: "Build and run first passes at background priority; reruns that decide timeouts do not.")
+    var background = false
+    @Option(
+        help: "Runs of the unmutated suite looking for flaky Swift Testing tests, which are then left out (1: none)."
+    )
+    var baselineRepetitions: Int = 3
+    @Option(help: "Most Swift Testing tests one suite runs at once; workers are sized from it.")
+    var suiteWidth: Int?
+    @Flag(help: "Run every test module for every mutant, not only the test targets that can reach its file.")
+    var noTestTargetSelection = false
     mutating func run() async throws {
         guard trustProject else {
             throw ValidationError(
@@ -134,6 +146,11 @@ private struct Run: AsyncParsableCommand {
         }
         options.killConfirmation = confirmation
         options.keepWorkspace = keepWorkspace
+        options.memoryLimitMiB = memoryLimit
+        options.background = background
+        options.baselineRepetitions = baselineRepetitions
+        options.suiteWidth = suiteWidth
+        options.selectTestTargets = !noTestTargetSelection
         guard swiftpmBuildSystem.map({ ["native", "swiftbuild"].contains($0) }) ?? true else {
             throw ValidationError("swiftpm-build-system must be native or swiftbuild")
         }
@@ -154,12 +171,19 @@ private struct Run: AsyncParsableCommand {
         }
         options.exclude = try subject.excludes()
         let artifact: RunArtifact
+        let (runDriver, runOptions, runOutput) = (driver, options, output)
         do {
-            artifact = try await MutationRunner(executor: BoundedExecutor()).run(
-                driver: driver,
-                outputDirectory: output,
-                options: options
-            )
+            // A signal cancels the run: its children are ended and its checkpoint written (analyzerkit ADR-0030).
+            artifact = try await TerminationSignals.run {
+                try await MutationRunner(executor: BoundedExecutor()).run(
+                    driver: runDriver,
+                    outputDirectory: runOutput,
+                    options: runOptions
+                )
+            }
+        } catch let interrupted as TerminationSignals.Interrupted {
+            stderr("litmus: interrupted by signal \(interrupted.signal); partial evidence at \(output)/run.json")
+            throw ExitCode(interrupted.exitStatus)
         } catch { try fail(error, code: .internalFailure) }
         print(String(decoding: try ArtifactCodec.json(artifact), as: UTF8.self))
         let counts = Dictionary(grouping: artifact.results, by: \.verdict).mapValues(\.count)

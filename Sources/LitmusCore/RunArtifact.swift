@@ -14,6 +14,17 @@ public struct RunPolicy: Codable, Sendable, Equatable {
     public let baselineNanoseconds: Int64
     /// Cores the suite keeps busy alone (child CPU ÷ wall time), which sized `workers`.
     public let suiteParallelism: Double
+    /// The memory limit of a test process and what it starts, in MiB; nil without one (and before 0.3).
+    public var memoryLimitMiB: Int? = nil
+    /// Whether builds and first runs ran at background priority.
+    public var background: Bool? = nil
+    /// Repetitions of the unmutated suite that looked for flaky tests, and the tests found and left out.
+    public var baselineRepetitions: Int? = nil
+    public var flakyTests: [String]? = nil
+    /// The most Swift Testing tests a suite ran at once, when set.
+    public var suiteWidth: Int? = nil
+    /// Whether each mutant ran only the test targets that can reach its file.
+    public var testTargetSelection: Bool? = nil
 }
 
 /// Provenance required before a verdict may be presented as current execution evidence.
@@ -56,7 +67,7 @@ public struct MutationResult: Codable, Sendable {
 
 /// The record of a run. `complete` never means that infrastructure errors were kills.
 public struct RunArtifact: Codable, Sendable {
-    public static let executionPolicy = "activation-markers/no-coverage/unviable-isolation/v2"
+    public static let executionPolicy = "activation-markers/no-coverage/unviable-isolation/v3"
     public let version: Int
     public let provenance: RunProvenance
     public let plan: MutationPlan
