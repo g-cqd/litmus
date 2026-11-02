@@ -154,3 +154,57 @@ func `xcresult rejects hostile counters before arithmetic`(counter: Int) throws 
     #expect(scan.ended)
     #expect(scan.counts == TestCounts(passed: 1, failed: 1, skipped: 1))
 }
+
+/// Xcode result bundles (ADR 0007): counts per test bundle for `-only-testing`, and a crashed runner told from a
+/// failed test. Shapes recorded from Xcode 27 on 2026-11-02.
+@Test func `xcresult test trees give counts per bundle, and a crashed runner is a crash`() throws {
+    let tree = """
+        {"devices":[],"testNodes":[{"nodeType":"Test Plan","name":"Example","result":"Failed","children":[
+          {"nodeType":"Unit test bundle","name":"ExampleTests","result":"Failed","children":[
+            {"nodeType":"Test Case","name":"fails plainly","result":"Failed","children":[
+              {"nodeType":"Failure Message","name":"Expectation failed"}]},
+            {"nodeType":"Test Suite","name":"CrashTests","result":"Failed","children":[
+              {"nodeType":"Test Case","name":"testCrash()","result":"Failed"}]},
+            {"nodeType":"Test Case","name":"passes","result":"Passed"},
+            {"nodeType":"Test Case","name":"skipped","result":"Skipped"}]},
+          {"nodeType":"Unit test bundle","name":"Other Tests","result":"Passed","children":[
+            {"nodeType":"Test Case","name":"a","result":"Passed"}]}]}]}
+        """
+    let modules = try #require(TestEvidence.xcresultModules(Array(tree.utf8)))
+    #expect(modules["ExampleTests"] == TestCounts(passed: 1, failed: 2, skipped: 1))
+    #expect(modules["Other Tests"] == TestCounts(passed: 1, failed: 0, skipped: 0))
+    #expect(
+        TestEvidence.xcresultModules(
+            Array(
+                #"{"testNodes":[{"nodeType":"Unit test bundle","name":"X","children":[{"nodeType":"Test Case","result":"Mystery"}]}]}"#
+                    .utf8
+            )
+        ) == nil
+    )
+
+    let crashed = """
+        {"result":"Failed","totalTestCount":12,"passedTests":11,"failedTests":1,"skippedTests":0,"testFailures":[
+          {"failureText":"The test runner crashed while preparing to run tests: xctest at static xctest.main()",
+           "targetName":"ExampleTests","testName":"testCrash()"}]}
+        """
+    let failed = """
+        {"result":"Failed","totalTestCount":12,"passedTests":10,"failedTests":2,"skippedTests":0,"testFailures":[
+          {"failureText":"Expectation failed: gated(true, false)","targetName":"ExampleTests"},
+          {"failureText":"The test runner crashed while preparing to run tests","targetName":"ExampleTests"}]}
+        """
+    #expect(TestEvidence.xcresultCrashed(Array(crashed.utf8)))
+    #expect(!TestEvidence.xcresultCrashed(Array(failed.utf8)))
+    #expect(try TestEvidence.xcresult(Array(crashed.utf8)) == TestCounts(passed: 11, failed: 1, skipped: 0))
+}
+
+@Test func `xcodebuild test commands select test targets with -only-testing`() throws {
+    let driver = try BuildDriver(root: "/r", scheme: "S", destination: "platform=macOS")
+    let command = try driver.testCommand(
+        workspace: "/r",
+        artifacts: "/a",
+        result: "/x.xcresult",
+        xctestrun: "/t.xctestrun",
+        onlyTesting: ["B Tests", "ATests"]
+    )
+    #expect(Array(command.arguments.suffix(2)) == ["-only-testing:ATests", "-only-testing:B Tests"])
+}

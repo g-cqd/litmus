@@ -511,7 +511,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 // Flaky tests: the unmutated suite, repeated; a test failing in any repetition would make a kill that
                 // is not the mutant's (the fcheck pilot's timing test), so it is left out of every later run.
                 var flaky: [String] = []
-                if harness.selectsModules, options.baselineRepetitions > 1 {
+                if harness.controlsSwiftTesting, options.baselineRepetitions > 1 {
                     phase = clock.now
                     let probe = try await current.execute(
                         name: "baseline-repetitions",
@@ -587,7 +587,8 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 )
                 artifact.policy?.memoryLimitMiB = options.memoryLimitMiB > 0 ? options.memoryLimitMiB : nil
                 artifact.policy?.background = options.background
-                artifact.policy?.baselineRepetitions = harness.selectsModules ? options.baselineRepetitions : nil
+                artifact.policy?.baselineRepetitions =
+                    harness.controlsSwiftTesting ? options.baselineRepetitions : nil
                 artifact.policy?.flakyTests = flaky
                 artifact.policy?.suiteWidth = options.suiteWidth
                 artifact.policy?.testTargetSelection = harness.selectsModules && options.selectTestTargets
@@ -936,7 +937,8 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         for mutation in mutations {
             if byPath[mutation.path] == nil {
                 let targets = classification.testTargets(covering: SourcePath.canonical(root + "/" + mutation.path))
-                let names = Set(targets.map { moduleName($0.name) }).intersection(modules)
+                // SwiftPM spells a module with `_` for spaces and dashes; Xcode's result bundles keep the target name.
+                let names = Set(targets.flatMap { [moduleName($0.name), $0.name] }).intersection(modules)
                 byPath[mutation.path] = .some(names.isEmpty ? nil : names)
             }
             if let names = byPath[mutation.path] ?? nil { covering[mutation.id] = names }
@@ -1329,8 +1331,8 @@ struct Judge: Sendable {
         request.onlySwiftTesting = only
         // A run alone decides a timeout: never at background priority.
         request.supervision = options.supervision(background: alone ? false : nil)
-        if harness.selectsModules {
-            request.onlyModules = only == nil ? modules : nil
+        if harness.selectsModules { request.onlyModules = only == nil ? modules : nil }
+        if harness.controlsSwiftTesting {
             request.skipSwiftTesting = skip
             request.repetitions = repetitions
             request.parallelizationWidth = options.suiteWidth
