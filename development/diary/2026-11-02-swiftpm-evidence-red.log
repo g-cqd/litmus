@@ -1,0 +1,11 @@
+􀟈  Test run started.
+􀄵  Testing Library Version: 2403
+􀄵  Target Platform: arm64e-apple-macos14.0
+􀟈  Test "runner confirms a kill with an intervening inactive control" started.
+􀟈  Test case passing 1 argument swiftTestingOnly → true to "runner confirms a kill with an intervening inactive control" started.
+􀟈  Test case passing 1 argument swiftTestingOnly → false to "runner confirms a kill with an intervening inactive control" started.
+􀢄  Test "runner confirms a kill with an intervening inactive control" recorded an issue with 1 argument swiftTestingOnly → true at SnapshotAndRunnerTests.swift:54:2: Caught error: unmutated baseline did not pass with executed tests
+􀢄  Test "runner confirms a kill with an intervening inactive control" with 2 test cases failed after 0.750 seconds with 1 issue.
+􀢄  Test run with 1 test in 0 suites failed after 0.750 seconds with 1 issue.
+Note: Some test targets reported failures:
+  - LitmusCoreTests (Swift Testing)
