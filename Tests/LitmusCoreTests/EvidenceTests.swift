@@ -136,3 +136,21 @@ func `xcresult rejects hostile counters before arithmetic`(counter: Int) throws 
     #expect(!"Mod.`drain`()x".contains(pattern))
     #expect(!"Other.Mod.`drain`()".contains(pattern))
 }
+
+@Test func `Swift Testing counts come from the event stream, functions only`() throws {
+    let lines = [
+        #"{"kind":"test","payload":{"kind":"suite","id":"M.S"}}"#,
+        #"{"kind":"test","payload":{"kind":"function","id":"M.S/`a \"quoted\" name`()/F.swift:1:1"}}"#,
+        #"{"kind":"test","payload":{"kind":"function","id":"M.S/`fails`()/F.swift:2:1"}}"#,
+        #"{"kind":"test","payload":{"kind":"function","id":"M.S/`skipped`()/F.swift:3:1"}}"#,
+        #"{"kind":"event","payload":{"kind":"testEnded","testID":"M.S/`a \"quoted\" name`()/F.swift:1:1"}}"#,
+        #"{"kind":"event","payload":{"kind":"issueRecorded","testID":"M.S/`fails`()/F.swift:2:1","issue":{"isKnown":false}}}"#,
+        #"{"kind":"event","payload":{"kind":"testEnded","testID":"M.S/`fails`()/F.swift:2:1"}}"#,
+        #"{"kind":"event","payload":{"kind":"testSkipped","testID":"M.S/`skipped`()/F.swift:3:1"}}"#,
+        #"{"kind":"event","payload":{"kind":"testEnded","testID":"M.S"}}"#,
+        #"{"kind":"event","payload":{"kind":"runEnded"}}"#,
+    ]
+    let scan = try TestEvidence.swiftTestingEvents(Array((lines.joined(separator: "\n") + "\n").utf8))
+    #expect(scan.ended)
+    #expect(scan.counts == TestCounts(passed: 1, failed: 1, skipped: 1))
+}

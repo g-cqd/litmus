@@ -5,12 +5,14 @@ internal import Foundation
 /// Only syntax planning settings; execution inputs must remain explicit in argv/provenance.
 public struct LitmusConfiguration: Decodable, Sendable {
     public var exclude: [String] = []
+    /// Only files matching these substrings or globs are mutated (`.litmus.json` or the `litmus` section).
+    public var include: [String] = []
 
     /// Resolves the family's shared top-level exclusions plus `.litmus.json`; rejects duplicate/unknown keys.
     /// A `litmus` section of `.swift-analyzers.json` is read as well (analyzerkit ADR-0030), with the shared keys only.
     public static func load(root: String, explicit: String?) throws -> Self {
         let resolved = try SharedConfiguration.resolve(
-            for: SharedConfiguration.Tool(name: "litmus", fileName: ".litmus.json", keys: []),
+            for: SharedConfiguration.Tool(name: "litmus", fileName: ".litmus.json", keys: ["include"]),
             explicit: explicit,
             currentDirectory: root,
             analyzedPaths: [root]
@@ -24,10 +26,11 @@ public struct LitmusConfiguration: Decodable, Sendable {
                 "this version accepts exclude only; use the actual scheme/destination for build conditions and fixed production-region policy"
             )
         }
-        return Self(exclude: value.exclude ?? [])
+        return Self(exclude: value.exclude ?? [], include: value.include ?? [])
     }
     private struct SharedValues: Decodable {
         let exclude: [String]?
+        let include: [String]?
         let defines: [String]?
         let platforms: [String]?
         let includeRegions: [String]?

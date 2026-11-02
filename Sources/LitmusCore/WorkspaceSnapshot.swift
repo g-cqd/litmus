@@ -13,6 +13,8 @@ public struct WorkspaceSnapshot: Sendable {
     public let root: String
     public let entries: [SnapshotEntry]
     public let digest: String
+    /// Links left out of the copy (never followed); a build that needed one fails, and the run's notes say which.
+    public var skippedLinks: [String] = []
     /// What a snapshot copies and how far: at most 100,000 regular files of at most 128 MiB each, 8 GiB in total.
     static let limits: TreeSnapshot.Limits = {
         var limits = TreeSnapshot.Limits()
@@ -22,6 +24,8 @@ public struct WorkspaceSnapshot: Sendable {
         limits.maxFileBytes = 128 << 20
         limits.maxTotalBytes = 8 << 30
         limits.jobs = 8
+        // A link is never followed or copied; it is left out and listed, so one editor link does not refuse the run.
+        limits.links = .skip
         return limits
     }()
 
@@ -52,7 +56,9 @@ public struct WorkspaceSnapshot: Sendable {
         let inputs = manifest.entries.map { SnapshotEntry(path: $0.path, sha256: $0.sha256) }
         // The digest the run's provenance records and `analyze` checks: SHA-256 of the inputs' JSON, as before.
         let digest = Digest.sha256(try ArtifactCodec.json(inputs))
-        return Self(sourceRoot: source, root: destination, entries: inputs, digest: digest)
+        var snapshot = Self(sourceRoot: source, root: destination, entries: inputs, digest: digest)
+        snapshot.skippedLinks = manifest.skippedLinks
+        return snapshot
     }
 
     /// Resolves a plan's path within this snapshot, rejecting traversal, aliases and symlink redirection.

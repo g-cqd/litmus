@@ -60,14 +60,29 @@ public enum MutationPlanner {
 
     /// Discovers the complete corpus without running package manifests or project scripts.
     /// Uses bounded Aemi concurrency on large stacks; unreadable inputs are explicit degradation, not silent omissions.
-    public static func plan(root: String, exclude: [String] = [], jobs: Int = 4) async throws -> MutationPlan {
+    /// - Parameter include: when not empty, only files matching one of these substrings or globs (`PathFilter`'s
+    ///   rules; a matching directory covers what is under it) are mutated: "mutate what this change touched".
+    public static func plan(
+        root: String,
+        exclude: [String] = [],
+        include: [String] = [],
+        jobs: Int = 4
+    ) async throws -> MutationPlan {
         let root = SourcePath.canonical(root)
         guard FileManager.default.fileExists(atPath: root) else { throw LitmusFailure("root does not exist: \(root)") }
         let filter = PathFilter(exclude + ["Package.swift", "Dangerfile.swift", "**/Plugins/**"], root: root)
         let discovery = SourceDiscovery.discover(under: root, isExcluded: filter.excludes)
         guard !discovery.files.isEmpty else { throw LitmusFailure("no Swift source files under \(root)") }
+        var discovered = discovery.files
+        if !include.isEmpty {
+            let wanted = PathFilter(include, root: root)
+            discovered = discovered.filter { wanted.excludes($0) }
+            guard !discovered.isEmpty else {
+                throw LitmusFailure("no Swift source file matches the include list: \(include.joined(separator: ", "))")
+            }
+        }
         let classification = ProjectLayout.discover(paths: [root]).map(ProjectClassification.load) ?? .conventionsOnly
-        let files = try await mapConcurrently(discovery.files, limit: min(max(jobs, 1), 16)) { path in
+        let files = try await mapConcurrently(discovered, limit: min(max(jobs, 1), 16)) { path in
             try Task.checkCancellation()
             return await LargeStack.run {
                 planFile(path: path, root: root, classification: classification)

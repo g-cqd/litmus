@@ -325,17 +325,35 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
                 if stopped { return result(.failed, nil, "Swift Testing recorded a failing issue (stopped early)") }
                 guard let output else { return result(.unusable, nil, "Swift Testing produced no process result") }
                 if output.timedOut { return result(.timedOut, nil, "Swift Testing exceeded \(request.deadline) s") }
-                let counts =
-                    FileManager.default.fileExists(atPath: xunit)
-                    ? try? TestEvidence.xunit(BoundedFileReader.read(path: xunit, cap: 16 << 20)) : nil
-                if FileManager.default.fileExists(atPath: xunit) { evidence.append("logs/\(stem).xml") }
+                // Counts come from the event stream. The xUnit report only cross-checks them when it is well-formed:
+                // the toolchain writes a test name holding `"` into an attribute unescaped (seen on ask, 2026-11-02).
+                var xunitCounts: TestCounts?
+                if FileManager.default.fileExists(atPath: xunit) {
+                    evidence.append("logs/\(stem).xml")
+                    xunitCounts = try? TestEvidence.xunit(BoundedFileReader.read(path: xunit, cap: 16 << 20))
+                }
                 if output.exceededMemory { return result(.crashed, nil, abnormalEnd(output, "Swift Testing")) }
-                if scan?.failed == true || (counts?.failed ?? 0) > 0 {
+                if scan?.failed == true || (xunitCounts?.failed ?? 0) > 0 {
                     return result(.failed, nil, "Swift Testing recorded a failing issue")
                 }
                 if output.exitStatus != 0 { return result(.crashed, nil, abnormalEnd(output, "Swift Testing")) }
-                guard let counts, scan?.ended == true, counts.total > 0 else {
-                    return result(.unusable, nil, "Swift Testing evidence incomplete for \(bundle.module)")
+                guard let scan else {
+                    return result(.unusable, nil, "the Swift Testing event stream of \(bundle.module) is unreadable")
+                }
+                guard scan.ended else {
+                    return result(.unusable, nil, "the Swift Testing event stream of \(bundle.module) has no runEnded")
+                }
+                let counts = scan.counts
+                guard counts.total > 0 || request.onlySwiftTesting == nil && !request.skipSwiftTesting.isEmpty else {
+                    return result(.unusable, nil, "Swift Testing ran no test of \(bundle.module)")
+                }
+                if let xunitCounts, xunitCounts != counts {
+                    return result(
+                        .unusable,
+                        nil,
+                        "Swift Testing counts disagree for \(bundle.module): event stream \(counts.passed) passed, "
+                            + "\(counts.skipped) skipped; xUnit \(xunitCounts.passed) passed, \(xunitCounts.skipped) skipped"
+                    )
                 }
                 passed += counts.passed
                 skipped += counts.skipped
