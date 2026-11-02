@@ -21,7 +21,12 @@ public struct MutationFinding: Codable, Sendable, ReportedFinding {
         path = root.map { $0 + "/" + site.path } ?? site.path
         line = site.line; column = site.column
         rule = "litmus/" + result.verdict.rawValue
-        severity = result.verdict == .survived ? "warning" : "error"
+        severity =
+            switch result.verdict {
+            case .survived, .noCoverage: "warning"
+            case .unviable: "note"
+            default: "error"
+            }
         message = "\(site.operatorID.rawValue): \(site.original) → \(site.replacement); \(result.reason)"
         fingerprint = Fingerprint.make(rule: rule, path: site.path, line: line, column: column, message: message)
     }
@@ -49,6 +54,10 @@ public struct MutationReport: Codable, Sendable, ToolReport {
     public let snapshotSHA256: String
     public let verification: String
     public let notes: [String]
+    /// The Stryker-defined score; nil while any verdict is unresolved.
+    public let score: MutationScore
+    public let policy: RunPolicy?
+    public let executionTimings: [String: Double]
     public var suppressedCount: Int { suppressed.count }
     public var classificationIssues: [ClassificationIssue] { [] }
     public var timings: [String: Double] { [:] }
@@ -64,10 +73,10 @@ public struct MutationReport: Codable, Sendable, ToolReport {
         relative: Bool = false,
         only: Set<String>? = nil,
         baseline: Set<String> = []
-    ) throws -> Self {
-        guard artifact.version == 1, artifact.plan.version == 1,
-            artifact.provenance.toolVersion == "0.1.0-dev",
-            artifact.provenance.executionPolicy == "full-suite/process-per-mutant/confirmed-failure/v1",
+    ) async throws -> Self {
+        guard artifact.version == 2, artifact.plan.version == 1,
+            artifact.provenance.toolVersion == LitmusVersion.current,
+            artifact.provenance.executionPolicy == RunArtifact.executionPolicy,
             !artifact.provenance.inputs.isEmpty,
             Digest.sha256(try ArtifactCodec.json(artifact.provenance.inputs)) == artifact.provenance.snapshotSHA256,
             Set(artifact.plan.mutations.map(\.id)).count == artifact.plan.mutations.count,
@@ -78,7 +87,7 @@ public struct MutationReport: Codable, Sendable, ToolReport {
         guard artifact.results.allSatisfy({ expected[$0.mutation.id] == $0.mutation }) else {
             throw LitmusFailure("result/plan reconciliation failed")
         }
-        let stale = try changedInputs(artifact.provenance.inputs, root: root)
+        let stale = try await changedInputs(artifact.provenance.inputs, root: root)
         let degradations =
             stale.map {
                 ReportDegradation(
@@ -86,7 +95,7 @@ public struct MutationReport: Codable, Sendable, ToolReport {
                     reason: "input differs from execution snapshot; verdicts are historical only"
                 )
             } + artifact.plan.notes.filter(\.isDegraded).map { ReportDegradation(path: $0.path, reason: $0.reason) }
-        let all = artifact.results.filter { ![Verdict.killed].contains($0.verdict) }.map {
+        let all = artifact.results.filter { !$0.verdict.isDetected }.map {
             MutationFinding($0, root: relative ? nil : root)
         }
         let suppressed = all.filter { baseline.contains($0.fingerprint) }
@@ -113,48 +122,27 @@ public struct MutationReport: Codable, Sendable, ToolReport {
             snapshotSHA256: artifact.provenance.snapshotSHA256,
             verification: "source snapshot checked; historical execution, not a new test run or certification",
             notes: artifact.notes + [
-                "No static reference heuristic is treated as test coverage. No equivalent-mutant pruning or verdict-cache reuse is performed."
-            ]
+                "Coverage is the activation markers observed while the tests ran, never a static guess. "
+                    + "No equivalent-mutant pruning or verdict-cache reuse is performed."
+            ],
+            score: artifact.score,
+            policy: artifact.policy,
+            executionTimings: artifact.timings
         )
     }
 
-    private static func changedInputs(_ entries: [SnapshotEntry], root: String) throws -> [String] {
+    /// Inputs whose bytes differ from the snapshot, plus inputs added or removed, by aemi's `DirectoryWalk` and
+    /// parallel SHA-256.
+    private static func changedInputs(_ entries: [SnapshotEntry], root: String) async throws -> [String] {
         let root = SourcePath.canonical(root)
         guard Set(entries.map(\.path)).count == entries.count else {
             throw LitmusFailure("duplicate snapshot input paths")
         }
         let expected = Dictionary(uniqueKeysWithValues: entries.map { ($0.path, $0.sha256) })
-        var actual: Set<String> = [], changed: [String] = [], enumerationFailed = false
-        guard
-            let enumerator = FileManager.default.enumerator(
-                at: URL(fileURLWithPath: root),
-                includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
-                errorHandler: { _, _ in
-                    enumerationFailed = true; return false
-                }
-            )
-        else {
-            throw LitmusFailure("cannot verify source inventory")
-        }
-        var count = 0
-        for case let url as URL in enumerator {
-            try Task.checkCancellation()
-            if WorkspaceSnapshot.skipped.contains(url.lastPathComponent) { enumerator.skipDescendants(); continue }
-            count += 1
-            guard count <= 150_000 else { throw LitmusFailure("source inventory exceeds entry limit") }
-            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-            let canonical = SourcePath.canonical(url.path)
-            guard canonical.hasPrefix(root + "/") else { throw LitmusFailure("source inventory entry escapes root") }
-            let relative = String(canonical.dropFirst(root.count + 1))
-            if values.isSymbolicLink == true { throw LitmusFailure("source inventory has symbolic link: \(relative)") }
-            if values.isRegularFile == true {
-                actual.insert(relative)
-                let hash = Digest.sha256(try BoundedFileReader.read(path: url.path, cap: 128 << 20))
-                if expected[relative] != hash { changed.append(relative) }
-            }
-        }
-        guard !enumerationFailed else { throw LitmusFailure("source inventory could not be verified") }
-        changed += Set(expected.keys).subtracting(actual)
+        let files = try WorkspaceSnapshot.inventory(root).files
+        let current = try await WorkspaceSnapshot.hashes(files, root: root)
+        var changed = current.filter { expected[$0.path] != $0.sha256 }.map(\.path)
+        changed += Set(expected.keys).subtracting(files)
         return changed.sorted()
     }
 }
@@ -163,12 +151,12 @@ public struct MutationReport: Codable, Sendable, ToolReport {
 public enum LitmusReportFormat: ToolReportFormat {
     public typealias Report = MutationReport
     public static let toolName = "litmus"
-    public static let toolVersion = "0.1.0-dev"
+    public static let toolVersion = LitmusVersion.current
     public static let informationURI = "https://github.com/g-cqd/litmus"
     public static let byteOrderMark = SarifColumns.ByteOrderMark.parsed
     public static let readCap = 2 << 20
     public static var sarifRules: [Sarif.Rule] {
-        [Verdict.survived, .timeout, .invalid, .infrastructureError, .notRun].map {
+        [Verdict.survived, .noCoverage, .unviable, .infrastructureError, .notRun].map {
             Sarif.Rule(id: "litmus/" + $0.rawValue, shortDescription: Sarif.Text($0.rawValue))
         }
     }

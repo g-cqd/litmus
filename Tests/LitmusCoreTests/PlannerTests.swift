@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import LitmusCore
@@ -11,7 +12,7 @@ import Testing
             .negateCondition, .replaceLogical, .swapTernary,
         ]
     )
-    #expect(sites.contains { $0.original == "a && b" && $0.replacement == "a || b" })
+    #expect(sites.contains { $0.original == "a && b" && $0.replacement == "(a) || (b)" })
 }
 
 @Test func `discovery is deterministic and UTF8 ranges preserve Unicode`() throws {
@@ -65,4 +66,54 @@ import Testing
     #expect(rewritten.contains("private let"))
     #expect(rewritten.contains("!(a)"))
     #expect(throws: (any Error).self) { try SchemaWriter.render("// changed\n" + source, mutations: sites) }
+}
+
+@Test func `logical replacement keeps the folded grouping of its operands`() throws {
+    let sites = try MutationPlanner.mutations(
+        in: "func f(a: Bool, b: Bool, c: Bool) -> Bool { a || b || c }",
+        path: "F.swift"
+    )
+    let outer = try #require(sites.first { $0.original == "a || b || c" })
+    #expect(outer.replacement == "(a || b) && (c)")
+}
+
+@Test func `sites inside macro expansions are excluded with a reason, never dropped`() throws {
+    let found = try MutationPlanner.discover(in: "func f(a: Bool, b: Bool) -> Bool { #check(a && b) }", path: "F.swift")
+    #expect(found.sites.isEmpty)
+    #expect(found.excluded.map(\.site.original) == ["a && b"])
+    #expect(found.excluded.first?.reason.contains("macro") == true)
+}
+
+@Test func `every mutant gets an inlinable-safe once-initialised activation`() throws {
+    let source = "public func f(_ a: Bool, limit: Int = (true ? 1 : 2)) -> Bool { a }"
+    let sites = try MutationPlanner.mutations(in: source, path: "Sources/F.swift")
+    let site = try #require(sites.first)
+    let schema = try SchemaWriter.schema(source, mutations: [site])
+    #expect(schema.text.contains("@usableFromInline nonisolated internal let __litmus_"))
+    #expect(schema.text.contains("_\(site.id): Swift.Bool = "))
+    #expect(schema.text.contains("LITMUS_COVERAGE_DIR"))
+    #expect(schema.lines[site.id] == 1...1)
+}
+
+@Test func `top-level code gets its declarations before the code that reads them`() throws {
+    let source = "import Foundation\nlet x = CommandLine.arguments.count > 1\nprint(x ? 1 : 2)\n"
+    let sites = try MutationPlanner.mutations(in: source, path: "Sources/Tool/main.swift")
+    let schema = try SchemaWriter.schema(source, mutations: sites)
+    let declaration = try #require(schema.text.range(of: "nonisolated internal let"))
+    let use = try #require(schema.text.range(of: "print("))
+    #expect(declaration.lowerBound < use.lowerBound)
+    #expect(schema.text.components(separatedBy: "import Foundation").count == 2)
+    let site = try #require(sites.first)
+    #expect(schema.lines[site.id].map { $0.lowerBound > 3 } == true)
+}
+
+@Test func `mutants on the same expression share one schema build`() throws {
+    let source = "func f(a: Bool, b: Bool) -> Int { if a && b { return 1 }; return 0 }"
+    let sites = try MutationPlanner.mutations(in: source, path: "F.swift")
+    #expect(sites.count == 2)
+    #expect(SchemaWriter.batches(sites).count == 1)
+    let schema = try SchemaWriter.schema(source, mutations: sites)
+    #expect(schema.text.components(separatedBy: " ? (").count == 3)
+    #expect(schema.text.contains(": (a && b)) { return 1 }"))
+    #expect(Set(schema.lines.values) == [1...1])
 }
