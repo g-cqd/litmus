@@ -33,7 +33,7 @@ litmus run . --project App.xcodeproj --scheme AppTests \
 An iOS-only package uses its Xcode scheme (omit `--project`), never host `swift test`.
 
 `run` options: `--jobs N` (default CPUs − 1), `--timeout S` (cap of the derived deadline, 300), `--timeout-factor F`
-(4), `--batch-size N` (64), `--harness automatic|swift-test`, `--no-fail-fast`, `--confirm-kills`, `--keep-workspace`,
+(4), `--batch-size N` (64), `--harness automatic|swift-test`, `--no-fail-fast`, `--kill-confirmation targeted|full|none` (targeted), `--keep-workspace`,
 `--swiftpm-build-system native|swiftbuild`, `--exclude-path GLOB`, `--config FILE`.
 
 ## How a run works
@@ -52,8 +52,10 @@ An iOS-only package uses its Xcode scheme (omit `--project`), never host `swift 
    reach. Unreached mutants are `noCoverage` and are not run.
 6. **Mutants, in parallel.** Built bundles run directly (no `swift test`, no `.build` lock), each mutant in a fresh
    process with its own markers and `TMPDIR`; Swift Testing stops at the first failing issue of its event stream.
-7. **Verdicts.** A failure counts only if the mutant's marker shows its code ran. Crashes and timeouts are rerun alone
-   (timeouts with twice the deadline). Every verdict is journalled (`results.journal`, protobuf frames, synced).
+7. **Verdicts.** A failure counts only if the mutant's marker shows its code ran, and by default only if the failing
+   tests, rerun alone, fail again and reach the mutant themselves and pass without it; each kill names its tests.
+   Crashes and timeouts are rerun alone after the parallel pass. Workers are sized from the suite's own parallelism.
+   Every verdict is journalled (`results.journal`, protobuf frames, synced).
 
 | Verdict | Meaning | Score |
 | --- | --- | --- |
@@ -72,6 +74,11 @@ a changed input makes the report degraded and exit `70`, never green. Formats: `
 score, policy, timings), `sarif` (2.1.0). `--only`/`--only-from` scope the report, not the run. `--strict` fails on
 survivors and no-coverage mutants (warnings); `unviable` is a note.
 Exit codes: `0` passed, `1` findings, `64` usage, `70` incomplete, stale or unresolved, `74` output, `78` configuration.
+
+## Sizing new operators
+
+`litmus census PATH` counts, from syntax alone, where 33 candidate operator kinds would apply in production code
+(`docs/research/2026-11-02-mutation-extent-and-thoroughness.md`). It builds and runs nothing.
 
 ## Configuration and suppression
 

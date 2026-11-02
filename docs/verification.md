@@ -73,3 +73,11 @@ execution**, active-ID forwarding or app-hosted testing. No simulator was booted
   verdicts by site, the direct harness, a 77.78% score, the strict gate, SARIF, protobuf and stale-test refusal.
 - Release build: fixture runs and read-only app planning as in `docs/performance.md`; the app worktree stayed clean.
 - Not verified: simulator execution (task t5), a full app run, `--confirm-kills` on real code.
+
+## Added after the fcheck pilot (2026-11-02)
+
+- 45 tests pass; the real fixture asserts each verdict, and each kill names its test, confirmed alone.
+- Four runs on fcheck (206 mutants) found and verified fixes for: reruns among workers, an external scratch directory,
+  oversubscribed workers, flow errors away from the mutant, and kills by an unrelated timing test.
+- Not verified: the whole-suite fallback for parameterized Swift Testing tests (28 of 175 kills in run 4 took it);
+  repeated runs to measure verdict stability under equal load.
