@@ -1,122 +1,93 @@
 # Litmus
 
-Evidence-led Swift mutation testing, inspired by `arcleak`, `deadwood`, `dolly`, `fcheck`, `modeler` and `analyzerkit`.
-Built on **analyzerkit, aemi, AemiJSON and AemiProtobuf**.
+Evidence-led mutation testing for Swift packages and Xcode projects, built in the style of `arcleak`, `deadwood`, `dolly`,
+`fcheck`, `modeler` and `analyzerkit`, on **analyzerkit, aemi, AemiJSON and AemiProtobuf**.
 
-**Status: initial implementation, not production-qualified, safety-certified or military-qualified.**
-High performance, resilience and reliability are design requirements; qualification claims need independent evidence.
-The CLI runs on **macOS 15+ with Swift 6.4**. A subject keeps its own deployment settings.
+**Status: 0.2.0-dev, not production-qualified, safety-certified or military-qualified.** Host Swift packages are
+verified end to end on a real fixture; the Xcode path builds for the iOS Simulator but has not run tests on one yet.
+The CLI needs macOS 15+ and Swift 6.4; a subject keeps its own settings.
 
 ## Build and test
 
 ```sh
 swift build --build-tests -j 4
 swift test --skip-build
-./scripts/smoke.sh       # real host-package mutation run; builds/runs a small fixture
+./scripts/smoke.sh       # real mutation run: killed, crashed, timeout, survived, noCoverage and unviable verdicts
 ```
 
-## Host-compatible Swift package
+## Use
 
 ```sh
-.build/debug/litmus plan /path/to/package --output /tmp/plan.json
-.build/debug/litmus run /path/to/package --trust-project --output /tmp/litmus-run-001
-.build/debug/litmus analyze /path/to/package --results /tmp/litmus-run-001/run.pb --format json --strict
+litmus plan /path/to/package --output plan.json            # syntax only; runs nothing
+litmus run /path/to/package --trust-project --output /tmp/litmus-run-001
+litmus analyze /path/to/package --results /tmp/litmus-run-001/run.pb --format json --strict
 ```
 
-The run directory must not exist and must be outside the source tree. It stores the copied workspace, build products,
-original/inactive controls, test evidence, bounded process logs and checkpointed `run.json`. A completed run also writes
-`run.pb`. The workspace is removed after completion unless `--keep-workspace`; failed runs retain it for diagnosis.
-Only the copy is rewritten. Litmus never edits the subject checkout. This is **not an OS sandbox**: manifests, plugins,
-scripts and tests execute arbitrary code. Use disposable restricted runners for untrusted PRs; do not expose secrets.
-
-## Xcode project or workspace
+Xcode project or workspace (run from the repository root that holds every local package):
 
 ```sh
-.build/debug/litmus run /path/to/repository \
-  --project 'App.xcodeproj' --scheme 'AppTests' \
-  --destination 'platform=iOS Simulator,id=YOUR-EXISTING-SIMULATOR-UDID' \
-  --trust-project --output /tmp/litmus-ios-001
+litmus run . --project App.xcodeproj --scheme AppTests \
+  --destination 'platform=iOS Simulator,id=EXISTING-UDID' --trust-project --output /tmp/litmus-ios-001
 ```
 
-`--project` also accepts a relative `.xcworkspace`. The root must contain all local dependencies.
-Litmus does not create, reset or shut down simulators. The explicit destination must be usable before running.
-Builds use `xcodebuild build-for-testing`, then `.xctestrun`-based `test-without-building`.
-**Actual iOS simulator execution remains an operational validation gate; see [verification](docs/verification.md).**
+An iOS-only package uses its Xcode scheme (omit `--project`), never host `swift test`.
 
-## iOS Swift package
+`run` options: `--jobs N` (default CPUs − 1), `--timeout S` (cap of the derived deadline, 300), `--timeout-factor F`
+(4), `--batch-size N` (64), `--harness automatic|swift-test`, `--no-fail-fast`, `--confirm-kills`, `--keep-workspace`,
+`--swiftpm-build-system native|swiftbuild`, `--exclude-path GLOB`, `--config FILE`.
 
-An iOS-only package must not be tested with host `swift test` and called “iOS tested”. Use its Xcode package scheme:
+## How a run works
 
-```sh
-.build/debug/litmus run /path/to/ios-package --scheme PackageScheme \
-  --destination 'platform=iOS Simulator,id=YOUR-EXISTING-SIMULATOR-UDID' \
-  --trust-project --output /tmp/litmus-package-ios-001
-```
+1. **Snapshot.** The subject is copied into a new run directory outside it (aemi `DirectoryWalk`, parallel SHA-256);
+   links and special files are refused. Only the copy is ever rewritten. This is not an OS sandbox: manifests, plugins,
+   scripts and tests run with your rights. Use a disposable restricted runner for untrusted code.
+2. **Plan.** Negated conditions, swapped ternaries and swapped `&&`/`||` (operands parenthesised), outside tests,
+   previews, debug-only code, generated code, files no target compiles, and macro arguments; every exclusion is noted.
+3. **Schema.** Each batch (64 sites, never nested ones) is rewritten once: every mutant gets a once-initialised
+   `@usableFromInline nonisolated` activation that records a marker the first time its code runs, so a site may be in a
+   view body, an initialiser, a public default argument or an `@inlinable` body. Mutants on the same expression share it.
+4. **Build and isolate.** One build per batch. A failing build is split by the compiler's errors (then by halves);
+   a mutant failing alone with an error on its own lines is `unviable`.
+5. **Control.** The inactive schema must pass with the baseline's counts; it also records which mutants the tests
+   reach. Unreached mutants are `noCoverage` and are not run.
+6. **Mutants, in parallel.** Built bundles run directly (no `swift test`, no `.build` lock), each mutant in a fresh
+   process with its own markers and `TMPDIR`; Swift Testing stops at the first failing issue of its event stream.
+7. **Verdicts.** A failure counts only if the mutant's marker shows its code ran. Crashes and timeouts are rerun alone
+   (timeouts with twice the deadline). Every verdict is journalled (`results.journal`, protobuf frames, synced).
 
-Omit `--project`: Xcode opens the package in the copied working directory. Supply both scheme and destination.
+| Verdict | Meaning | Score |
+| --- | --- | --- |
+| `killed`, `crashed`, `timeout` | Detected after the mutated code ran | detected |
+| `survived` | Every test passed after the mutated code ran | undetected |
+| `noCoverage` | No test reached the mutated code | undetected |
+| `unviable` | Does not compile alone | excluded |
+| `infrastructureError`, `notRun` | No trustworthy evidence | blocks the score and a green gate |
 
-## Mutation and verdict policy
-
-Initial operators: `negate-condition`, `swap-ternary`, `replace-logical`. Conditions are expression elements, not `if let`
-bindings or availability syntax. Test/generated/script/mock/preview/debug-only regions are excluded by fixed policy.
-Compiler conditions are not guessed from the host; the actual subject build validates each schema. Inactive clauses
-may still be in the plan: a survivor is not a claim of coverage, and no no-coverage category is inferred statically.
-
-Each conflict-free batch guards expression replacements with an immutable startup selector. Overlapping sites are in
-different batches. Each batch has its own inactive passing control. Each active mutant runs the full selected suite in a
-fresh test process. A failure is confirmed by another inactive control followed by another active run. Test counts must
-correspond to the baseline. Structured xUnit/xcresult evidence is required; build exit code alone cannot kill a mutant.
-
-`killed`, `survived`, `timeout`, `invalid`, `infrastructureError`, `notRun` are distinct. A failed schema build is unresolved
-infrastructure evidence, not an inferred kill or silent exclusion. There is no misleading combined score with unknown outcomes.
-The first version does not have per-test coverage mapping, persistent workers, multi-mutant execution, equivalence pruning,
-verdict-cache reuse, simulator pooling, sharding or auto-generated app CI integration.
+Score = detected ÷ (detected + undetected), as Stryker and swift-mutation-testing compute it.
 
 ## Reports and exit status
 
-`analyze --results` reports **historical** execution evidence; it does not rerun tests. It validates the artifact and all
-current copied input bytes (including tests, resources, settings and new files). Matching source is not a new execution,
-proof of artifact authenticity or proof of an unchanged external environment. Execution date/toolchain stay in the artifact.
-
-- `--format xcode|json|sarif`: family diagnostics, JSON envelope v1, SARIF 2.1.0.
-- `--relative-to ROOT`: relative paths; in this version it must be the subject root.
-- `--only FILE` / `--only-from FILE`: scope findings, never narrow execution. Incomplete execution still fails.
-- `--strict`: survivors (warning-severity findings) fail the gate.
-- `0`: complete execution / reporting gate passed. `run` preserves survivors for a separate reporting policy.
-- `1`: report findings fail the gate. `64`: usage. `70`: incomplete/stale/unresolved execution or rejected evidence.
-  `74`: requested output failed. `78`: invalid configuration.
-
-Stdout carries one machine-readable object; stderr carries diagnostics. No missing result is treated as a clean report.
-`--help` is the authoritative implemented surface; full analyzer-family flag parity is future integration work.
+`analyze --results` reports historical evidence and re-hashes every input (tests, resources and settings included):
+a changed input makes the report degraded and exit `70`, never green. Formats: `xcode`, `json` (family envelope v1,
+score, policy, timings), `sarif` (2.1.0). `--only`/`--only-from` scope the report, not the run. `--strict` fails on
+survivors and no-coverage mutants (warnings); `unviable` is a note.
+Exit codes: `0` passed, `1` findings, `64` usage, `70` incomplete, stale or unresolved, `74` output, `78` configuration.
 
 ## Configuration and suppression
 
-`.litmus.json` accepts `{ "exclude": ["**/Generated/**"] }`. `--config` names a file explicitly; repeat `--exclude-path`
-to add globs/substrings. analyzerkit also reads existing shared top-level exclusions. Its pinned closed tool registry does
-not yet accept a `litmus` section in `.swift-analyzers.json`. Unsupported region/define/platform overrides are rejected
-rather than pretending to reproduce build settings. Baseline-writing/reading CLI flags are not yet implemented.
+`.litmus.json`: `{ "exclude": ["**/Generated/**"] }`. `// @lm:accept:next swap-ternary -- reason` suppresses a site;
+it stays listed in the plan. A `litmus` section in `.swift-analyzers.json` waits for analyzerkit (AK-5).
 
-```swift
-// @lm:accept:next swap-ternary -- deliberately equivalent domain cases
-let label = flag ? "same" : "same"
-```
+## Performance
 
-The family directive grammar also supports `accept`, `accept:this`, `disable`, `enable` and the `litmus:` namespace.
-Suppression leaves sites in `plan.suppressed`, not silently erased evidence. Exclusion and suppression are policy, not proof
-that a mutant is equivalent. The report's `suppressed` list is reserved for diagnostic baselines; see the plan for source directives.
+Measured, one run each, same machine (`docs/performance.md`): on the 10-mutant fixture Litmus takes 30–38 s and
+swift-mutation-testing 1.6.4 takes 136 s (3.6–4.5×), with the same 77.8% score. On the reference app's 4152 mutants Litmus needs
+18–66 schema builds where swift-mutation-testing needs more than 1832. No tool can be "thousands of times" faster than
+another one that runs the same tests: test time is the floor; the gains come from fewer builds and fewer, shorter runs.
 
 ## Engineering record
 
-- [White paper](development/WHITE-PAPER.md): purpose, reliability requirements, threat model and architecture.
-- [ADRs](development/adr): assurance, dependencies, source isolation/execution and bounded schemas.
-- [Diary](development/diary): observations, failures and verification history.
-- [Assurance/verification](docs/verification.md): requirements, tests and remaining gaps.
-- [Investigation](docs/investigation.md): evidence and corrections to the preliminary report.
-
-The package name is provisional; no remote availability or publication claim is made.
-
-### SwiftPM result transport
-
-The SwiftPM driver uses `--parallel --num-workers 1` to obtain structured XCTest XML, and consumes Swift Testing's separate
-`NAME-swift-testing.xml` file as well. A fresh full-suite invocation can therefore spawn multiple XCTest child processes.
-That overhead is an explicit performance limitation of this initial host-package driver, not a claim of one test-host launch.
+[White paper](development/WHITE-PAPER.md) · [ADRs](development/adr) · [Diary](development/diary) ·
+[Verification](docs/verification.md) · [Performance](docs/performance.md) ·
+[Upstream recommendations](docs/upstream-recommendations.md) · [Session review](docs/reviews/2026-11-02-session-review.md) ·
+[Investigation](docs/investigation.md) · [Security](SECURITY.md)

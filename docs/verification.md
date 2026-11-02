@@ -10,14 +10,14 @@ The package is new local work on `main`; no upstream merge/rebase applies and no
 | R-01 Original source preservation | Snapshot integration tests; real smoke source SHA comparison | No OS sandbox; adversarial local filesystem races and malicious scripts outside contract |
 | R-02 Honest verdicts | Process-status/count classifier; malformed XML and xcresult tests | Assertion identity/repeated identical failure signatures need stronger matching |
 | R-03 Baseline validity | Failed baseline checkpoint test; inactive-schema run | Actual Xcode simulator baseline unverified |
-| R-04 Confirmed kills | Injected runner records inactive/active/control/active sequence; real fixture | Flakiness cannot be eliminated by finite repetitions |
+| R-04 Activation evidence | Injected runner: kill needs the marker; failure without it rerun and kept unresolved; crash and timeout reruns with doubled deadline; real fixture asserts each verdict | Flaky failures that coincide with activation count unless `--confirm-kills` |
 | R-05 Explicit uncertainty | Missing/zero tests, process failure, incomplete artifact tests; exit70 policy | Process timeout/fault-injection matrix not exhaustive |
 | R-06 Reconciliation | IDs/ranges/hashes/overlap tests; artifact model reconciliation | Independent proof or exhaustive model checking not performed |
 | R-07 Bounds | Bounded reader/wire/XML/process APIs; malformed/truncated/duplicate wire tests | Fuzz campaign and all resource-limit boundary tests still required |
 | R-08 Provenance | Full snapshot inventory, SHA-256, source-staleness smoke | External environment/dependencies not embedded; no signatures; historical evidence only |
 | R-09 Process supervision | analyzerkit BoundedProcess; no shell argv; explicit trust flag | Simulator services outside process group; credentials/VM isolation is operator responsibility |
 | R-10 Determinism | Repeated discovery and UTF8 byte-range tests | Cross-toolchain/host determinism not established |
-| R-11 Conservative selection | Full suite, no static coverage inference | Per-test mapping intentionally absent |
+| R-11 Observed coverage only | Unreached-in-control mutants are `noCoverage` without a run (unit and real fixture) | Coverage observed in one control run: nondeterministic reachability is not modelled |
 | R-12 Honest denominator | No equivalent/static-dead/clone pruning; explicit unresolved outcomes | No score policy qualification; semantic equivalent mutants remain |
 
 ## Not yet qualified
@@ -64,3 +64,12 @@ The retained full smoke in Public precedes this formatting-only delta; `docs/evi
 succeeded** for `generic/platform=iOS Simulator`, producing a real `.xctestrun`; a copy is in `docs/evidence` and the
 full build log is in Public evidence. This validates package discovery and the Xcode build stage, **not simulator test
 execution**, active-ID forwarding or app-hosted testing. No simulator was booted for these checks.
+
+## Verified for 0.2.0-dev (2026-11-02)
+
+- Debug build with strict concurrency, strict memory safety and warnings as errors; **39 tests passed**
+  (`docs/evidence` is from 0.1; the 0.2 report is in `~/Public/Litmus-Implementation-Evidence/v0.2-2026-11-02`).
+- `scripts/smoke.sh` on the real fixture asserts **killed, crashed, timeout, survived, noCoverage and unviable**
+  verdicts by site, the direct harness, a 77.78% score, the strict gate, SARIF, protobuf and stale-test refusal.
+- Release build: fixture runs and read-only app planning as in `docs/performance.md`; the app worktree stayed clean.
+- Not verified: simulator execution (task t5), a full app run, `--confirm-kills` on real code.

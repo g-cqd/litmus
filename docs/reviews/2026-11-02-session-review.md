@@ -63,6 +63,12 @@ Litmus lacks, and Litmus' confirmation runs cost up to three full-suite runs per
 
 ## 4. Defects found in Litmus during this review (confirmed by probes)
 
+**Status (0.2.0-dev, same day): all eight fixed**: D1 parenthesised operands; D2/D3 once-initialised
+`@usableFromInline nonisolated` activations placed before top-level code; D4 diagnostic-guided isolation of unviable
+mutants; D5/D6 crash and timeout verdicts with reruns and derived deadlines; D7 activation markers and `noCoverage`;
+D8 direct parallel bundles with Swift Testing fail-fast. A further defect found while fixing them (coloured compiler
+diagnostics defeated the attribution) is fixed and tested. See ADR 0005 and `docs/performance.md`.
+
 | Id | Defect | Consequence | Probe |
 | --- | --- | --- | --- |
 | D1 | `replace-logical` rewrites by text without parentheses: the outer `||` of `a \|\| b \|\| c` becomes `a \|\| b && c`, i.e. `a \|\| (b && c)` | A different mutant than the one reported; wrong attribution | `/tmp/lp/prec.swift`: replacement `true`, intended `false` |
