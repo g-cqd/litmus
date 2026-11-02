@@ -50,6 +50,25 @@ import json,sys
 r=json.load(open(sys.argv[1])); assert r['version']=='2.1.0'
 assert r['runs'][0]['invocations'][0]['executionSuccessful']
 PY
+# The pull-request gate (ADR 0007): a base-branch baseline holds today's survivors, so nothing is new; an empty one
+# makes every survivor new. Markdown summary and Stryker's schema render from the same run.
+"$BIN" analyze "$WORK/subject" --results "$WORK/run/run.pb" --write-baseline "$WORK/base.json" 2> /dev/null
+"$BIN" analyze "$WORK/subject" --results "$WORK/run/run.pb" --baseline "$WORK/base.json" --gate new-survivors --format markdown > "$WORK/summary.md"
+printf '{"fingerprints":[],"tool":"litmus","version":1}' > "$WORK/empty.json"
+set +e
+"$BIN" analyze "$WORK/subject" --results "$WORK/run/run.pb" --baseline "$WORK/empty.json" --gate new-survivors > /dev/null 2>&1
+STATUS=$?
+set -e
+[[ "$STATUS" == 1 ]]
+"$BIN" analyze "$WORK/subject" --results "$WORK/run/run.pb" --format stryker > "$WORK/stryker.json" 2> /dev/null
+python3 - "$WORK/summary.md" "$WORK/stryker.json" <<'PY2'
+import json,sys
+md=open(sys.argv[1]).read(); st=json.load(open(sys.argv[2]))
+assert md.startswith('## Litmus mutation testing') and '**Score 77.78 %**' in md, md[:300]
+statuses=sorted(m['status'] for f in st['files'].values() for m in f['mutants'])
+assert st['schemaVersion']=='2' and statuses.count('Killed')==5 and 'RuntimeError' in statuses and 'CompileError' in statuses, statuses
+print('gate, Markdown and Stryker reports: baseline holds today\'s survivors; an empty one fails')
+PY2
 printf '\n// changed after execution\n' >> "$WORK/subject/Tests/ExampleTests/DecisionsTests.swift"
 set +e
 "$BIN" analyze "$WORK/subject" --results "$WORK/run/run.json" --format json > "$WORK/stale.json"
@@ -180,4 +199,4 @@ if [[ -n "${LITMUS_EVIDENCE_DIR:-}" ]]; then
   cp "$WORK/plan.json" "$WORK/report.json" "$WORK/report.sarif" "$WORK/stale.json" "$LITMUS_EVIDENCE_DIR/"
   cp "$WORK/run/"*.json "$WORK/run/"*.pb "$WORK/run/"*.xml "$WORK/run/"*.log "$LITMUS_EVIDENCE_DIR/run/"
 fi
-printf 'Smoke passed: real kill, crash, timeout, survivor, no coverage and unviable verdicts, original-source preservation, JSON/protobuf/SARIF, strict gate, stale-test refusal, pull-request scope and fast path, budget, resume and result store, in-place and persistent workspaces, per-test reach selection and reuse, flaky-test exclusion, clean interruption.\n'
+printf 'Smoke passed: real kill, crash, timeout, survivor, no coverage and unviable verdicts, original-source preservation, JSON/protobuf/SARIF/Markdown/Stryker, strict and new-survivor gates, stale-test refusal, pull-request scope and fast path, budget, resume and result store, in-place and persistent workspaces, per-test reach selection and reuse, flaky-test exclusion, clean interruption.\n'

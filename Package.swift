@@ -54,6 +54,7 @@ let package = Package(
             dependencies: [
                 "LitmusCore", .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "AnalyzerCLI", package: "analyzerkit"),
+                .product(name: "ReportSupport", package: "analyzerkit"),
             ],
             swiftSettings: strict
         ),
