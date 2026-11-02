@@ -1,63 +1,71 @@
-# Recommended amendments to analyzerkit, aemi, AemiJSON and AemiProtobuf
+# Upstream amendments to aemi, AemiJSON, AemiProtobuf and analyzerkit: status
 
-Litmus 0.2.0-dev pins analyzerkit `fb3f5d6`, aemi `921fd8d`, AemiJSON `172164f` and AemiProtobuf `418182e`. It uses
-them wherever they fit (table at the end) and works around eleven gaps locally. Each recommendation below names
-the gap, what Litmus does meanwhile, and the evidence. None of these repositories was modified.
+Litmus 0.2.0-dev first worked around 21 gaps in its dependencies. On 2026-11-02 they were implemented upstream and
+adopted here (ADR 0006). Revisions now pinned:
 
-Priority: **P1** blocks a correctness or reliability property in Litmus or another analyzer; **P2** removes duplicated
-code or a measurable cost; **P3** is a convenience.
+| Package | Revision | Record |
+| --- | --- | --- |
+| aemi | `6ed7fb7` | aemi ADR 0028, diary 2026-11-02-01 |
+| AemiRegex | `cc7deea` | pin only |
+| AemiJSON | `25f59b9` | diary 2026-11-02-01 |
+| AemiProtobuf | `edede35` | pin only |
+| analyzerkit | `d684d7d` | analyzerkit ADR-0030, diary 2026-11-02-01 |
 
-## analyzerkit
-
-| Id | Pri | Component | Gap | Litmus meanwhile | Recommended change |
-| --- | --- | --- | --- | --- | --- |
-| AK-1 | P1 | `IndexStoreSupport.BoundedProcess` | No way to stop a child on a condition seen while it runs, and no streaming of its output | Races the process against a task that polls the Swift Testing event file, then cancels the task, so `BoundedProcess` tears down the process group (`Harness.swift`, `runWatching`) | `run(…, monitor:)` taking an async closure over output chunks, or returning an `AsyncSequence` of chunks with an explicit `terminate()`; documented TERM/KILL semantics either way |
-| AK-2 | P1 | `BoundedProcess.Result` | A signal is reported as `128 + signal` in `exitStatus`, so a crash cannot be told from a program that exits 134 itself | Treats `exitStatus ≥ 128` from `xctest` as a crash, a documented ambiguity | Add `terminationSignal: Int32?` beside `exitStatus` (the information exists in `waitpid`) |
-| AK-3 | P2 | `BoundedProcess.allowedEnvironmentKeys` | A closed allow-list that drops `DEVELOPER_DIR`, `DYLD_*` and `TOOLCHAINS`; every tool that runs Xcode tools re-adds them | Re-adds `DEVELOPER_DIR` and sets `DYLD_FRAMEWORK_PATH` and `DYLD_LIBRARY_PATH` explicitly (`subjectEnvironment`) | An `EnvironmentPolicy` value: `.scrubbed`, `.toolchain` (adds `DEVELOPER_DIR`, `TOOLCHAINS`, `SDKROOT`), `.scrubbed(adding:)`, so the intent is visible at call sites |
-| AK-4 | P2 | `BoundedProcess.Result` | No resource usage of the child | Measures wall time only | Return `rusage` of the child (user and system CPU, maximum RSS): per-mutant cost accounting and memory budgets |
-| AK-5 | P1 | `AnalyzerConfiguration.SharedConfiguration` | `toolNames` is a closed set of five tools, so `.swift-analyzers.json` rejects a `litmus` section | Reads only `.litmus.json` and the shared top-level keys | Always accept the section of the calling `Tool`, and keep rejecting unknown sections only for tools that registered |
-| AK-6 | P1 | `ReportSupport.ToolReportFormat.format` | JSON encoding failure returns `"{}"`, a report that looks empty and clean | Renders JSON and SARIF itself with a throwing AemiJSON encoder (`LitmusReportFormat.render`) | A throwing `format`; the non-throwing one deprecated |
-| AK-7 | P2 | `ReportSupport.Fingerprint` | FNV-1a over rule, path, **line and column**: an edit above a finding renews its fingerprint | Mutant ids hash path, byte range, operator and text; report fingerprints stay line-based | An optional content-anchored fingerprint: rule, path, enclosing declaration, normalised text, ordinal within the declaration (ADR-0009/0015 change) |
-| AK-8 | P2 | `ProjectModel.ProjectClassification` | Knows which target compiles a file, but not which **test** targets depend on that target, nor scheme or test-plan membership | Uses the provenance only to skip files no target compiles (`.convention(.unclaimed)`) | `testTargets(covering path:)` from manifests and `project.pbxproj` dependencies, and scheme/test-plan reading: lets a mutation tool, deadwood and swift-search pick test targets without a build |
-| AK-9 | P2 | `ProjectModel.CompilationConditions` | Host `os()` only, fixed Swift and compiler versions, `canImport` not modelled | Mutates every clause; a site in an inactive clause ends as `noCoverage`, reported but never built in | Per-target conditions from build settings (`SWIFT_ACTIVE_COMPILATION_CONDITIONS`, `SDKROOT`, platform) and `canImport` from the SDK's module list |
-| AK-10 | P2 | `SourceCorpus` | No bounded, link-refusing copy of a tree with content identity | `WorkspaceSnapshot` on aemi's `DirectoryWalk`, `BoundedFileReader` and SHA-256 | A `TreeSnapshot` primitive (copy, inventory, SHA-256 manifest, verification), reusable by deadwood's index-store builds in an isolated copy |
-| AK-11 | P3 | `ProjectModel.CodeRegionScanner` | Line spans only; a site on a line shared with a preview is excluded whole | Excludes by line | Byte ranges beside the lines |
+The six family analyzers (arcleak, deadwood, dolly, fcheck, modeler, swift-search) were built and tested against these
+revisions without a source change.
 
 ## aemi
 
-| Id | Pri | Component | Gap | Litmus meanwhile | Recommended change |
-| --- | --- | --- | --- | --- | --- |
-| AE-1 | P1 | `AemiIO.PosixFile` | Only `pread`/`pwrite` over raw buffer pointers; a strict-memory-safety client must write `unsafe` | One audited `unsafe pwrite` in `ResultJournal.append` | Safe `write(_ bytes: [UInt8], at:)`, `read(at:count:) -> [UInt8]`, and `RawSpan`/`OutputSpan` overloads |
-| AE-2 | P1 | `AemiIO` | No durable atomic replace (temporary file, `fsync`, `rename`, `fsync` of the directory) and no `O_EXCL` creation | Foundation `.atomic` (no directory sync) for checkpoints; `ResultJournal` refuses an existing file by a racy existence check | `PosixFile.Mode.create(exclusive:)` and `AtomicFile.replace(at:with:durability:)` |
-| AE-3 | P2 | `AemiIO` | No copy-on-write copy (`clonefile`, `copyfile(COPYFILE_CLONE)`) | Reads and writes every byte of the snapshot | `PosixFile.clone(from:to:)` with a fallback copy; snapshot cost on APFS becomes metadata-only |
-| AE-4 | P2 | `AemiFileSystem.DirectoryWalk.Policy.isCancelled` | Called on walker threads, where `Task.isCancelled` reads the wrong task, so passing it silently never cancels | Checks cancellation before the walk only | Accept a cancellation token (`Atomic<Bool>` or a `Task` handle captured by the caller) and document that the predicate runs off-task |
-| AE-5 | P2 | `AemiRuntime.mapConcurrently` | Returns all results at the end | Journals verdicts after each batch's parallel pass: a crash loses at most one batch's verdicts, not their evidence | An unordered streaming variant (`AsyncThrowingStream` of `(index, result)`) with the same bound and cancellation |
-| AE-6 | P3 | `AemiRuntime.ResourcePool` | The factory is `init?(path:)`; `checkout` returns nil when drained | `WorkerSlot: PooledResource` creates a directory from the path; the pool is sized to the concurrency limit so it never drains | A closure factory and an `async` checkout that waits |
-| AE-7 | P2 | `AemiMetrics.ProcessProbe` | Measures the current process only | Reports wall time per phase and per mutant | Children's resource usage (`RUSAGE_CHILDREN`) for CPU-time accounting of test runs |
-| AE-8 | P3 | `AemiKernel` | Fast identity hashes (XXH64, wyhash) but no cryptographic digest, so Linux builds need another package | CryptoKit SHA-256 (Apple only) | Re-export swift-crypto's SHA-256 behind a `ContentDigest` protocol rather than implementing one |
+| Id | Change | Litmus now |
+| --- | --- | --- |
+| AE-1 | `PosixFile.write(_:at:)`, `read(at:count:)` over `[UInt8]` | the journal has no `unsafe` |
+| AE-2 | `PosixFile(creatingExclusively:)`, `AtomicFile.replace` (sync, rename, directory sync) | journal created with `O_EXCL`; checkpoints durable |
+| AE-3 | `FileCopy.copy` (`clonefile`, else read and write) | snapshots clone on APFS (through `TreeSnapshot`) |
+| AE-4 | `DirectoryWalk.cancellableWalk`; `isCancelled` documented as off-task | uses `TreeSnapshot` |
+| AE-5 | `forEachConcurrently` (results in completion order, on the caller's task) | each first-run verdict journalled as it comes |
+| AE-6 | `ResourcePool` over any `Sendable`, factory init, `async acquire()` | worker slots from a factory; runs wait for one |
+| AE-7 | `ProcessProbe.childrenCPUNanos()` | `ChildUsage` delegates to it |
+| AE-8 | `ContentDigest.sha256` (CommonCrypto, or portable FIPS 180-4) | no CryptoKit |
+| AE-9 | `AemiProcess.ProcessTable` (sessions, start times, environments, live usage) | used by analyzerkit's cleanup and watchdog |
 
 ## AemiJSON and AemiProtobuf
 
-| Id | Pri | Component | Gap | Litmus meanwhile | Recommended change |
-| --- | --- | --- | --- | --- | --- |
-| AJ-1 | P2 | AemiJSON | No incremental JSON Lines reader that keeps a partial last line | `TestEvidence.swiftTestingEvents` splits lines and parses each with the lazy tape | `AemiJSON.lines(_ bytes:) -> (documents, consumed)` and an `AsyncSequence` over a growing file |
-| AP-1 | P2 | AemiProtobufCore | No length-delimited message stream (`writeDelimited`/`readDelimited`) | `ResultJournal` writes and reads varint frames by hand, and reports a truncated last frame | Framed stream reader and writer with a truncation result, not an error |
-| AP-2 | P3 | AemiProtobuf | Artifacts are Codable structures with enums, optionals and nested arrays | The protobuf envelope carries AemiJSON bytes plus a SHA-256 | `@ProtoMessage` coverage of these shapes, so journal records become native messages (smaller, no JSON parse on read) |
+| Id | Change | Litmus now |
+| --- | --- | --- |
+| AJ-1 | `ndjsonCompleteLines` keeps a growing file's partial last line | its own event scanner already kept it; unchanged |
+| AP-1 | none needed: `FrameEncoder`/`FrameDecoder` existed (earlier claim withdrawn) | journal frames through them |
+| AP-2 | none needed: `@ProtoMessage` covers these shapes (earlier claim withdrawn) | journal records are native messages (version 2; version 1 read) |
 
-## What Litmus already takes from them
+## analyzerkit
 
-| Need | Provided by |
-| --- | --- |
-| Discovery, canonical paths, path filters, bounded reads, line index, large-stack parsing, syntax-depth guard | analyzerkit `SourceCorpus`, `ProjectModel` (`SyntaxDepth`) |
-| Project layout, file classification and target provenance, regions, test and generated-code conventions | analyzerkit `ProjectModel` |
-| Suppression comments (`// @lm:accept …`) | analyzerkit `Suppression` |
-| Process supervision (session, deadline, TERM/KILL, output caps, scrubbed environment) | analyzerkit `IndexStoreSupport.BoundedProcess` |
-| Report envelope, SARIF model and columns, Xcode diagnostics, fingerprints, exit statuses, CLI option groups | analyzerkit `ReportSupport`, `AnalyzerCLI` |
-| Shared configuration keys and validation | analyzerkit `AnalyzerConfiguration` |
-| Snapshot and inventory walk (no link followed, bounded, parallel) | aemi `AemiFileSystem.DirectoryWalk` |
-| Bounded parallel hashing, copying, planning and mutant execution | aemi `AemiRuntime.mapConcurrently` |
-| Worker slots | aemi `AemiRuntime.ResourcePool` |
-| Journal writes with an ordering barrier | aemi `AemiIO.PosixFile`, `DurabilityProfile.barrier` |
-| Mutant identities (XXH64) and hexadecimal digests | aemi `AemiKernel` |
-| Artifacts, configuration, event-stream parsing (lazy tape), I-JSON decoding | AemiJSON |
-| Artifact envelope and verdict journal frames | AemiProtobufCore `WireWriter`/`WireReader` |
+| Id | Change | Litmus now |
+| --- | --- | --- |
+| AK-1 | `run(…, monitor:)` with `ProcessControl.stop(reason:)` | fail-fast is a monitor, not a task race |
+| AK-2 | `Result.terminationSignal` | a crash is a signal, not a status ≥ 128 |
+| AK-3 | `EnvironmentPolicy` (`.toolchain`) | `DEVELOPER_DIR` kept by policy |
+| AK-4 | sampled session usage and a memory limit; exact per-child usage waits on swift-subprocess#226 | `--memory-limit` (4096 MiB) |
+| AK-5 | `litmus` known; unknown tools' sections accepted and listed | reads its section of `.swift-analyzers.json` |
+| AK-6 | `formatChecked` throws | (Litmus already rendered with a throwing encoder) |
+| AK-7 | `Fingerprint.anchored`, beside the first in SARIF | not yet used by Litmus' report |
+| AK-8 | `testTargets(covering:)`, `XcodeSchemeReader` | per-mutant test-target selection |
+| AK-9 | `ModuleAwareBuildConfiguration`, `sdkModules`, `CompilerConfiguration.read` | not yet used for planning |
+| AK-10 | `TreeSnapshot` | `WorkspaceSnapshot` is built on it |
+| AK-11 | `RegionSpan.bytes`, `region(atByte:line:in:)` | not yet used for planning |
+| AK-12 | cleanup of the child's session and token holders, pid reuse handled | trampoline and `ProcessReaper` removed |
+| AK-13 | `TerminationSignals.run` | SIGINT/SIGTERM end a run cleanly (exit 128 + signal) |
+| AK-14 | deadlines on the suspending clock | a sleeping machine does not time tests out |
+| AK-15 | session-only spawn documented (avoids swift-subprocess#382) | — |
+| new | `Options.priority` (Darwin quality of service) | `--background` |
+
+## Waiting on swift-subprocess
+
+- **#226** (open): `ExecutionResult.resourceUsage`, exact per-child usage. Meanwhile usage is sampled every 100 ms
+  (1.3 ms per sample, no measurable cost on a 1.5–2.5 s child).
+- **#371** (open): a stopped child read as exited on macOS 26/27. Not reproduced here (macOS 27.0.1); the session
+  cleanup ends such a child regardless.
+- **#382** (open): descriptors leak on the fork fallback, which a session alone never takes.
+
+## Not used yet
+
+AK-7 (anchored fingerprints in Litmus' SARIF), AK-9 (skip clauses no target compiles) and AK-11 (byte-exact preview
+exclusion) are available and planned (roadmap 0001).
