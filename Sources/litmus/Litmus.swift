@@ -189,6 +189,23 @@ private struct Run: AsyncParsableCommand {
     var noTestTargetSelection = false
     @Flag(help: "Record which Swift Testing tests reach which mutants, running each test alone per schema (slow).")
     var perTestReach = false
+    @Option(help: "Seconds after which no schema build or first run starts; what did not run is reported, exit 0.")
+    var budget: Int?
+    @Option(help: "Run at most this many mutants, changed lines first; the rest are reported as not run.")
+    var maxMutants: Int?
+    @Flag(help: "Build and test the unmutated subject first, instead of using the first schema's inactive run.")
+    var unmutatedBaseline = false
+    @Option(
+        help: "Result store directory (outside the root): verdicts reused when their key matches, stored as decided."
+    )
+    var resultStore: String?
+    @Flag(help: "Read the result store, never write it (untrusted pull requests).") var storeReadOnly = false
+    @Option(help: "Result store size bound in MiB; least recently used records are evicted past it.")
+    var storeLimit: Int = 1024
+    @Option(help: "Reuse keys: closure (sound: every input of the package and its local dependencies) or declaration.")
+    var reuse: String = "closure"
+    @Option(help: "Reuse the decided verdicts of an earlier run directory whose keys still match.")
+    var resume: String?
     mutating func run() async throws {
         guard trustProject else {
             throw ValidationError(
@@ -217,6 +234,20 @@ private struct Run: AsyncParsableCommand {
         options.suiteWidth = suiteWidth
         options.selectTestTargets = !noTestTargetSelection
         options.perTestReach = perTestReach
+        options.budgetSeconds = budget
+        options.maxMutants = maxMutants
+        options.inactiveSchemaBaseline = !unmutatedBaseline
+        options.resultStore = resultStore
+        options.storeReadOnly = storeReadOnly
+        options.storeLimitMiB = storeLimit
+        options.resume = resume
+        guard let mode = ReuseContext.Mode(rawValue: reuse) else {
+            throw ValidationError("reuse must be closure or declaration")
+        }
+        guard mode == .closure || (change.diff == nil && change.diffBase == nil) else {
+            throw ValidationError("--reuse declaration is for whole-subject (nightly) runs, not --diff/--diff-base")
+        }
+        options.reuseMode = mode
         guard swiftpmBuildSystem.map({ ["native", "swiftbuild"].contains($0) }) ?? true else {
             throw ValidationError("swiftpm-build-system must be native or swiftbuild")
         }
@@ -270,6 +301,12 @@ private struct Run: AsyncParsableCommand {
             "litmus: \(artifact.results.count) mutants: \(summary.joined(separator: ", ")); score \(score); "
                 + "\(((artifact.timings["total"] ?? 0) * 10).rounded() / 10) s; evidence at \(output)/run.json"
         )
+        if let reused = artifact.reuse, reused.resumed + reused.fromStore > 0 {
+            stderr("litmus: \(reused.resumed + reused.fromStore) verdict(s) reused (\(reused.mode.rawValue) keys)")
+        }
+        if let budget = artifact.budget, let stopped = budget.stoppedBy {
+            stderr("litmus: \(budget.untested.count) mutant(s) not run: the \(stopped) limit was reached")
+        }
         if let cost = artifact.cost {
             stderr(
                 "litmus: cost: \(cost.builds) build(s), \(cost.testRuns) test run(s), CPU \(cost.childCPUSeconds) s "
