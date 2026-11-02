@@ -42,7 +42,8 @@ public enum MutationPlanner {
         let context = SiteContext(
             path: path,
             fingerprint: Digest.sha256(Array(source.utf8)),
-            converter: SourceLocationConverter(fileName: path, tree: tree)
+            converter: SourceLocationConverter(fileName: path, tree: tree),
+            anchors: Anchors(fileText: tree.description)
         )
         let visitor = Sites(context)
         visitor.walk(tree)
@@ -182,6 +183,53 @@ private struct SiteContext {
     let path: String
     let fingerprint: String
     let converter: SourceLocationConverter
+    let anchors: Anchors
+}
+
+/// The enclosing declarations of the walk, and how many identical sites each has had: what anchors a mutant's
+/// identity to the code (ADR 0007) rather than to byte offsets, which every edit above it would change.
+private final class Anchors {
+    struct Declaration {
+        let name: String
+        /// Named code whose text a mutant's verdict can depend on (function, initializer, accessor, property...); a
+        /// type or an extension only names its members.
+        let isBody: Bool
+        let text: String
+    }
+    private(set) var stack: [Declaration] = []
+    private var ordinals: [String: Int] = [:]
+    private let fileText: String
+
+    init(fileText: String) { self.fileText = fileText }
+
+    func push(_ name: String, isBody: Bool, _ node: some SyntaxProtocol) {
+        stack.append(Declaration(name: name, isBody: isBody, text: isBody ? node.trimmedDescription : ""))
+    }
+    func pop() { stack.removeLast() }
+
+    /// `Type.method(_:label:)` for the current position; empty at file scope.
+    var path: String { stack.map(\.name).joined(separator: ".") }
+
+    /// The whitespace-normalised text of the outermost body declaration (the member: a local function or variable is
+    /// part of it), or of the file at file scope.
+    var bodyText: String { normalized(stack.first(where: \.isBody)?.text ?? fileText) }
+
+    /// The ordinal of the next site with this key, counting from 0.
+    func ordinal(_ key: String) -> Int {
+        defer { ordinals[key, default: 0] += 1 }
+        return ordinals[key, default: 0]
+    }
+}
+
+/// `text` with every run of whitespace replaced by one space, and none at either end (analyzerkit's anchored
+/// fingerprint normalisation).
+func normalized(_ text: String) -> String {
+    text.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r" }).joined(separator: " ")
+}
+
+/// A function-like declaration's name with its argument labels: `name(_:label:)`.
+private func signature(_ name: String, _ parameters: FunctionParameterListSyntax) -> String {
+    name + "(" + parameters.map { ($0.firstName.text) + ":" }.joined() + ")"
 }
 
 private final class Sites: SyntaxVisitor {
@@ -199,7 +247,13 @@ private final class Sites: SyntaxVisitor {
         let end = expression.endPositionBeforeTrailingTrivia.utf8Offset
         let original = expression.trimmedDescription
         let location = context.converter.location(for: expression.positionAfterSkippingLeadingTrivia)
-        let key = "\(context.path)\u{0}\(start)\u{0}\(end)\u{0}\(operatorID.rawValue)\u{0}\(original)"
+        // Anchored identity: the path, the enclosing declaration, the operator, the site's normalised text and
+        // replacement, and which identical site of the declaration it is. Lines added above leave it unchanged.
+        let declaration = context.anchors.path
+        let anchor =
+            "\(context.path)\u{0}\(declaration)\u{0}\(operatorID.rawValue)\u{0}\(normalized(original))\u{0}"
+            + normalized(replacement)
+        let key = anchor + "\u{0}\(context.anchors.ordinal(anchor))"
         let hash = String(XXH64.hash(Array(key.utf8)), radix: 16)
         let id = String(repeating: "0", count: 16 - hash.count) + hash
         sites.append(
@@ -213,9 +267,61 @@ private final class Sites: SyntaxVisitor {
                 end: end,
                 original: original,
                 replacement: replacement,
-                sourceFingerprint: context.fingerprint
+                sourceFingerprint: context.fingerprint,
+                declaration: declaration,
+                declarationDigest: Digest.sha256(Array(context.anchors.bodyText.utf8))
             )
         )
+    }
+
+    // Declarations, for anchored identities: pushed on the way in, popped on the way out.
+    override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind { enter(node.name.text, node) }
+    override func visitPost(_ node: StructDeclSyntax) { context.anchors.pop() }
+    override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind { enter(node.name.text, node) }
+    override func visitPost(_ node: ClassDeclSyntax) { context.anchors.pop() }
+    override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind { enter(node.name.text, node) }
+    override func visitPost(_ node: EnumDeclSyntax) { context.anchors.pop() }
+    override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind { enter(node.name.text, node) }
+    override func visitPost(_ node: ActorDeclSyntax) { context.anchors.pop() }
+    override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind { enter(node.name.text, node) }
+    override func visitPost(_ node: ProtocolDeclSyntax) { context.anchors.pop() }
+    override func visit(_ node: ExtensionDeclSyntax) -> SyntaxVisitorContinueKind {
+        enter(normalized(node.extendedType.trimmedDescription), node)
+    }
+    override func visitPost(_ node: ExtensionDeclSyntax) { context.anchors.pop() }
+    override func visit(_ node: FunctionDeclSyntax) -> SyntaxVisitorContinueKind {
+        enter(signature(node.name.text, node.signature.parameterClause.parameters), node, body: true)
+    }
+    override func visitPost(_ node: FunctionDeclSyntax) { context.anchors.pop() }
+    override func visit(_ node: InitializerDeclSyntax) -> SyntaxVisitorContinueKind {
+        enter(
+            signature("init" + (node.optionalMark?.text ?? ""), node.signature.parameterClause.parameters),
+            node,
+            body: true
+        )
+    }
+    override func visitPost(_ node: InitializerDeclSyntax) { context.anchors.pop() }
+    override func visit(_ node: DeinitializerDeclSyntax) -> SyntaxVisitorContinueKind {
+        enter("deinit", node, body: true)
+    }
+    override func visitPost(_ node: DeinitializerDeclSyntax) { context.anchors.pop() }
+    override func visit(_ node: SubscriptDeclSyntax) -> SyntaxVisitorContinueKind {
+        enter(signature("subscript", node.parameterClause.parameters), node, body: true)
+    }
+    override func visitPost(_ node: SubscriptDeclSyntax) { context.anchors.pop() }
+    override func visit(_ node: VariableDeclSyntax) -> SyntaxVisitorContinueKind {
+        let names = node.bindings.map { normalized($0.pattern.trimmedDescription) }.joined(separator: ",")
+        return enter(names, node, body: true)
+    }
+    override func visitPost(_ node: VariableDeclSyntax) { context.anchors.pop() }
+    override func visit(_ node: AccessorDeclSyntax) -> SyntaxVisitorContinueKind {
+        enter(node.accessorSpecifier.text, node, body: true)
+    }
+    override func visitPost(_ node: AccessorDeclSyntax) { context.anchors.pop() }
+
+    private func enter(_ name: String, _ node: some SyntaxProtocol, body: Bool = false) -> SyntaxVisitorContinueKind {
+        context.anchors.push(name, isBody: body, node)
+        return .visitChildren
     }
 
     override func visit(_ node: IfExprSyntax) -> SyntaxVisitorContinueKind {

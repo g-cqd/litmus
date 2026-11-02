@@ -1,5 +1,5 @@
 {
-  "originHash" : "304c95511e51847c9ef54b6ebe58f5032a50c02a25a1d7caf243817fc50bc28d",
+  "originHash" : "8917dfea0255bf5406b69f3e81a50e546972b5f5863bd777db501325879205f4",
   "pins" : [
     {
       "identity" : "aemi",
@@ -38,7 +38,7 @@
       "kind" : "localSourceControl",
       "location" : "https://github.com/g-cqd/analyzerkit.git",
       "state" : {
-        "revision" : "a7c05de209f0a475b27a7b3c59fc184623761de8"
+        "revision" : "f339e8f4d5b23aff454a9931e55a908adadd2de0"
       }
     },
     {

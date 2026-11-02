@@ -15,6 +15,9 @@ public struct MutationFinding: Codable, Sendable, ReportedFinding {
     public var severityName: String { severity }
     public var ruleName: String { rule }
     public var displayMessage: String { message }
+    /// Survives edits elsewhere in the file: the verdict's rule and the mutant's anchored id (ADR 0007). Written to
+    /// SARIF as `litmus/anchored/v1`; what `--gate new-survivors` compares.
+    public let anchoredFingerprint: String?
 
     init(_ result: MutationResult, root: String?) {
         let site = result.mutation
@@ -29,6 +32,7 @@ public struct MutationFinding: Codable, Sendable, ReportedFinding {
             }
         message = "\(site.operatorID.rawValue): \(site.original) → \(site.replacement); \(result.reason)"
         fingerprint = Fingerprint.make(rule: rule, path: site.path, line: line, column: column, message: message)
+        anchoredFingerprint = "a" + Fingerprint.string(of: Fingerprint.hash("\(rule)|\(site.path)|\(site.id)"))
     }
 }
 
@@ -199,7 +203,9 @@ extension LitmusReportFormat {
                             )
                         )
                     ],
-                    partialFingerprints: ["litmus/v1": finding.fingerprint]
+                    partialFingerprints: ["litmus/v1": finding.fingerprint].merging(
+                        finding.anchoredFingerprint.map { ["litmus/anchored/v1": $0] } ?? [:]
+                    ) { first, _ in first }
                 )
             }
             let log = Sarif.Log(runs: [

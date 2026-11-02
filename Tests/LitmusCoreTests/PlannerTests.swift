@@ -175,3 +175,70 @@ import Testing
     #expect(Set(only.mutations.map(\.path)) == ["Sources/Lib/B.swift"])
     await #expect(throws: LitmusFailure.self) { try await MutationPlanner.plan(root: root, include: ["Nowhere.swift"]) }
 }
+
+/// Anchored identity (ADR 0007): a mutant keeps its id when code moves around it, so results can be reused and runs
+/// compared; it changes when its own code or its declaration's name does.
+@Suite struct AnchoredIdentityTests {
+    private let source = """
+        struct Gate {
+            var open = false
+            func check(_ a: Bool, _ b: Bool) -> Bool {
+                if a && b { return true }
+                if a && b { return open }
+                return a ? b : false
+            }
+        }
+        """
+    @Test func `ids survive lines added above and edits in other declarations`() throws {
+        let before = try MutationPlanner.mutations(in: source, path: "Sources/Gate.swift")
+        let moved = "// a\n// b\n// c\n" + source.replacingOccurrences(of: "var open = false", with: "var open = true")
+        let after = try MutationPlanner.mutations(in: moved, path: "Sources/Gate.swift")
+        #expect(before.map(\.id) == after.map(\.id))
+        #expect(before.map(\.line) != after.map(\.line))
+        #expect(Set(before.map(\.id)).count == before.count)
+        #expect(before.allSatisfy { $0.declaration == "Gate.check(_:_:)" })
+        // The declaration's text is unchanged: same digest, so `--reuse declaration` may reuse.
+        #expect(before.map(\.declarationDigest) == after.map(\.declarationDigest))
+    }
+
+    @Test func `identical sites in one declaration are told apart by their order`() throws {
+        let sites = try MutationPlanner.mutations(in: source, path: "Sources/Gate.swift")
+        let logical = sites.filter { $0.operatorID == .replaceLogical }
+        #expect(logical.count == 2)
+        #expect(logical[0].id != logical[1].id)
+    }
+
+    @Test func `ids change with the site's code, the declaration's name or the path`() throws {
+        let before = try MutationPlanner.mutations(in: source, path: "Sources/Gate.swift")
+        let renamed = try MutationPlanner.mutations(
+            in: source.replacingOccurrences(of: "func check(", with: "func verify("),
+            path: "Sources/Gate.swift"
+        )
+        #expect(Set(before.map(\.id)).isDisjoint(with: renamed.map(\.id)))
+        let elsewhere = try MutationPlanner.mutations(in: source, path: "Sources/Other.swift")
+        #expect(Set(before.map(\.id)).isDisjoint(with: elsewhere.map(\.id)))
+        let edited = try MutationPlanner.mutations(
+            in: source.replacingOccurrences(of: "return a ? b : false", with: "return b ? a : false"),
+            path: "Sources/Gate.swift"
+        )
+        let ternary = { (sites: [Mutation]) in sites.first { $0.operatorID == .swapTernary }?.id }
+        #expect(ternary(before) != ternary(edited))
+        // The two `a && b` sites keep their ids, but the declaration's text changed.
+        let logical = { (sites: [Mutation]) in sites.filter { $0.operatorID == .replaceLogical } }
+        #expect(logical(before).map(\.id) == logical(edited).map(\.id))
+        #expect(logical(before).map(\.declarationDigest) != logical(edited).map(\.declarationDigest))
+    }
+
+    @Test func `declarations are named with their labels, accessors and extensions`() throws {
+        let text = """
+            extension Array where Element == Int {
+                init(flag: Bool) { self = flag ? [1] : [] }
+                var any: Bool { get { isEmpty ? false : true } }
+                subscript(safe index: Int) -> Int? { indices.contains(index) ? self[index] : nil }
+            }
+            let top = CommandLine.arguments.isEmpty ? 0 : 1
+            """
+        let names = try MutationPlanner.mutations(in: text, path: "A.swift").map { $0.declaration ?? "?" }
+        #expect(names == ["Array.init(flag:)", "Array.any.get", "Array.subscript(safe:)", "top"])
+    }
+}
