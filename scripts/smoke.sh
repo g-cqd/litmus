@@ -8,6 +8,7 @@ cleanup() {
   if [[ "$STATUS" == 0 ]]; then rm -rf "$WORK"; else printf 'Smoke failed; evidence retained at %s\n' "$WORK" >&2; fi
 }
 trap cleanup EXIT
+[[ -n "${LITMUS_KEEP_SMOKE:-}" ]] && trap - EXIT
 cp -R "$ROOT/Tests/Fixtures/Example" "$WORK/subject"
 BEFORE="$(shasum -a 256 "$WORK/subject/Sources/Example/Decisions.swift")"
 "$BIN" plan "$WORK/subject" --output "$WORK/plan.json"
@@ -19,7 +20,16 @@ import json,sys,collections
 r=json.load(open(sys.argv[1]))
 assert r['complete']
 c=collections.Counter(x['verdict'] for x in r['results'])
-assert c == {'killed':2, 'survived':1}, c
+expected = {'killed': 5, 'crashed': 1, 'timeout': 1, 'survived': 1, 'noCoverage': 1, 'unviable': 1}
+assert c == expected, c
+by = {(x['mutation']['original'], x['mutation']['operatorID']): x['verdict'] for x in r['results']}
+assert by[('index < items.count', 'negate-condition')] == 'crashed', by
+assert by[('value > 0 && value < 100', 'replace-logical')] == 'timeout', by
+assert by[('first && second', 'replace-logical')] == 'unviable', by
+assert by[('flag', 'swap-ternary')] == 'noCoverage', by
+assert by[('false', 'swap-ternary')] == 'killed', by
+assert by[('value >= 0', 'swap-ternary')] == 'killed', by
+assert r['policy']['harness'] == 'swiftpm-direct', r['policy']
 print('real execution:', dict(c))
 PY
 set +e
@@ -31,7 +41,8 @@ python3 - "$WORK/report.json" <<'PY'
 import json,sys
 r=json.load(open(sys.argv[1]))
 assert r['successfulExecution'] and r['schemaVersion']==1 and r['tool']=='litmus'
-assert len(r['findings'])==1 and r['findings'][0]['rule']=='litmus/survived'
+assert sorted(f['rule'] for f in r['findings']) == ['litmus/noCoverage', 'litmus/survived', 'litmus/unviable'], r['findings']
+assert r['score']['percent'] == 77.78, r['score']
 PY
 "$BIN" analyze "$WORK/subject" --results "$WORK/run/run.json" --format sarif > "$WORK/report.sarif"
 python3 - "$WORK/report.sarif" <<'PY'
@@ -55,4 +66,4 @@ if [[ -n "${LITMUS_EVIDENCE_DIR:-}" ]]; then
   cp "$WORK/plan.json" "$WORK/report.json" "$WORK/report.sarif" "$WORK/stale.json" "$LITMUS_EVIDENCE_DIR/"
   cp "$WORK/run/"*.json "$WORK/run/"*.pb "$WORK/run/"*.xml "$WORK/run/"*.log "$LITMUS_EVIDENCE_DIR/run/"
 fi
-printf 'Smoke passed: real kills/survivor, original-source preservation, JSON/protobuf/SARIF, strict gate, stale-test refusal.\n'
+printf 'Smoke passed: real kill, crash, timeout, survivor, no coverage and unviable verdicts, original-source preservation, JSON/protobuf/SARIF, strict gate, stale-test refusal.\n'

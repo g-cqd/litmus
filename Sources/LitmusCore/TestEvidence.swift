@@ -1,3 +1,4 @@
+internal import AemiJSON
 internal import Foundation
 internal import SourceCorpus
 
@@ -7,6 +8,53 @@ internal import SourceCorpus
 
 /// Parses structured execution evidence, never greps human build logs for a kill.
 public enum TestEvidence {
+    /// What a Swift Testing event stream (JSON Lines, version 0) says so far.
+    public struct EventScan: Sendable, Equatable {
+        /// Identifiers of tests with a recorded issue that is neither known nor a warning.
+        public let failedTests: Set<String>
+        /// Whether an issue failed the run, inside a test or not.
+        public let failed: Bool
+        /// Whether the stream reached `runEnded`.
+        public let ended: Bool
+        /// Bytes consumed: complete lines only, so a partially written line is read on the next scan.
+        public let consumed: Int
+    }
+
+    /// Scans the complete lines of a Swift Testing event stream with AemiJSON's lazy tape: only the touched keys are
+    /// materialised. A malformed complete line is rejected, never skipped.
+    /// - Complexity: O(*n*) in `bytes`.
+    public static func swiftTestingEvents(_ bytes: [UInt8]) throws -> EventScan {
+        var failedTests: Set<String> = []
+        var failed = false, ended = false, start = 0, consumed = 0
+        var index = 0
+        while index < bytes.count {
+            if bytes[index] == UInt8(ascii: "\n") {
+                if index > start {
+                    let document = try AemiJSON.parse(Array(bytes[start..<index]))
+                    let root = document.root
+                    if root.kind.string == "event" {
+                        let payload = root.payload
+                        switch payload.kind.string {
+                        case "issueRecorded":
+                            let issue = payload.issue
+                            let isWarning = issue.severity.string == "warning"
+                            if issue.isKnown.bool != true, !isWarning {
+                                failed = true
+                                if let test = payload.testID.string { failedTests.insert(test) }
+                            }
+                        case "runEnded": ended = true
+                        default: break
+                        }
+                    }
+                }
+                start = index + 1
+                consumed = start
+            }
+            index += 1
+        }
+        return EventScan(failedTests: failedTests, failed: failed, ended: ended, consumed: consumed)
+    }
+
     /// SwiftPM emits XCTest at the requested path (with --parallel) and Swift Testing at a suffixed path.
     /// Frameworks with no discovered tests may emit no file; at least one report is required.
     public static func swiftPM(at path: String) throws -> (counts: TestCounts, paths: [String]) {

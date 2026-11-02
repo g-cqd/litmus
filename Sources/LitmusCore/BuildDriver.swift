@@ -7,7 +7,16 @@ public struct BuildDriver: Codable, Sendable, Equatable {
     public let container: String?
     public let scheme: String?
     public let destination: String?
+    /// SwiftPM's `--build-system` (`native` rebuilds small packages about twice as fast; `swiftbuild` is the default);
+    /// nil keeps the toolchain's default. Ignored for Xcode.
+    public var swiftPMBuildSystem: String?
     public var usesXcode: Bool { scheme != nil }
+
+    /// The arguments every SwiftPM invocation of a run shares, so build, bin path, listing and tests agree.
+    public func swiftPMArguments(workspace: String, artifacts: String) -> [String] {
+        ["--package-path", workspace, "--scratch-path", artifacts + "/build"]
+            + (swiftPMBuildSystem.map { ["--build-system", $0] } ?? [])
+    }
 
     /// Container paths must remain inside the isolated root. Scheme/destination are required together.
     /// A nil container with a scheme means an Xcode-opened Swift package, not a host `swift test` run.
@@ -40,9 +49,8 @@ public struct BuildDriver: Codable, Sendable, Equatable {
         }
         return ToolCommand(
             executable: "/usr/bin/xcrun",
-            arguments: [
-                "swift", "build", "--package-path", workspace, "--scratch-path", artifacts + "/build", "--build-tests",
-                "-j", "4",
+            arguments: ["swift", "build"] + swiftPMArguments(workspace: workspace, artifacts: artifacts) + [
+                "--build-tests", "-j", String(ProcessInfo.processInfo.activeProcessorCount),
             ]
         )
     }
@@ -64,9 +72,8 @@ public struct BuildDriver: Codable, Sendable, Equatable {
         }
         return ToolCommand(
             executable: "/usr/bin/xcrun",
-            arguments: [
-                "swift", "test", "--package-path", workspace, "--scratch-path", artifacts + "/build", "--skip-build",
-                "--parallel", "--num-workers", "1", "--xunit-output", result,
+            arguments: ["swift", "test"] + swiftPMArguments(workspace: workspace, artifacts: artifacts) + [
+                "--skip-build", "--parallel", "--num-workers", "1", "--xunit-output", result,
             ]
         )
     }

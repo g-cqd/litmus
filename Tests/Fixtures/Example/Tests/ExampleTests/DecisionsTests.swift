@@ -12,3 +12,9 @@ import Testing
 @Test func `label is positive`() {
     #expect(label(true) > 0)
 }
+
+@Test func `clamp keeps a small value`() { #expect(clamp(5) == 5) }
+@Test func `sign of a positive value`() { #expect(sign(3) == 1) }
+@Test func `an index past the end gives nil`() { #expect(element([1], 5) == nil) }
+@Test func `drain reaches zero`() { #expect(drain(3) == 0) }
+@Test func `overlap keeps the common bits`() { #expect(overlap(Mask(0b1100), Mask(0b1010)) == Mask(0b1000)) }

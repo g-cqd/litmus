@@ -6,7 +6,7 @@ import LitmusCore
 @main struct Litmus: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Evidence-led mutation testing for Swift packages and Xcode projects.",
-        version: "0.1.0-dev",
+        version: LitmusVersion.current,
         subcommands: [Plan.self, Run.self, Analyze.self]
     )
 }
@@ -64,7 +64,20 @@ private struct Run: AsyncParsableCommand {
     var output: String
     @Option(help: "Maximum non-overlapping sites per schema, 1...256.") var batchSize: Int = 64
     @Option(help: "Build deadline in seconds, 1...86400.") var buildTimeout: Int = 900
-    @Option(help: "Test deadline in seconds, 1...86400.") var timeout: Int = 120
+    @Option(help: "Upper bound of the per-suite deadline in seconds; the deadline derives from the baseline.")
+    var timeout: Int = 300
+    @Option(help: "Deadline = baseline duration × this factor + 2 s (at least 3 s, at most --timeout).")
+    var timeoutFactor: Int = 4
+    @Option(help: "Mutants tested at once (default: CPUs − 1); Xcode and `swift test` run one.")
+    var jobs: Int = max(1, ProcessInfo.processInfo.activeProcessorCount - 1)
+    @Option(help: "Host package harness: automatic (direct bundles, parallel) or swift-test (one worker).")
+    var harness: String = "automatic"
+    @Option(help: "SwiftPM build system for host packages: native or swiftbuild (default: the toolchain's).")
+    var swiftpmBuildSystem: String?
+    @Flag(help: "Run every mutant's whole suite instead of stopping at its first Swift Testing failure.")
+    var noFailFast = false
+    @Flag(help: "Confirm each kill with an inactive control and a second active run (three runs per kill).")
+    var confirmKills = false
     @Flag(
         help:
             "Required: authorize executing package manifests, plugins, build scripts and tests. Copying is NOT an OS sandbox."
@@ -77,10 +90,23 @@ private struct Run: AsyncParsableCommand {
                 "execution requires --trust-project; untrusted PRs need an isolated disposable runner"
             )
         }
-        guard (1...256).contains(batchSize), (1...86400).contains(timeout), (1...86400).contains(buildTimeout) else {
-            throw ValidationError("batch-size/timeouts outside documented bounds")
+        guard let selection = HarnessSelection(rawValue: harness == "swift-test" ? "swiftTest" : harness) else {
+            throw ValidationError("harness must be automatic or swift-test")
         }
-        let driver: BuildDriver
+        var options = RunOptions()
+        options.batchSize = batchSize
+        options.buildTimeout = buildTimeout
+        options.timeoutCap = timeout
+        options.timeoutFactor = timeoutFactor
+        options.jobs = jobs
+        options.harness = selection
+        options.failFast = !noFailFast
+        options.confirmKills = confirmKills
+        options.keepWorkspace = keepWorkspace
+        guard swiftpmBuildSystem.map({ ["native", "swiftbuild"].contains($0) }) ?? true else {
+            throw ValidationError("swiftpm-build-system must be native or swiftbuild")
+        }
+        var driver: BuildDriver
         do {
             driver = try BuildDriver(
                 root: subject.absoluteRoot,
@@ -89,26 +115,29 @@ private struct Run: AsyncParsableCommand {
                 destination: destination
             )
         } catch { try fail(error, code: .usage) }
+        driver.swiftPMBuildSystem = swiftpmBuildSystem
         if !driver.usesXcode && !FileManager.default.fileExists(atPath: subject.absoluteRoot + "/Package.swift") {
             throw ValidationError(
                 "host package requires Package.swift; Xcode projects need --project, --scheme and --destination"
             )
         }
-        let excludes = try subject.excludes()
+        options.exclude = try subject.excludes()
         let artifact: RunArtifact
         do {
             artifact = try await MutationRunner(executor: BoundedExecutor()).run(
                 driver: driver,
                 outputDirectory: output,
-                exclude: excludes,
-                batchSize: batchSize,
-                buildTimeout: buildTimeout,
-                testTimeout: timeout,
-                keepWorkspace: keepWorkspace
+                options: options
             )
         } catch { try fail(error, code: .internalFailure) }
         print(String(decoding: try ArtifactCodec.json(artifact), as: UTF8.self))
-        stderr("litmus: \(artifact.results.count) outcomes; evidence at \(output)/run.json")
+        let counts = Dictionary(grouping: artifact.results, by: \.verdict).mapValues(\.count)
+        let summary = Verdict.allCases.compactMap { verdict in counts[verdict].map { "\(verdict.rawValue) \($0)" } }
+        let score = artifact.score.percent.map { String($0) + "%" } ?? "n/a"
+        stderr(
+            "litmus: \(artifact.results.count) mutants: \(summary.joined(separator: ", ")); score \(score); "
+                + "\(((artifact.timings["total"] ?? 0) * 10).rounded() / 10) s; evidence at \(output)/run.json"
+        )
         if !artifact.isSuccessfulExecution { throw ExitCode(ExitStatus.internalFailure.rawValue) }
     }
 }
@@ -143,7 +172,7 @@ private struct Analyze: AsyncParsableCommand {
         let report: MutationReport
         do {
             let artifact = try ArtifactCodec.read(RunArtifact.self, path: results)
-            report = try MutationReport.make(artifact, root: root, relative: relativeTo != nil, only: scope)
+            report = try await MutationReport.make(artifact, root: root, relative: relativeTo != nil, only: scope)
         } catch { try fail(error, code: .internalFailure) }
         do { print(try LitmusReportFormat.render(report, format: format, root: relativeTo == nil ? nil : root)) } catch
         { try fail(error, code: .outputFailure) }
