@@ -1,6 +1,6 @@
-internal import Foundation
 internal import AemiJSON
 internal import AnalyzerConfiguration
+internal import Foundation
 
 /// Only syntax planning settings; execution inputs must remain explicit in argv/provenance.
 public struct LitmusConfiguration: Decodable, Sendable {
@@ -9,13 +9,20 @@ public struct LitmusConfiguration: Decodable, Sendable {
     /// Resolves the family's shared top-level exclusions plus `.litmus.json`; rejects duplicate/unknown keys.
     /// The pinned analyzerkit does not yet permit a `litmus` section in `.swift-analyzers.json`.
     public static func load(root: String, explicit: String?) throws -> Self {
-        let resolved = try SharedConfiguration.resolve(for: SharedConfiguration.Tool(name: "litmus", fileName: ".litmus.json", keys: []),
-            explicit: explicit, currentDirectory: root, analyzedPaths: [root])
+        let resolved = try SharedConfiguration.resolve(
+            for: SharedConfiguration.Tool(name: "litmus", fileName: ".litmus.json", keys: []),
+            explicit: explicit,
+            currentDirectory: root,
+            analyzedPaths: [root]
+        )
         // Known shared keys are validated by analyzerkit. This first execution policy does not interpret build defines.
         let value = try ArtifactCodec.decode(SharedValues.self, bytes: resolved.json)
         guard value.defines?.isEmpty ?? true, value.platforms?.isEmpty ?? true,
-            value.includeRegions?.isEmpty ?? true, value.excludeRegions?.isEmpty ?? true else {
-            throw LitmusFailure("this version accepts exclude only; use the actual scheme/destination for build conditions and fixed production-region policy")
+            value.includeRegions?.isEmpty ?? true, value.excludeRegions?.isEmpty ?? true
+        else {
+            throw LitmusFailure(
+                "this version accepts exclude only; use the actual scheme/destination for build conditions and fixed production-region policy"
+            )
         }
         return Self(exclude: value.exclude ?? [])
     }

@@ -47,9 +47,20 @@ engine's simulator driver is correct. A high-criticality deployment must close t
   `~/Public/Litmus-Implementation-Evidence` with a SHA-256 manifest, not a signature.
 - Markdown links and `git diff --check` were checked. No app/family source or CI workflow was modified.
 
-Build accounting: 12 package debug-build invocations in the initial bootstrap/verification work, including two placeholder
-red-contract builds and an explicit SwiftPM evidence-regression red build. Additional tiny SUBJECT fixture builds were
+Build accounting: 13 package debug-build invocations in the initial bootstrap/verification work, including two placeholder
+red-contract builds an explicit SwiftPM evidence-regression red build and one final build after adopting the family formatting configuration. Additional tiny SUBJECT fixture builds were
 performed by the smoke/probes. This exceeds the usual four-build budget: package relocation caused a cold rebuild; Swift's
 batch compiler exposed successive strict-memory-safety diagnostics; real boundary probes exposed the canonical path and
 split-framework XML issues. No release build or multi-configuration matrix was run. This is an explanation, not a
 recommendation for future edit/build loops.
+
+### Final style and Xcode package checks
+
+The family `.swift-format` configuration was adopted in a separate formatting-only pass. `swift-format lint --strict`
+passed; the package was rebuilt once, all **22 tests** passed again, and the real mixed-framework smoke passed again.
+The retained full smoke in Public precedes this formatting-only delta; `docs/evidence` contains the post-format results.
+
+`xcodebuild -list -json` recognized the fixture package's `Example` scheme. **Actual iOS Simulator build-for-testing
+succeeded** for `generic/platform=iOS Simulator`, producing a real `.xctestrun`; a copy is in `docs/evidence` and the
+full build log is in Public evidence. This validates package discovery and the Xcode build stage, **not simulator test
+execution**, active-ID forwarding or app-hosted testing. No simulator was booted for these checks.

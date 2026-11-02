@@ -17,8 +17,10 @@ public struct MutationResult: Codable, Sendable {
     public let reason: String
     public let evidence: [String]
 
-    public init(mutation: Mutation, verdict: Verdict, tests: TestCounts? = nil, reason: String, evidence: [String] = []) {
-        self.mutation = mutation; self.verdict = verdict; self.tests = tests; self.reason = reason; self.evidence = evidence
+    public init(mutation: Mutation, verdict: Verdict, tests: TestCounts? = nil, reason: String, evidence: [String] = [])
+    {
+        self.mutation = mutation; self.verdict = verdict; self.tests = tests; self.reason = reason;
+        self.evidence = evidence
     }
 }
 
@@ -39,10 +41,9 @@ public struct RunArtifact: Codable, Sendable {
 
     /// Only a fully reconciled, baseline-valid run with no unresolved outcomes is eligible for a green execution gate.
     public var isSuccessfulExecution: Bool {
-        complete && !plan.notes.contains(where: \.isDegraded) &&
-            results.count == plan.mutations.count &&
-            Set(results.map { $0.mutation.id }).count == results.count &&
-            Set(results.map { $0.mutation.id }) == Set(plan.mutations.map(\.id)) &&
-            results.allSatisfy { [.killed, .survived].contains($0.verdict) }
+        complete && !plan.notes.contains(where: \.isDegraded) && results.count == plan.mutations.count
+            && Set(results.map { $0.mutation.id }).count == results.count
+            && Set(results.map { $0.mutation.id }) == Set(plan.mutations.map(\.id))
+            && results.allSatisfy { [.killed, .survived].contains($0.verdict) }
     }
 }

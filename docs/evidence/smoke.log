@@ -1,5 +1,5 @@
 litmus: 3 candidates, 0 suppressed in 3 files; plan is not test evidence
-litmus: 3 outcomes; evidence at /var/folders/_l/mtv6k9m15890t4m22sqh77_00000gn/T//litmus-smoke.x36tlV/run/run.json
+litmus: 3 outcomes; evidence at /var/folders/_l/mtv6k9m15890t4m22sqh77_00000gn/T//litmus-smoke.ywrqlb/run/run.json
 real execution: {'killed': 2, 'survived': 1}
 litmus: 1 finding(s) (0 error(s), 1 warning(s)) in 3 file(s)
 litmus: 1 finding(s) (0 error(s), 1 warning(s)) in 3 file(s)

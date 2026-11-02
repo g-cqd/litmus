@@ -17,21 +17,35 @@ public struct ProcessOutput: Sendable {
 
 /// Injectable process boundary for deterministic execution tests.
 public protocol ProcessExecutor: Sendable {
-    func execute(_ command: ToolCommand, directory: String, environment: [String: String], timeout: Int) async throws -> ProcessOutput
+    func execute(_ command: ToolCommand, directory: String, environment: [String: String], timeout: Int) async throws
+        -> ProcessOutput
 }
 
 /// Uses analyzerkit's session-scoped subprocess runner, TERM/KILL escalation, output limits and scrubbed environment.
 public struct BoundedExecutor: ProcessExecutor {
     public init() {}
-    public func execute(_ command: ToolCommand, directory: String, environment: [String: String], timeout: Int) async throws -> ProcessOutput {
+    public func execute(_ command: ToolCommand, directory: String, environment: [String: String], timeout: Int)
+        async throws -> ProcessOutput
+    {
         guard timeout > 0, timeout <= 86_400 else { throw LitmusFailure("timeout outside 1...86400 seconds") }
         let overrides = environment
         let env = BoundedProcess.scrubbedEnvironment(overrides: overrides, source: ProcessInfo.processInfo.environment)
         do {
-            let result = try await BoundedProcess.run(command.executable, command.arguments, directory: directory, environment: env,
-                timeout: .seconds(timeout), outputLimit: 4 << 20)
-            return ProcessOutput(exitStatus: result.exitStatus, stdout: result.standardOutput, stderr: result.standardError,
-                truncated: result.outputTruncated, timedOut: false)
+            let result = try await BoundedProcess.run(
+                command.executable,
+                command.arguments,
+                directory: directory,
+                environment: env,
+                timeout: .seconds(timeout),
+                outputLimit: 4 << 20
+            )
+            return ProcessOutput(
+                exitStatus: result.exitStatus,
+                stdout: result.standardOutput,
+                stderr: result.standardError,
+                truncated: result.outputTruncated,
+                timedOut: false
+            )
         } catch BoundedProcess.Failure.timedOut {
             return ProcessOutput(exitStatus: 124, stdout: [], stderr: [], truncated: false, timedOut: true)
         } catch BoundedProcess.Failure.cancelled { throw CancellationError() }

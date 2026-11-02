@@ -1,5 +1,5 @@
-import Testing
 import Example
+import Testing
 
 @Test func `gate rejects when only the second input is true`() {
     #expect(!gated(false, true))

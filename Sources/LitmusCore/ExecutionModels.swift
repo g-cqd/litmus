@@ -3,7 +3,9 @@ public struct TestCounts: Codable, Sendable, Equatable {
     public let passed: Int
     public let failed: Int
     public let skipped: Int
-    public init(passed: Int, failed: Int, skipped: Int) { self.passed = passed; self.failed = failed; self.skipped = skipped }
+    public init(passed: Int, failed: Int, skipped: Int) {
+        self.passed = passed; self.failed = failed; self.skipped = skipped
+    }
 }
 
 /// Infrastructure failures, invalid mutants and timeouts never count as kills.
@@ -14,7 +16,8 @@ public enum Verdict: String, Codable, Sendable {
     public static func classify(exitStatus: Int32, tests: TestCounts) -> Self {
         guard tests.passed >= 0, tests.failed >= 0, tests.skipped >= 0,
             tests.passed <= 10_000_000, tests.failed <= 10_000_000, tests.skipped <= 10_000_000,
-            tests.passed + tests.failed > 0 else { return .infrastructureError }
+            tests.passed + tests.failed > 0
+        else { return .infrastructureError }
         if exitStatus == 0 { return tests.failed == 0 ? .survived : .infrastructureError }
         return tests.failed > 0 ? .killed : .infrastructureError
     }
