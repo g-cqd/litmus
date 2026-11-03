@@ -1155,6 +1155,12 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             guard options.simulatorHarness, let destination = driver.destination,
                 let udid = SimulatorDirectHarness<Executor>.simulatorID(destination)
             else { return xcode }
+            guard !driver.xcodebuildArgumentsSelectTests else {
+                notes.append(
+                    "simulator helper not used: --xcodebuild-argument selects tests (-only-testing, -skip-testing or test configurations), which only xcodebuild honours"
+                )
+                return xcode
+            }
             do {
                 return try await simulatorHarness(
                     udid: udid,
