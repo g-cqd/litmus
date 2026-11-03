@@ -23,18 +23,21 @@
   "commands": [
     {
       "id": "smoke",
-      "run": "scripts/smoke.sh",
-      "after": "macos-debug",
+      "run": "swift build --product litmus && LITMUS_BIN=\"$(swift build --show-bin-path)/litmus\" scripts/smoke.sh",
       "cadence": [
         "nightly",
         "tag",
         "dispatch"
-      ]
+      ],
+      "os": "macOS"
     }
   ],
   "swift": {
     "versions": [
       "6.4.2"
-    ]
+    ],
+    "environment": {
+      "TOOLCHAINS": "swift"
+    }
   }
 }
