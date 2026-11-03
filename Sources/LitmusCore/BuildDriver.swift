@@ -15,6 +15,16 @@ public struct BuildDriver: Codable, Sendable, Equatable {
     /// Extra `xcodebuild` arguments for builds and test runs (`--xcodebuild-argument`), such as
     /// `-skipPackagePluginValidation` or `-clonedSourcePackagesDirPath <dir>`; part of provenance and of reuse keys.
     public var xcodebuildArguments: [String] = []
+
+    /// Whether the extra Xcode arguments choose which tests run (`-only-testing:`, `-skip-testing:`, test
+    /// configurations). Only `xcodebuild` honours them; Litmus's simulator helper runs the whole bundle.
+    public var xcodebuildArgumentsSelectTests: Bool {
+        xcodebuildArguments.contains { argument in
+            ["-only-testing", "-skip-testing", "-only-test-configuration", "-skip-test-configuration"].contains {
+                argument == $0 || argument.hasPrefix($0 + ":")
+            }
+        }
+    }
     public var usesXcode: Bool { scheme != nil }
 
     /// The arguments every SwiftPM invocation of a run shares, so build, bin path, listing and tests agree.

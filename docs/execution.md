@@ -14,7 +14,9 @@ An activation marker establishes whether execution reached the mutation. A failu
 
 ## Test execution
 
-Host Swift package test bundles can run directly after building. Hostless iOS Simulator bundles can use Litmus's simulator helper, which supports Swift Testing and XCTest. App-hosted bundles use Xcode's test execution. `--no-simulator-helper` forces the Xcode path.
+Host Swift package test bundles can run directly after building. Hostless iOS Simulator bundles can use Litmus's simulator helper, which supports Swift Testing and XCTest. App-hosted bundles use Xcode's test execution. `--no-simulator-helper` forces the Xcode path, and so does an `--xcodebuild-argument` that selects tests (`-only-testing`, `-skip-testing`, test configurations), which the helper cannot honour; the run's notes say so.
+
+The helper runs Swift Testing first, then every XCTest case on the process's main thread, so `@MainActor` and `async` XCTest cases work. A run that exceeds its deadline reports where it stopped: the XCTest case that never finished, or that every test had finished but the process did not exit.
 
 Per-target selection limits execution to test modules that can reach a file. `--no-test-target-selection` disables that optimization. `--per-test-reach` records reach at individual test granularity, requiring additional test runs.
 

@@ -276,7 +276,17 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
             }
             if stopped { return result(.failed, nil, "Swift Testing recorded a failing issue (stopped early)") }
             guard let output else { return result(.unusable, nil, "the simulator helper produced no process result") }
-            if output.timedOut { return result(.timedOut, nil, "the simulator run exceeded \(request.deadline) s") }
+            if output.timedOut {
+                return result(
+                    .timedOut,
+                    nil,
+                    Self.timeoutReason(
+                        deadline: request.deadline,
+                        swiftTestingEnded: scan?.ended == true,
+                        unfinished: Self.unfinishedXCTests(events + ".xctest")
+                    )
+                )
+            }
             if scan?.failed == true || (xctest?.failed ?? 0) > 0 {
                 return result(.failed, nil, "a test failed")
             }
@@ -314,18 +324,51 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
 
     /// The XCTest cases the helper recorded: `{"xctest":{"name":…,"status":"passed"|"failed"|"skipped"}}` lines.
     static func xctestCounts(_ path: String) -> TestCounts? {
-        guard let bytes = try? BoundedFileReader.read(path: path, cap: 16 << 20) else { return nil }
+        guard let events = xctestEvents(path) else { return nil }
         var passed = 0, failed = 0, skipped = 0
-        for line in bytes.split(separator: UInt8(ascii: "\n")) where !line.isEmpty {
-            guard let document = try? AemiJSON.parse(Array(line)), let status = document.root.xctest.status.string
-            else { return nil }
-            switch status {
+        for event in events {
+            switch event.status {
             case "passed": passed += 1
             case "failed": failed += 1
             case "skipped": skipped += 1
+            case "started": break
             default: return nil
             }
         }
         return TestCounts(passed: passed, failed: failed, skipped: skipped)
+    }
+
+    /// The XCTest cases the helper started and never finished, in start order: where a stalled run stopped.
+    static func unfinishedXCTests(_ path: String) -> [String] {
+        var started: [String] = []
+        for event in xctestEvents(path) ?? [] {
+            if event.status == "started" {
+                started.append(event.name)
+            } else {
+                started.removeAll { $0 == event.name }
+            }
+        }
+        return started
+    }
+
+    /// The `{"xctest":{"name":…,"status":…}}` lines of the helper's XCTest file, or nil when it is missing or malformed.
+    private static func xctestEvents(_ path: String) -> [(name: String, status: String)]? {
+        guard let bytes = try? BoundedFileReader.read(path: path, cap: 16 << 20) else { return nil }
+        var events: [(name: String, status: String)] = []
+        for line in bytes.split(separator: UInt8(ascii: "\n")) where !line.isEmpty {
+            guard let document = try? AemiJSON.parse(Array(line)), let status = document.root.xctest.status.string
+            else { return nil }
+            events.append((document.root.xctest.name.string ?? "", status))
+        }
+        return events
+    }
+
+    /// Why a run past its deadline stalled, from what the event files show.
+    static func timeoutReason(deadline: Int, swiftTestingEnded: Bool, unfinished: [String]) -> String {
+        let base = "the simulator run exceeded \(deadline) s"
+        if let first = unfinished.first {
+            return base + "; \(swiftTestingEnded ? "Swift Testing had finished, " : "")XCTest case \(first) had not"
+        }
+        return swiftTestingEnded ? base + "; every test had finished but the test process did not exit" : base
     }
 }

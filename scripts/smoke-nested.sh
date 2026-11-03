@@ -30,7 +30,11 @@ grep -q -- '--resume' "$WORK/existing.log"
 if [[ -n "${LITMUS_XCODE_DESTINATION:-}" ]]; then
   "$BIN" run "$WORK/subject" --package-path Library --scheme Library \
     --destination "$LITMUS_XCODE_DESTINATION" --trust-project --baseline-repetitions 1 \
-    --kill-confirmation none --output "$WORK/xcode" > /dev/null
+    --kill-confirmation none --timeout 180 --output "$WORK/xcode" > /dev/null
+  # Hostless bundles run through the simulator helper: its XCTest cases, async main-actor ones included, must finish.
+  if [[ "$LITMUS_XCODE_DESTINATION" == *Simulator* ]]; then
+    grep -q 'testAsynchronousCase' "$WORK"/xcode/logs/baseline-*.xctest
+  fi
   python3 - "$WORK/xcode/run.json" <<'PY'
 import json,sys
 r=json.load(open(sys.argv[1]))

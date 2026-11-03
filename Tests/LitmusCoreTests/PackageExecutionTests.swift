@@ -279,3 +279,17 @@ private struct NoExecution: ProcessExecutor {
     let driver = try BuildDriver(root: root, container: "App.xcodeproj", scheme: "Library", destination: "macOS")
     #expect(throws: (any Error).self) { try XcodeTestConfiguration.preflight(driver: driver, workspace: root) }
 }
+
+@Test func `xcodebuild arguments that select tests keep the run on xcodebuild`() throws {
+    var driver = try BuildDriver(root: "/repo", scheme: "Library", destination: "platform=iOS Simulator,id=ABC")
+    #expect(!driver.xcodebuildArgumentsSelectTests)
+    driver.xcodebuildArguments = ["-skipMacroValidation", "-parallel-testing-enabled", "NO"]
+    #expect(!driver.xcodebuildArgumentsSelectTests)
+    for argument in [
+        "-only-testing:LibraryTests/Suite", "-skip-testing:LibraryTests", "-only-test-configuration",
+        "-skip-test-configuration",
+    ] {
+        driver.xcodebuildArguments = ["-skipMacroValidation", argument]
+        #expect(driver.xcodebuildArgumentsSelectTests, "\(argument)")
+    }
+}

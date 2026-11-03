@@ -281,3 +281,39 @@ func `xcresult rejects hostile counters before arithmetic`(counter: Int) throws 
         SimulatorDirectHarness<BoundedExecutor>.xctestCounts(xctest) == TestCounts(passed: 1, failed: 1, skipped: 0)
     )
 }
+
+@Test func `a timed out simulator run names the XCTest case that never finished`() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-xctest-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let path = directory.appendingPathComponent("e.xctest").path
+    try Data(
+        """
+        {"xctest":{"name":"-[A b]","status":"started"}}
+        {"xctest":{"name":"-[A b]","status":"passed"}}
+        {"xctest":{"name":"-[A c]","status":"started"}}
+
+        """.utf8
+    )
+    .write(to: URL(fileURLWithPath: path))
+
+    // Started lines are not results: the counts stay those of the finished cases.
+    #expect(SimulatorDirectHarness<BoundedExecutor>.xctestCounts(path) == TestCounts(passed: 1, failed: 0, skipped: 0))
+    #expect(SimulatorDirectHarness<BoundedExecutor>.unfinishedXCTests(path) == ["-[A c]"])
+    #expect(SimulatorDirectHarness<BoundedExecutor>.unfinishedXCTests(path + ".missing").isEmpty)
+    #expect(
+        SimulatorDirectHarness<BoundedExecutor>.timeoutReason(
+            deadline: 120,
+            swiftTestingEnded: true,
+            unfinished: ["-[A c]"]
+        ) == "the simulator run exceeded 120 s; Swift Testing had finished, XCTest case -[A c] had not"
+    )
+    #expect(
+        SimulatorDirectHarness<BoundedExecutor>.timeoutReason(deadline: 120, swiftTestingEnded: true, unfinished: [])
+            == "the simulator run exceeded 120 s; every test had finished but the test process did not exit"
+    )
+    #expect(
+        SimulatorDirectHarness<BoundedExecutor>.timeoutReason(deadline: 120, swiftTestingEnded: false, unfinished: [])
+            == "the simulator run exceeded 120 s"
+    )
+}
