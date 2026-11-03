@@ -136,7 +136,7 @@ PY2
 "$BIN" run "$WORK/pr" --trust-project --workspace in-place --output "$WORK/ip-int" --timeout 120 > /dev/null 2>&1 &
 LITMUS_PID=$!
 for _ in $(seq 1 600); do
-  ls "$WORK/ip-int/logs" 2>/dev/null | grep -q -- '-build.log$' && break
+  compgen -G "$WORK/ip-int/logs/*-build.log" > /dev/null && break
   sleep 0.2
 done
 sleep 1
@@ -177,7 +177,7 @@ SWIFT
 "$BIN" run "$WORK/flaky" --trust-project --output "$WORK/interrupted" > /dev/null 2> "$WORK/interrupted.err" &
 LITMUS_PID=$!
 for _ in $(seq 1 600); do
-  ls "$WORK/interrupted/logs" 2>/dev/null | grep -q '^mutant-' && break
+  compgen -G "$WORK/interrupted/logs/mutant-*" > /dev/null && break
   sleep 0.5
 done
 kill -INT "$LITMUS_PID"
@@ -187,7 +187,10 @@ STATUS=$?
 set -e
 [[ "$STATUS" == 130 ]]
 sleep 1
-! pgrep -f "swiftpm-testing-helper.*$WORK/interrupted" > /dev/null
+if pgrep -f "swiftpm-testing-helper.*$WORK/interrupted" > /dev/null; then
+  echo "test helper survived interruption" >&2
+  exit 1
+fi
 python3 - "$WORK/interrupted/run.json" <<'PY'
 import json,sys
 a=json.load(open(sys.argv[1]))

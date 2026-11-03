@@ -23,7 +23,7 @@
   "commands": [
     {
       "id": "smoke",
-      "run": "swift build --product litmus && LITMUS_BIN=\"$(swift build --show-bin-path)/litmus\" scripts/smoke.sh",
+      "run": "export TOOLCHAINS=swift; swift build --product litmus && LITMUS_BIN=\"$(swift build --show-bin-path)/litmus\" scripts/smoke.sh",
       "cadence": [
         "nightly",
         "tag",
