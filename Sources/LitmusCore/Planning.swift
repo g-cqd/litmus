@@ -70,16 +70,28 @@ public enum MutationPlanner {
         root: String,
         exclude: [String] = [],
         include: [String] = [],
+        packagePath: String? = nil,
         jobs: Int = 4,
         scope: ChangeScope? = nil
     ) async throws -> MutationPlan {
         let root = SourcePath.canonical(root)
         guard FileManager.default.fileExists(atPath: root) else { throw LitmusFailure("root does not exist: \(root)") }
         let filter = PathFilter(exclude + ["Package.swift", "Dangerfile.swift", "**/Plugins/**"], root: root)
-        if let scope { return try await plan(root: root, filter: filter, include: include, jobs: jobs, scope: scope) }
+        if let scope {
+            return try await plan(
+                root: root,
+                filter: filter,
+                include: include,
+                packagePath: packagePath,
+                jobs: jobs,
+                scope: scope
+            )
+        }
         let discovery = SourceDiscovery.discover(under: root, isExcluded: filter.excludes)
         guard !discovery.files.isEmpty else { throw LitmusFailure("no Swift source files under \(root)") }
-        var discovered = discovery.files
+        var discovered = discovery.files.filter { path in
+            packagePath.map { path.hasPrefix(root + "/" + $0 + "/") } ?? true
+        }
         if !include.isEmpty {
             let wanted = PathFilter(include, root: root)
             discovered = discovered.filter { wanted.excludes($0) }
@@ -115,6 +127,7 @@ public enum MutationPlanner {
         root: String,
         filter: PathFilter,
         include: [String],
+        packagePath: String?,
         jobs: Int,
         scope: ChangeScope
     ) async throws -> MutationPlan {
@@ -123,7 +136,9 @@ public enum MutationPlanner {
         var notes: [PlanNote] = []
         for relative in scope.swiftFiles.sorted() {
             let path = root + "/" + relative
-            if filter.excludes(path) || wanted.map({ !$0.excludes(path) }) == true {
+            if packagePath.map({ !relative.hasPrefix($0 + "/") }) == true || filter.excludes(path)
+                || wanted.map({ !$0.excludes(path) }) == true
+            {
                 notes.append(PlanNote(path: relative, reason: "changed, but excluded by the configuration"))
                 continue
             }

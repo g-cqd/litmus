@@ -424,7 +424,7 @@ public struct SwiftPMToolHarness<Executor: ProcessExecutor>: TestHarness {
         let command = try driver.testCommand(workspace: workspace, artifacts: artifacts, result: xunit)
         let output = try await executor.execute(
             command,
-            directory: workspace,
+            directory: driver.executionDirectory(workspace: workspace),
             environment: subjectEnvironment(request),
             timeout: request.deadline,
             supervision: request.supervision
@@ -500,7 +500,7 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
         // the run through the token its `.xctestrun` environment carries.
         let output = try await executor.execute(
             command,
-            directory: workspace,
+            directory: driver.executionDirectory(workspace: workspace),
             environment: subjectEnvironment(request),
             timeout: request.deadline,
             supervision: request.supervision
@@ -522,7 +522,7 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
                 executable: "/usr/bin/xcrun",
                 arguments: ["xcresulttool", "get", "test-results", "summary", "--path", bundle, "--compact"]
             ),
-            directory: workspace,
+            directory: driver.executionDirectory(workspace: workspace),
             environment: subjectEnvironment(nil),
             timeout: 60
         )
@@ -542,7 +542,7 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
                 executable: "/usr/bin/xcrun",
                 arguments: ["xcresulttool", "get", "test-results", "tests", "--path", bundle, "--compact"]
             ),
-            directory: workspace,
+            directory: driver.executionDirectory(workspace: workspace),
             environment: subjectEnvironment(nil),
             timeout: 60
         )
@@ -577,6 +577,7 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
             throw LitmusFailure("expected exactly one .xctestrun artifact; found \(candidates.count)")
         }
         let bytes = try BoundedFileReader.read(path: products + "/" + file, cap: 4 << 20)
+        try XcodeTestConfiguration.validateTestRun(bytes, path: products + "/" + file)
         // SAFETY: the API is marked unsafe for its optional output pointer. We pass nil;
         // the input is owned bounded Data, and no caller-provided pointer is dereferenced or retained.
         let plist = try unsafe PropertyListSerialization.propertyList(from: Data(bytes), options: [], format: nil)
@@ -601,7 +602,11 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
             return value
         }
         let patched = try patch(plist)
-        guard patchedTargets > 0 else { throw LitmusFailure("no supported test target in .xctestrun") }
+        guard patchedTargets > 0 else {
+            throw LitmusFailure(
+                "zero supported test targets in \(products)/\(file); scheme \(driver.scheme ?? "unknown"). Check the selected test plan and containerPath; for nested packages use --package-path."
+            )
+        }
         let data = try PropertyListSerialization.data(fromPropertyList: patched, format: .xml, options: 0)
         try data.write(to: URL(fileURLWithPath: output), options: .atomic)
         return output

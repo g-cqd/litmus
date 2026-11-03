@@ -19,7 +19,7 @@ For a merge commit, `HEAD^1` can identify its target parent if the checkout incl
 
 A workspace lock prevents simultaneous runs from sharing a persistent or in-place workspace. Use `litmus restore DIR` after an interruption if restoration is still required. Do not run builds or editors that rewrite files concurrently with in-place mutation.
 
-Copied workspaces must include required local package dependencies. Copying only a package with sibling path dependencies does not copy those siblings. Run from a containing project root where supported, or use in-place execution. `--build-directory DIR` retains Xcode DerivedData separately.
+Copied workspaces must include required local package dependencies. Copying only a package with sibling path dependencies does not copy those siblings. Use the containing repository as root with `--package-path relative/package` to preserve siblings and run from the package directory, or use in-place execution. `--build-directory DIR` retains Xcode DerivedData separately.
 
 ## Verdict reuse
 

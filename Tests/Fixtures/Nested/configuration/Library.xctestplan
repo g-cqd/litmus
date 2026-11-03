@@ -1,0 +1,6 @@
+{
+  "configurations": [{"id": "E4AEF520-C785-4EB1-BFAC-A26452619896", "name": "Default", "options": {}}],
+  "defaultOptions": {},
+  "testTargets": [{"target": {"containerPath": "container:", "identifier": "LibraryTests", "name": "LibraryTests"}}],
+  "version": 1
+}

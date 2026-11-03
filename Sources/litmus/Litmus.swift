@@ -8,12 +8,15 @@ import ReportSupport
     static let configuration = CommandConfiguration(
         abstract: "Evidence-led mutation testing for Swift packages and Xcode projects.",
         version: LitmusVersion.current,
-        subcommands: [Plan.self, Run.self, Analyze.self, Census.self, Restore.self, Merge.self]
+        subcommands: [Plan.self, Run.self, Analyze.self, Census.self, Restore.self, Merge.self, Check.self]
     )
 }
 
 private struct SubjectOptions: ParsableArguments {
-    @Argument(help: "Subject root containing all local dependencies; never modified by Litmus.") var root: String = "."
+    @Argument(
+        help:
+            "Subject root containing all local dependencies; copied by default (in-place mode deliberately rewrites and restores it)."
+    ) var root: String = "."
     @Option(help: "Configuration file: exclude, and include in .litmus.json or the litmus section.") var config: String?
     @Option(name: .customLong("exclude-path"), help: "Exclude a substring/glob from mutation discovery (repeatable).")
     var exclusions: [String] = []
@@ -79,6 +82,8 @@ private struct Plan: AsyncParsableCommand {
     )
     @OptionGroup var subject: SubjectOptions
     @OptionGroup var change: ChangeOptions
+    @Option(help: "Package directory relative to root; limit mutation discovery to this package.") var packagePath:
+        String?
     @Option(help: "Output plan (.json or .pb); stdout JSON when omitted.") var output: String?
     @Option(help: "Bounded source-discovery parallelism, 1...16.") var jobs: Int = 4
     mutating func run() async throws {
@@ -86,10 +91,18 @@ private struct Plan: AsyncParsableCommand {
         let excludes = try subject.excludes()
         let plan: MutationPlan
         do {
+            let driver = try BuildDriver(
+                root: subject.absoluteRoot,
+                packagePath: packagePath,
+                scheme: nil,
+                destination: nil
+            )
+            try driver.validatePackage(workspace: subject.absoluteRoot)
             plan = try await MutationPlanner.plan(
                 root: subject.absoluteRoot,
                 exclude: excludes,
                 include: try subject.includes(),
+                packagePath: packagePath,
                 jobs: jobs,
                 scope: try await change.scope(root: subject.absoluteRoot)
             )
@@ -140,15 +153,37 @@ private struct Census: AsyncParsableCommand {
     }
 }
 
+private struct BuildSelectionOptions: ParsableArguments {
+    @Option(help: "Relative .xcodeproj/.xcworkspace inside root. Omit for Swift packages.") var project: String?
+    @Option(
+        help:
+            "Package directory relative to root; snapshot the containing root and execute inside this package. Cannot combine with --project."
+    ) var packagePath: String?
+    @Option(help: "Xcode scheme (required for iOS packages/projects).") var scheme: String?
+    @Option(help: "Explicit Xcode test plan configured by the scheme; requires --scheme.") var testPlan: String?
+    @Option(help: "Xcode destination (supply an existing simulator ID for reproducibility).") var destination: String?
+
+    func driver(root: String) throws -> BuildDriver {
+        guard testPlan == nil || scheme != nil else { throw ValidationError("--test-plan requires --scheme") }
+        var driver = try BuildDriver(
+            root: root,
+            container: project,
+            packagePath: packagePath,
+            scheme: scheme,
+            destination: destination
+        )
+        driver.testPlan = testPlan
+        return driver
+    }
+}
+
 private struct Run: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Build and test mutants in an owned snapshot. Executes trusted project code."
     )
     @OptionGroup var subject: SubjectOptions
     @OptionGroup var change: ChangeOptions
-    @Option(help: "Relative .xcodeproj/.xcworkspace inside root. Omit for Swift packages.") var project: String?
-    @Option(help: "Xcode scheme (required for iOS packages/projects).") var scheme: String?
-    @Option(help: "Xcode destination (supply an existing simulator ID for reproducibility).") var destination: String?
+    @OptionGroup var build: BuildSelectionOptions
     @Option(help: "New run directory OUTSIDE the source tree; contains checkpoints, evidence and build artifacts.")
     var output: String
     @Option(help: "Maximum non-overlapping sites per schema, 1...256.") var batchSize: Int = 64
@@ -295,14 +330,7 @@ private struct Run: AsyncParsableCommand {
             throw ValidationError("swiftpm-build-system must be native or swiftbuild")
         }
         var driver: BuildDriver
-        do {
-            driver = try BuildDriver(
-                root: subject.absoluteRoot,
-                container: project,
-                scheme: scheme,
-                destination: destination
-            )
-        } catch { try fail(error, code: .usage) }
+        do { driver = try build.driver(root: subject.absoluteRoot) } catch { try fail(error, code: .usage) }
         driver.swiftPMBuildSystem = swiftpmBuildSystem
         driver.xcodebuildArguments = xcodebuildArguments
         guard report.map({ ["xcode", "json", "sarif", "markdown"].contains($0) }) ?? true else {
@@ -311,7 +339,11 @@ private struct Run: AsyncParsableCommand {
         guard gate == nil || (gate == "new-survivors" && baseline != nil && report != nil) else {
             throw ValidationError("--gate new-survivors needs --report and --baseline")
         }
-        if !driver.usesXcode && !FileManager.default.fileExists(atPath: subject.absoluteRoot + "/Package.swift") {
+        if !driver.usesXcode
+            && !FileManager.default.fileExists(
+                atPath: driver.executionDirectory(workspace: subject.absoluteRoot) + "/Package.swift"
+            )
+        {
             throw ValidationError(
                 "host package requires Package.swift; Xcode projects need --project, --scheme and --destination"
             )
@@ -527,4 +559,33 @@ private func stderr(_ text: String) { FileHandle.standardError.write(Data((text 
 private func fail(_ error: any Error, code: ExitStatus) throws -> Never {
     stderr("litmus: error: \(error)")
     throw ExitCode(code.rawValue)
+}
+
+private struct Check: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract:
+            "Check package paths, discoverable Xcode test plans, or an existing .xctestrun without building or executing project code."
+    )
+    @Argument(help: "Repository/snapshot root containing local dependencies.") var root: String = "."
+    @OptionGroup var build: BuildSelectionOptions
+    @Option(help: "Existing .xctestrun artifact to inspect for runnable test bundles.") var xctestrun: String?
+
+    func run() throws {
+        do {
+            let root = URL(fileURLWithPath: root).standardizedFileURL.resolvingSymlinksInPath().path
+            let driver = try build.driver(root: root)
+            try driver.validatePackage(workspace: root)
+            try XcodeTestConfiguration.preflight(driver: driver, workspace: root)
+            if let xctestrun {
+                let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: xctestrun))
+                defer { try? handle.close() }
+                let bytes = Array(try handle.read(upToCount: (4 << 20) + 1) ?? Data())
+                guard bytes.count <= 4 << 20 else { throw ValidationError("xctestrun exceeds 4 MiB") }
+                try XcodeTestConfiguration.validateTestRun(bytes, path: xctestrun)
+            }
+            print(
+                "Configuration checks passed. Generated schemes and actual test discovery still require Xcode build-for-testing; this check does not establish that tests run."
+            )
+        } catch { try fail(error, code: .badConfiguration) }
+    }
 }
