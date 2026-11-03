@@ -202,4 +202,5 @@ if [[ -n "${LITMUS_EVIDENCE_DIR:-}" ]]; then
   cp "$WORK/plan.json" "$WORK/report.json" "$WORK/report.sarif" "$WORK/stale.json" "$LITMUS_EVIDENCE_DIR/"
   cp "$WORK/run/"*.json "$WORK/run/"*.pb "$WORK/run/"*.xml "$WORK/run/"*.log "$LITMUS_EVIDENCE_DIR/run/"
 fi
+LITMUS_BIN="$BIN" bash "$ROOT/scripts/smoke-nested.sh"
 printf 'Smoke passed: real kill, crash, timeout, survivor, no coverage and unviable verdicts, original-source preservation, JSON/protobuf/SARIF/Markdown/Stryker, strict and new-survivor gates, stale-test refusal, pull-request scope and fast path, budget, resume and result store, in-place and persistent workspaces, per-test reach selection and reuse, flaky-test exclusion, clean interruption.\n'

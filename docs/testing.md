@@ -26,3 +26,5 @@ Litmus reduces build work by compiling mutation batches rather than each mutatio
 Performance depends on build size, test duration, mutation density, suite parallelism, and machine load. There is no universal speedup factor. Compare runs with the same toolchain, source, tests, and options, and record cold versus warm build and store state.
 
 Each run reports build and test counts, CPU usage, peak sampled child memory, disk usage, and elapsed time. Use those fields to evaluate CI budgets. A diff selecting no mutation sites skips build and test work; that is a scope result, not evidence that the full project has no surviving mutations.
+
+The nested-package fixture checks a package with a sibling dependency and a shared Xcode scheme whose test plan lives outside the package. Run `bash scripts/smoke-nested.sh` for host execution, or set `LITMUS_XCODE_DESTINATION` to an existing destination to exercise Xcode as well. The script does not create or shut down simulators.

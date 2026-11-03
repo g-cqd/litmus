@@ -4,6 +4,8 @@ internal import SourceCorpus
 /// Chooses SwiftPM for host packages and Xcode for simulator packages, projects and workspaces.
 public struct BuildDriver: Codable, Sendable, Equatable {
     public let root: String
+    public var testPlan: String?
+    public let packagePath: String?
     public let container: String?
     public let scheme: String?
     public let destination: String?
@@ -19,13 +21,31 @@ public struct BuildDriver: Codable, Sendable, Equatable {
     /// The scratch directory is the copied workspace's own `.build`, SwiftPM's default: tests often find the package's
     /// executables at `<package>/.build/debug/<tool>` (fcheck's do). The snapshot never copies or verifies `.build`.
     public func swiftPMArguments(workspace: String, artifacts: String) -> [String] {
-        ["--package-path", workspace, "--scratch-path", workspace + "/.build"]
+        [
+            "--package-path", executionDirectory(workspace: workspace), "--scratch-path",
+            executionDirectory(workspace: workspace) + "/.build",
+        ]
             + (swiftPMBuildSystem.map { ["--build-system", $0] } ?? [])
     }
 
     /// Container paths must remain inside the isolated root. Scheme/destination are required together.
     /// A nil container with a scheme means an Xcode-opened Swift package, not a host `swift test` run.
-    public init(root: String, container: String? = nil, scheme: String?, destination: String?) throws {
+    public init(
+        root: String,
+        container: String? = nil,
+        packagePath: String? = nil,
+        scheme: String?,
+        destination: String?
+    ) throws {
+        if let packagePath {
+            let parts = packagePath.split(separator: "/", omittingEmptySubsequences: false)
+            guard container == nil, !parts.isEmpty, parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+                throw LitmusFailure(
+                    "--package-path must be a relative package directory inside root, without . or ..; it cannot be combined with --project"
+                )
+            }
+        }
+        self.packagePath = packagePath
         guard (scheme == nil) == (destination == nil) else {
             throw LitmusFailure("scheme and destination must be supplied together")
         }
@@ -40,6 +60,31 @@ public struct BuildDriver: Codable, Sendable, Equatable {
             }
         }
         self.root = root; self.container = container; self.scheme = scheme; self.destination = destination
+    }
+
+    /// The package execution directory, distinct from the snapshot and evidence root.
+    public func executionDirectory(workspace: String) -> String {
+        packagePath.map { workspace + "/" + $0 } ?? workspace
+    }
+
+    public func validatePackage(workspace: String) throws {
+        guard
+            (try? FileManager.default.attributesOfItem(atPath: workspace)[.type]) as? FileAttributeType
+                == .typeDirectory
+        else {
+            throw LitmusFailure("source root is not a directory: \(workspace)")
+        }
+        guard testPlan == nil || usesXcode else { throw LitmusFailure("--test-plan requires --scheme") }
+        guard let packagePath else { return }
+        let directory = executionDirectory(workspace: workspace)
+        let canonical = SourcePath.canonical(directory)
+        guard canonical.hasPrefix(SourcePath.canonical(workspace) + "/"),
+            FileManager.default.fileExists(atPath: directory + "/Package.swift")
+        else {
+            throw LitmusFailure(
+                "--package-path \(packagePath) must resolve to a package inside root (Package.swift missing or path escapes root)"
+            )
+        }
     }
 
     /// A bounded build-for-testing command. Artifacts must be outside the original source tree.
@@ -93,6 +138,7 @@ public struct BuildDriver: Codable, Sendable, Equatable {
         if let container { arguments += [container.hasSuffix(".xcworkspace") ? "-workspace" : "-project", container] }
         if let scheme { arguments += ["-scheme", scheme] }
         if let destination { arguments += ["-destination", destination] }
+        if let testPlan { arguments += ["-testPlan", testPlan] }
         return arguments + xcodebuildArguments
     }
 }

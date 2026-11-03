@@ -34,7 +34,11 @@ public struct WorkspaceSnapshot: Sendable {
     /// What a snapshot copies and how far: at most 100,000 regular files of at most 128 MiB each, 8 GiB in total.
     static let limits: TreeSnapshot.Limits = {
         var limits = TreeSnapshot.Limits()
-        limits.skippedNames = [".git", ".build", ".swiftpm", ".litmus", "DerivedData", "node_modules"]
+        // .swiftpm contains shared Xcode schemes and package configuration, not only caches.
+        // Preserve those build inputs; omit user-specific Xcode state.
+        limits.skippedNames = [
+            ".git", ".build", ".build-release", ".litmus", "xcuserdata", "DerivedData", "node_modules",
+        ]
         limits.maxEntries = 150_000
         limits.maxFiles = 100_000
         limits.maxFileBytes = 128 << 20

@@ -42,7 +42,7 @@ litmus run . --project App.xcodeproj --scheme AppTests \
   --trust-project --output /tmp/litmus-ios
 ```
 
-For an iOS-only Swift package, specify its scheme and destination without `--project`.
+For an iOS-only Swift package, specify its scheme and destination without `--project`. If it depends on sibling packages, use the containing repository as the root and add `--package-path Modules/Library`. This preserves relative dependencies and the package's test-plan context. See [nested packages and configuration checks](docs/usage.md#packages-inside-a-repository).
 
 ## Pull request checks
 

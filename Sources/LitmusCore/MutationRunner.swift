@@ -158,8 +158,12 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         let fm = FileManager.default
         let output = canonicalNew(outputDirectory), root = SourcePath.canonical(driver.root)
         guard output != root, !output.hasPrefix(root + "/"), !fm.fileExists(atPath: output) else {
-            throw LitmusFailure("run directory must be new and outside original source root")
+            throw LitmusFailure(
+                "output directory \(output) must not already exist and must be outside source root \(root); choose a new --output path or move the previous run (use --resume to reuse its verdicts)"
+            )
         }
+        try driver.validatePackage(workspace: root)
+        try XcodeTestConfiguration.preflight(driver: driver, workspace: root)
         let logs = output + "/logs", workers = output + "/workers"
         for directory in [output, logs, workers] {
             try fm.createDirectory(atPath: directory, withIntermediateDirectories: true)
@@ -190,6 +194,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 root: root,
                 exclude: options.exclude,
                 include: options.include,
+                packagePath: driver.packagePath,
                 jobs: 8,
                 scope: scope
             )
@@ -233,7 +238,10 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         let artifacts = prepared.buildDirectory
         try fm.createDirectory(atPath: artifacts, withIntermediateDirectories: true)
         /// Ends the workspace: restores what is still rewritten (in place), releases the lock.
+        var workspaceReleased = false
         func releaseWorkspace() {
+            guard !workspaceReleased else { return }
+            workspaceReleased = true
             if let journal = prepared.restore {
                 _ = try? journal.restoreAll()
                 prepared.lock?.release()
@@ -242,12 +250,17 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 prepared.lock?.release()
             }
         }
+        // Planning and configuration validation can fail before the execution checkpoint exists.
+        defer { releaseWorkspace() }
         account("snapshot", since: phase)
+        try driver.validatePackage(workspace: snapshot.root)
+        try XcodeTestConfiguration.preflight(driver: driver, workspace: snapshot.root)
         phase = clock.now
         let clonePlan = try await MutationPlanner.plan(
             root: snapshot.root,
             exclude: options.exclude,
             include: options.include,
+            packagePath: driver.packagePath,
             jobs: 8,
             scope: options.scope
         )
@@ -275,7 +288,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 executable: "/usr/bin/xcrun",
                 arguments: [driver.usesXcode ? "xcodebuild" : "swift", "-version"]
             ),
-            directory: snapshot.root,
+            directory: driver.executionDirectory(workspace: snapshot.root),
             environment: subjectEnvironment(nil),
             timeout: 60
         )
@@ -463,7 +476,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 counter.build()
                 let baselineBuild = try await executor.execute(
                     driver.buildCommand(workspace: snapshot.root, artifacts: artifacts),
-                    directory: snapshot.root,
+                    directory: driver.executionDirectory(workspace: snapshot.root),
                     environment: subjectEnvironment(nil),
                     timeout: options.buildTimeout,
                     supervision: buildSupervision
@@ -738,7 +751,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 counter.build()
                 let build = try await executor.execute(
                     driver.buildCommand(workspace: snapshot.root, artifacts: artifacts),
-                    directory: snapshot.root,
+                    directory: driver.executionDirectory(workspace: snapshot.root),
                     environment: subjectEnvironment(nil),
                     timeout: options.buildTimeout,
                     supervision: buildSupervision
@@ -1131,6 +1144,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         notes: inout [String]
     ) async throws -> any TestHarness {
         if driver.usesXcode {
+            try XcodeTestConfiguration.validateArtifacts(artifacts: artifacts, driver: driver)
             let xcode = XcodeHarness(
                 executor: executor,
                 driver: driver,
@@ -1144,7 +1158,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             do {
                 return try await simulatorHarness(
                     udid: udid,
-                    workspace: workspace,
+                    workspace: driver.executionDirectory(workspace: workspace),
                     artifacts: artifacts,
                     logs: logs,
                     notes: &notes
@@ -1165,7 +1179,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         func query(_ arguments: [String]) async throws -> String? {
             let output = try await executor.execute(
                 ToolCommand(executable: "/usr/bin/xcrun", arguments: arguments),
-                directory: workspace,
+                directory: driver.executionDirectory(workspace: workspace),
                 environment: subjectEnvironment(nil),
                 timeout: 120
             )
@@ -1199,7 +1213,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 frameworks: platform + "/Developer/Library/Frameworks",
                 libraries: platform + "/Developer/usr/lib"
             ),
-            workspace: workspace,
+            workspace: driver.executionDirectory(workspace: workspace),
             logs: logs,
             workers: options.jobs
         )
