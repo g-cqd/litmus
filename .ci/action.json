@@ -23,7 +23,7 @@
   "commands": [
     {
       "id": "smoke",
-      "run": "export TOOLCHAINS=swift; swift build --product litmus && LITMUS_BIN=\"$(swift build --show-bin-path)/litmus\" scripts/smoke.sh",
+      "run": "swift build --product litmus && BIN=\"$(swift build --show-bin-path)/litmus\" && TOOLCHAINS=swift LITMUS_BIN=\"$BIN\" scripts/smoke.sh",
       "cadence": [
         "nightly",
         "tag",
@@ -35,9 +35,6 @@
   "swift": {
     "versions": [
       "6.4.2"
-    ],
-    "environment": {
-      "TOOLCHAINS": "swift"
-    }
+    ]
   }
 }
