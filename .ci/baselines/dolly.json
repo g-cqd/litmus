@@ -1,0 +1,30 @@
+{
+  "fingerprints" : [
+    "13c359d4315c215d",
+    "13ca1256dfbdda0",
+    "151fe93affb42f3d",
+    "26c8c7dbe5a8eb31",
+    "341a51a9995a6f90",
+    "4f748cacebb82d54",
+    "5c05550829ff7964",
+    "5cea21fe5e6323dd",
+    "5f6b6c1f8569893e",
+    "6dfd6443af23813a",
+    "747ea5bd7b96ebf6",
+    "778d5d4798ec77ef",
+    "89497d53e925e2a6",
+    "90cbfb69ceca7f9f",
+    "af001d3e782ff2c6",
+    "b814f69cacd1d2ac",
+    "b8273ac8caabdaeb",
+    "c068c99a0c12a351",
+    "ca561f46c28ead43",
+    "d15f1d7b2e6d277d",
+    "d4d3d64de649b97",
+    "db3b25a1c97aee47",
+    "e97bbf59737deb8c",
+    "f8c27392fc177f9a"
+  ],
+  "tool" : "dolly",
+  "version" : 1
+}

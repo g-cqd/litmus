@@ -1,3 +1,4 @@
+internal import AemiDigest
 internal import AemiKernel
 internal import AemiRuntime
 internal import Foundation

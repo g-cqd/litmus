@@ -3,7 +3,7 @@
 Evidence-led mutation testing for Swift packages and Xcode projects, built in the style of `arcleak`, `deadwood`, `dolly`,
 `fcheck`, `modeler` and `analyzerkit`, on **analyzerkit, aemi, AemiJSON and AemiProtobuf**.
 
-**Status: 0.3.0-dev, not production-qualified, safety-certified or military-qualified.** Host Swift packages are
+**Status: 0.3.0, not production-qualified, safety-certified or military-qualified.** Host Swift packages are
 verified end to end on a real fixture, and so are Xcode schemes on macOS and on the iOS Simulator (hostless package
 tests through Litmus's simulator helper, app-hosted tests through `xcodebuild`). The CLI needs macOS 15+ and Swift 6.4;
 a subject keeps its own settings.
