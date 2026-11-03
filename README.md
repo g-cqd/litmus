@@ -75,7 +75,7 @@ The mutation score is detected mutations divided by detected plus undetected mut
 - [Execution model and limitations](docs/execution.md)
 - [Testing and performance](docs/testing.md)
 - [Security](SECURITY.md)
-- [Release notes](release-notes/v0.3.0.md)
+- [Release notes](release-notes/v0.3.1.md)
 
 ## License
 
