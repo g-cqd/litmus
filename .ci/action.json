@@ -1,0 +1,35 @@
+{
+  "project": {
+    "linux": false
+  },
+  "quality": {
+    "paths": [
+      "Sources"
+    ],
+    "include": [
+      "Package.swift",
+      "Sources/**",
+      "Tests/LitmusCoreTests/*.swift"
+    ],
+    "exclude": [
+      "Tests/Fixtures/**"
+    ]
+  },
+  "release": {
+    "executables": [
+      "litmus"
+    ]
+  },
+  "commands": [
+    {
+      "id": "smoke",
+      "run": "scripts/smoke.sh",
+      "after": "macos-debug",
+      "cadence": [
+        "nightly",
+        "tag",
+        "dispatch"
+      ]
+    }
+  ]
+}

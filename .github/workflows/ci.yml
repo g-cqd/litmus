@@ -1,0 +1,25 @@
+name: CI
+
+# swift-ci plans and runs the checks from .ci/action.json (https://github.com/g-cqd/swift-ci): quality (swift-format,
+# the analyzers against .ci/baselines), the tests on macOS (Litmus drives xcrun, Xcode and simulators: no Linux), the
+# real-fixture smoke run nightly and on tags, and for a `v*` tag the archives and the release from
+# release-notes/<tag>.md.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  merge_group:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: g-cqd/swift-ci/.github/workflows/swift-ci.yml@70f5a41884feb292cab80099ea245de816699563 # swift-ci 70f5a41
+    permissions:
+      contents: write # only used to publish a tag
+    secrets: inherit

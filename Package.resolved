@@ -1,44 +1,44 @@
 {
-  "originHash" : "8917dfea0255bf5406b69f3e81a50e546972b5f5863bd777db501325879205f4",
+  "originHash" : "4be3d574b5b59bc9f74a1695f6c994cc2532331e77ca97630050f7be0c656cac",
   "pins" : [
     {
       "identity" : "aemi",
-      "kind" : "localSourceControl",
+      "kind" : "remoteSourceControl",
       "location" : "https://github.com/Aemi-Studio/aemi.git",
       "state" : {
-        "revision" : "6ed7fb775654e22197227e85d9d0a931cefc29ff"
+        "revision" : "7a8fe8ba6ec8d641cffa7e7a7a3152fee7e51619"
       }
     },
     {
       "identity" : "aemijson",
-      "kind" : "localSourceControl",
+      "kind" : "remoteSourceControl",
       "location" : "https://github.com/g-cqd/AemiJSON.git",
       "state" : {
-        "revision" : "25f59b943eaeaaea9a1ff6fdc36e06dd45a84900"
+        "revision" : "3cd5a6aa8e0fd1e03573ee1df1e7fe7ffe488e08"
       }
     },
     {
       "identity" : "aemiprotobuf",
-      "kind" : "localSourceControl",
+      "kind" : "remoteSourceControl",
       "location" : "https://github.com/g-cqd/AemiProtobuf.git",
       "state" : {
-        "revision" : "edede35c0ac8ec6eda12088308630e46c0e2eab9"
+        "revision" : "4b8a245d3807ccc85f4b8e9128893eb53da2b3a1"
       }
     },
     {
       "identity" : "aemiregex",
-      "kind" : "localSourceControl",
+      "kind" : "remoteSourceControl",
       "location" : "https://github.com/g-cqd/AemiRegex.git",
       "state" : {
-        "revision" : "cc7deea1791e2602666f0cacc755730872e1a5d3"
+        "revision" : "c4bd4663012745e3ba149f5535ea9b67ebffe7ac"
       }
     },
     {
       "identity" : "analyzerkit",
-      "kind" : "localSourceControl",
+      "kind" : "remoteSourceControl",
       "location" : "https://github.com/g-cqd/analyzerkit.git",
       "state" : {
-        "revision" : "f339e8f4d5b23aff454a9931e55a908adadd2de0"
+        "revision" : "a05428c7437552400415e57da22c5a54fd87658b"
       }
     },
     {
@@ -59,12 +59,30 @@
       }
     },
     {
+      "identity" : "swift-asn1",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-asn1.git",
+      "state" : {
+        "revision" : "917b472dbe53ba699cbb0495f9a95a084bc6364d",
+        "version" : "1.7.4"
+      }
+    },
+    {
       "identity" : "swift-collections",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-collections.git",
       "state" : {
         "revision" : "f96b909e1a9e469620bc5037c1e24e00153f376f",
         "version" : "1.7.5"
+      }
+    },
+    {
+      "identity" : "swift-crypto",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-crypto.git",
+      "state" : {
+        "revision" : "6ff0a3b1471d22b4a9ce133218c42d8854f182d7",
+        "version" : "5.1.0"
       }
     },
     {
