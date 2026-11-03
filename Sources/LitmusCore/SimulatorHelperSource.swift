@@ -1,7 +1,7 @@
-/// The source of the simulator test helper (t58), compiled by Litmus for the simulator SDK (`SimulatorHelper`).
+/// The source of the simulator test helper, compiled by Litmus for the simulator SDK (`SimulatorHelper`).
 /// Kept in a raw string so `\(` in it stays Swift source.
 let simulatorHelperSource = #"""
-    // Litmus simulator test helper (ADR 0007, t58). Usage: helper <bundle binary> <events file> <configuration JSON>
+    // Litmus simulator test helper. Usage: helper <bundle binary> <events file> <configuration JSON>
     // Loads the test bundle, runs its Swift Testing tests through the versioned ABI entry point (records: JSON lines in the
     // events file, as `swift test --event-stream-output-path` writes them), then its XCTest cases through XCTestSuite with
     // an observer that writes one {"xctest":...} line per case to <events file>.xctest. Exit: 0 all passed, 1 a test

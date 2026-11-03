@@ -81,7 +81,7 @@ let processTokenVariable = "LITMUS_PROCESS_TOKEN"
 
 /// analyzerkit's `BoundedProcess`: a session per command, TERM then KILL on the deadline, output caps, a scrubbed
 /// environment that keeps what selects a toolchain, and, once the command has ended, every process it left in its
-/// session or that carries its token ended too (analyzerkit ADR-0030). Deadlines run on the suspending clock: a
+/// session or that carries its token ended too. Deadlines run on the suspending clock: a
 /// machine asleep does not time a test out.
 public struct BoundedExecutor: ProcessExecutor {
     public init() {}

@@ -17,7 +17,7 @@ public struct MutationFinding: Codable, Sendable, ReportedFinding {
     public var severityName: String { severity }
     public var ruleName: String { rule }
     public var displayMessage: String { message }
-    /// Survives edits elsewhere in the file: the verdict's rule and the mutant's anchored id (ADR 0007). Written to
+    /// Survives edits elsewhere in the file: the verdict's rule and the mutant's anchored id. Written to
     /// SARIF as `litmus/anchored/v1`; what `--gate new-survivors` compares.
     public let anchoredFingerprint: String?
 

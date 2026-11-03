@@ -3,7 +3,7 @@ internal import Foundation
 internal import Synchronization
 
 /// CPU time consumed by this process's terminated and reaped descendants, in seconds: aemi's
-/// `ProcessProbe.childrenCPUNanos()` (`RUSAGE_CHILDREN`, aemi ADR 0028).
+/// `ProcessProbe.childrenCPUNanos()` (`RUSAGE_CHILDREN`).
 ///
 /// Around the baseline suite, which runs alone, the difference over the wall time is how many cores the suite keeps
 /// busy by itself (Swift Testing runs tests in parallel inside its process). Litmus sizes its workers from it, so that
@@ -22,7 +22,7 @@ enum ChildUsage {
     }
 }
 
-/// What a run cost the machine (ADR 0007): what a CI runner's budget is set and checked against.
+/// What a run cost the machine: what a CI runner's budget is set and checked against.
 public struct RunCost: Codable, Sendable, Equatable {
     public var wallSeconds: Double = 0
     /// CPU time of Litmus itself and of every process it started and reaped (builds, tests, tools).

@@ -3,3 +3,6 @@
 .DS_Store
 .litmus/
 .build-release/
+
+__pycache__/
+*.pyc

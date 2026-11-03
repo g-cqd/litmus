@@ -189,7 +189,7 @@ private func run(
     #expect(result.isSuccessfulExecution)
     #expect(result.results.map(\.verdict) == [.killed])
     let active = try #require(result.results.first?.mutation.id)
-    // The inactive schema is the baseline and the control at once (ADR 0007); `swift test` cannot select tests, so a
+    // The inactive schema is the baseline and the control at once; `swift test` cannot select tests, so a
     // targeted confirmation reruns the whole suite alone.
     #expect(executor.calls.withLock { $0.map { $0[ActivationEnvironment.activeID] ?? "" } } == ["", active, active])
     #expect(executor.builds.withLock { $0 } == 1)
@@ -446,7 +446,7 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(cost.runDirectoryMiB > 0 && cost.runDirectoryMiB >= cost.workspaceMiB)
 }
 
-// MARK: - Reuse and budgets (ADR 0007)
+// MARK: - Reuse and budgets
 
 @Test func `a result store reuses every verdict of an unchanged subject without building`() async throws {
     let base = try fixture(twoSites)
@@ -659,7 +659,7 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(executor.builds.withLock { $0 } <= 1)
 }
 
-// MARK: - Workspaces (ADR 0007)
+// MARK: - Workspaces
 
 @Test func `in place, originals are backed up before a rewrite and restored, also by a later start`() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-inplace-" + UUID().uuidString).path
@@ -794,7 +794,7 @@ private func runIn(
     return (artifact, executor)
 }
 
-// MARK: - Gate and reports (ADR 0007)
+// MARK: - Gate and reports
 
 @Test func `a baseline of anchored fingerprints gates only new survivors, and a change scopes the findings`()
     async throws
@@ -841,7 +841,7 @@ private func runIn(
     #expect(markdown.contains("Cost: "))
 }
 
-// MARK: - Sharding (ADR 0007)
+// MARK: - Sharding
 
 @Test func `shards partition by module unit, deterministically and disjointly`() throws {
     func site(_ path: String, _ n: Int) -> Mutation {
