@@ -29,7 +29,8 @@
         "tag",
         "dispatch"
       ],
-      "os": "macOS"
+      "os": "macOS",
+      "title": "Integration \u00b7 Mutation Smoke"
     }
   ],
   "swift": {
