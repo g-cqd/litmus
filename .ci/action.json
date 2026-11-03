@@ -31,5 +31,10 @@
         "dispatch"
       ]
     }
-  ]
+  ],
+  "swift": {
+    "versions": [
+      "6.4.2"
+    ]
+  }
 }
