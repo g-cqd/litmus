@@ -253,7 +253,7 @@ private struct SiteContext {
 }
 
 /// The enclosing declarations of the walk, and how many identical sites each has had: what anchors a mutant's
-/// identity to the code (ADR 0007) rather than to byte offsets, which every edit above it would change.
+/// identity to the code rather than to byte offsets, which every edit above it would change.
 private final class Anchors {
     struct Declaration {
         let name: String
@@ -451,8 +451,7 @@ private final class Sites: SyntaxVisitor {
 
 /// Cryptographic content identity for execution validity, distinct from fast diagnostic identities.
 public enum Digest {
-    /// Lower-case hexadecimal SHA-256 of `bytes`: aemi's `ContentDigest` (CommonCrypto on Apple platforms, a portable
-    /// FIPS 180-4 implementation elsewhere; aemi ADR 0028), where CryptoKit tied Litmus to Apple platforms.
+    /// Lower-case hexadecimal SHA-256 of `bytes`, using aemi's platform-backed `ContentDigest`.
     public static func sha256(_ bytes: [UInt8]) -> String {
         ContentDigest.sha256Hex(bytes)
     }

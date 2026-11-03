@@ -155,7 +155,7 @@ func `xcresult rejects hostile counters before arithmetic`(counter: Int) throws 
     #expect(scan.counts == TestCounts(passed: 1, failed: 1, skipped: 1))
 }
 
-/// Xcode result bundles (ADR 0007): counts per test bundle for `-only-testing`, and a crashed runner told from a
+/// Xcode result bundles: counts per test bundle for `-only-testing`, and a crashed runner told from a
 /// failed test. Shapes recorded from Xcode 27 on 2026-11-02.
 @Test func `xcresult test trees give counts per bundle, and a crashed runner is a crash`() throws {
     let tree = """
@@ -209,7 +209,7 @@ func `xcresult rejects hostile counters before arithmetic`(counter: Int) throws 
     #expect(Array(command.arguments.suffix(2)) == ["-only-testing:ATests", "-only-testing:B Tests"])
 }
 
-/// The simulator helper's harness (t58): which destinations and bundles it takes, and what it tells the helper.
+/// The simulator helper's harness: which destinations and bundles it takes, and what it tells the helper.
 @Test func `the simulator harness takes hostless bundles on a simulator id, and xcodebuild keeps the rest`() throws {
     #expect(
         SimulatorDirectHarness<BoundedExecutor>.simulatorID(

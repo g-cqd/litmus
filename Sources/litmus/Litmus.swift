@@ -32,7 +32,7 @@ private struct SubjectOptions: ParsableArguments {
     }
 }
 
-/// What a pull-request run mutates (ADR 0007).
+/// What a pull-request run mutates.
 private struct ChangeOptions: ParsableArguments {
     @Option(help: "Limit to the change in this unified diff (paths relative to --diff-root).") var diff: String?
     @Option(
@@ -324,7 +324,7 @@ private struct Run: AsyncParsableCommand {
         let artifact: RunArtifact
         let (runDriver, runOptions, runOutput) = (driver, options, output)
         do {
-            // A signal cancels the run: its children are ended and its checkpoint written (analyzerkit ADR-0030).
+            // A signal cancels the run: its children are ended and its checkpoint written.
             artifact = try await TerminationSignals.run {
                 try await MutationRunner(executor: BoundedExecutor()).run(
                     driver: runDriver,

@@ -9,13 +9,13 @@ internal import ProjectModel
 internal import SourceCorpus
 internal import Synchronization
 
-/// What a mutant's verdict depends on, as one digest (ADR 0007, design 0001 §4).
+/// What a mutant's verdict depends on, as one digest.
 ///
 /// A verdict is reused only when its key matches, and the key holds everything that can change it under the
 /// deterministic-test assumption the flaky probe enforces:
 /// - the mutant's anchored identity, its text and replacement;
 /// - every input of its package and of the local packages that package depends on (analyzerkit's
-///   `packageClosure(containing:)`, ADR-0031 there); the whole snapshot for an Xcode project or a layout it cannot read;
+///   `packageClosure(containing:)`); the whole snapshot for an Xcode project or a layout it cannot read;
 /// - the tool version, execution policy, toolchain, build driver, and every option that changes a verdict.
 ///
 /// `--reuse declaration` (nightly only) replaces the closure by the mutant's declaration and its test targets' files:
@@ -164,7 +164,7 @@ public struct ReusedResult: Sendable {
     public let runID: String
 }
 
-/// Verdicts by reuse key, on disk (ADR 0007, design 0001 §4): one record per key, written atomically, verified on read,
+/// Verdicts by reuse key, on disk: one record per key, written atomically, verified on read,
 /// evicted oldest first past a size bound.
 ///
 /// Records are protobuf envelopes: field 1 version, field 2 the journal record of the result, field 3 the key, field 4
@@ -172,8 +172,6 @@ public struct ReusedResult: Sendable {
 /// `LITMUS_STORE_KEY` when it is set (then a record without the right tag is ignored: a store that untrusted jobs can
 /// write cannot forge verdicts for trusted ones). A record that fails any check is a miss, noted, never trusted.
 ///
-/// Waiting for upstream: a verified, size-bounded content-addressed store in aemi (AE-10, Litmus task t57) would replace
-/// the layout and eviction here.
 public final class ResultStore: Sendable {
     static let version: UInt64 = 1
     public let directory: String

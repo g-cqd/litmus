@@ -1,6 +1,6 @@
 internal import Foundation
 
-/// One shard of a run (`--shard k/n`, ADR 0007): the mutants of whole modules, so each shard rebuilds only what it
+/// One shard of a run (`--shard k/n`): the mutants of whole modules, so each shard rebuilds only what it
 /// mutates, and `litmus merge` puts the shards back together.
 public struct ShardSelection: Sendable, Equatable {
     /// 1-based.

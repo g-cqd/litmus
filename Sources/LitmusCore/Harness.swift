@@ -559,7 +559,7 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
             return finished
         }
         if counts.failed > 0 {
-            // A crashed runner or host fails every test it was running: a crash, which is rerun as one (ADR 0007).
+            // A crashed runner or host fails every test it was running: a crash, which is rerun as one.
             return TestEvidence.xcresultCrashed(summary.stdout)
                 ? finished(.crashed, "the test runner or host crashed") : finished(.failed, "a test failed")
         }

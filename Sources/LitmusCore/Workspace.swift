@@ -2,7 +2,7 @@ internal import AemiIO
 internal import Foundation
 internal import SourceCorpus
 
-/// Where a run builds and mutates (ADR 0007, design 0001 §2).
+/// Where a run builds and mutates.
 public enum WorkspaceStrategy: Sendable, Equatable {
     /// A fresh copy (APFS clones) in the run directory, built from scratch; the source is never written.
     case copy
@@ -15,8 +15,7 @@ public enum WorkspaceStrategy: Sendable, Equatable {
 }
 
 /// An exclusive advisory lock on a file (`flock`), held until released or the process ends: two runs never share a
-/// persistent or in-place workspace. Waiting for upstream: an advisory lock in aemi (AE-11,
-/// docs/upstream-recommendations.md).
+/// persistent or in-place workspace.
 final class WorkspaceLock: Sendable {
     private let file: PosixFile
 

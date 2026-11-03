@@ -119,9 +119,9 @@ enum SimulatorHelper {
     }
 }
 
-/// Runs hostless test bundles on a booted simulator through Litmus's helper (t58): `simctl spawn` per bundle, Swift
+/// Runs hostless test bundles on a booted simulator through Litmus's helper: `simctl spawn` per bundle, Swift
 /// Testing through its ABI entry point with structured events (fail-fast, test names, filters, repetitions), XCTest
-/// through `XCTestSuite`. Measured 3.3–4.3 s per run against 9–11 s for `xcodebuild test-without-building` (phase 0).
+/// through `XCTestSuite`. Measured 3.3–4.3 s per run against 9–11 s for `xcodebuild test-without-building`.
 /// One worker: one simulator.
 public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
     struct Bundle: Sendable, Equatable {

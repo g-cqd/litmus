@@ -50,7 +50,7 @@ import json,sys
 r=json.load(open(sys.argv[1])); assert r['version']=='2.1.0'
 assert r['runs'][0]['invocations'][0]['executionSuccessful']
 PY
-# The pull-request gate (ADR 0007): a base-branch baseline holds today's survivors, so nothing is new; an empty one
+# The pull-request gate: a base-branch baseline holds today's survivors, so nothing is new; an empty one
 # makes every survivor new. Markdown summary and Stryker's schema render from the same run.
 "$BIN" analyze "$WORK/subject" --results "$WORK/run/run.pb" --write-baseline "$WORK/base.json" 2> /dev/null
 "$BIN" analyze "$WORK/subject" --results "$WORK/run/run.pb" --baseline "$WORK/base.json" --gate new-survivors --format markdown > "$WORK/summary.md"
@@ -79,7 +79,7 @@ python3 - "$WORK/stale.json" <<'PY'
 import json,sys
 r=json.load(open(sys.argv[1])); assert not r['successfulExecution'] and r['degradedFiles']
 PY
-# Pull-request runs (ADR 0007): a diff scopes the run to the changed lines; a change reaching no site costs about a
+# Pull-request runs: a diff scopes the run to the changed lines; a change reaching no site costs about a
 # second and builds nothing; a result store reuses every verdict of an unchanged subject; a capped run resumes.
 cp -R "$ROOT/Tests/Fixtures/Example" "$WORK/pr"
 git -C "$WORK/pr" init -q && git -C "$WORK/pr" add -A && git -C "$WORK/pr" -c user.name=s -c user.email=s@s commit -qm base
@@ -129,7 +129,7 @@ used=[n for n in again['notes'] if n.startswith('per-test reach from')]
 assert used and ' used for 0 ' not in used[0], used
 print('per-test reach: verdicts as the full run;', used[0].split(' used for ')[1])
 PY2
-# Workspaces (ADR 0007): in place, the checkout is restored, also after SIGINT; a persistent workspace builds
+# Workspaces: in place, the checkout is restored, also after SIGINT; a persistent workspace builds
 # incrementally on its second run.
 "$BIN" run "$WORK/pr" --trust-project --workspace in-place --max-mutants 3 --output "$WORK/ip" --timeout 120 > /dev/null
 [[ -z "$(git -C "$WORK/pr" status --porcelain --untracked-files=no)" && ! -e "$WORK/pr/.litmus" ]]

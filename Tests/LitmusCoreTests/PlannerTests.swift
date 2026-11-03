@@ -176,7 +176,7 @@ import Testing
     await #expect(throws: LitmusFailure.self) { try await MutationPlanner.plan(root: root, include: ["Nowhere.swift"]) }
 }
 
-/// Anchored identity (ADR 0007): a mutant keeps its id when code moves around it, so results can be reused and runs
+/// Anchored identity: a mutant keeps its id when code moves around it, so results can be reused and runs
 /// compared; it changes when its own code or its declaration's name does.
 @Suite struct AnchoredIdentityTests {
     private let source = """

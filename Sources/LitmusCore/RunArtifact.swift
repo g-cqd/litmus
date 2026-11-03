@@ -25,7 +25,7 @@ public struct RunPolicy: Codable, Sendable, Equatable {
     public var suiteWidth: Int? = nil
     /// Whether each mutant ran only the test targets that can reach its file.
     public var testTargetSelection: Bool? = nil
-    /// Which build the baseline ran on: `inactive-schema` or `unmutated` (ADR 0007); nil before 0.3.
+    /// Which build the baseline ran on: `inactive-schema` or `unmutated`; nil before 0.3.
     public var baselineBuild: String? = nil
 }
 
@@ -44,7 +44,7 @@ public struct BudgetRecord: Codable, Sendable, Equatable {
     }
 }
 
-/// How verdicts were reused (ADR 0007).
+/// How verdicts were reused.
 public struct ReuseRecord: Codable, Sendable, Equatable {
     public let mode: ReuseContext.Mode
     /// The digest of the run's verdict-relevant options, toolchain and policy (part of every key).

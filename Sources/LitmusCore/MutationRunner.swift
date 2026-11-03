@@ -85,7 +85,7 @@ public struct RunOptions: Sendable {
     public var reachFrom: String?
     /// Run one shard of the plan (`--shard k/n`): whole module units, merged later with `litmus merge`.
     public var shard: ShardSelection?
-    /// Run hostless Xcode test bundles on the simulator through Litmus's helper rather than `xcodebuild` (t58).
+    /// Run hostless Xcode test bundles on the simulator through Litmus's helper rather than `xcodebuild`.
     public var simulatorHarness = true
     /// Where the run builds and mutates (`--workspace`).
     public var workspace = WorkspaceStrategy.copy
@@ -304,7 +304,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             )
         }
 
-        // Reuse (ADR 0007): every result carries its key, so any run can be resumed or seed a store; a verdict is
+        // Reuse: every result carries its key, so any run can be resumed or seed a store; a verdict is
         // reused only when its key matches, and says where it came from.
         phase = clock.now
         let reuse = try ReuseContext(
@@ -826,7 +826,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                         continue
                     }
                 } else {
-                    // The inactive schema is the baseline (ADR 0007): with no mutant active every site evaluates its
+                    // The inactive schema is the baseline: with no mutant active every site evaluates its
                     // original expression, so this build behaves as the unmutated one, and its run is the control too.
                     current = try await establish()
                     established = current
@@ -1007,7 +1007,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
     }
 
     /// For each mutant, the test modules that can reach its file: the test targets analyzerkit finds from the
-    /// manifests (`ProjectClassification.testTargets(covering:)`, ADR-0030 there), as module names, among `modules`
+    /// manifests (`ProjectClassification.testTargets(covering:)`), as module names, among `modules`
     /// (those the suite has). A mutant whose file no target claims, or whose targets are not among them, is left out:
     /// it runs every module.
     static func coveringModules(_ mutations: [Mutation], root: String, modules: Set<String>) -> [String: Set<String>] {
@@ -1207,7 +1207,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
 
     /// Writes one batch's schemas into the snapshot, keeping the originals to restore.
     /// The direct simulator harness when every test target is hostless and the helper runs on the booted simulator
-    /// (t58); nil, with a note, to use `xcodebuild`.
+    ///; nil, with a note, to use `xcodebuild`.
     private func simulatorHarness(
         udid: String,
         workspace: String,

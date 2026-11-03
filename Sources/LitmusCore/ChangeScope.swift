@@ -4,8 +4,8 @@ public import ProjectModel
 internal import SourceCorpus
 
 /// What a pull-request run mutates: the sites on the lines a change adds or rewrites, and optionally the rest of the
-/// files it touches (ADR 0007, design 0001 §1). Read from a unified diff the caller gives (`--diff`), or from git
-/// (`--diff-base`), with analyzerkit's `ChangedLines` (ADR-0031 there).
+/// files it touches. Read from a unified diff the caller gives (`--diff`), or from git
+/// (`--diff-base`), with analyzerkit's `ChangedLines`.
 public struct ChangeScope: Sendable {
     /// How far a change reaches.
     public enum Breadth: String, Codable, Sendable, CaseIterable {

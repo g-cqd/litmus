@@ -2,7 +2,7 @@ internal import AemiIO
 internal import Foundation
 internal import SourceCorpus
 
-/// A pull request's job summary (`analyze --format markdown`, ADR 0007): the score, what ran and what it cost, and the
+/// A pull request's job summary (`analyze --format markdown`): the score, what ran and what it cost, and the
 /// findings in a table. GitHub renders it in `$GITHUB_STEP_SUMMARY`; Danger can post it.
 public enum MarkdownReport {
     public static func render(_ report: MutationReport, artifact: RunArtifact) -> String {
