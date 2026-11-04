@@ -7,7 +7,7 @@
       "Sources"
     ],
     "include": [
-      "Package.swift",
+      "/Package.swift",
       "Sources/**",
       "Tests/LitmusCoreTests/*.swift"
     ],
@@ -30,7 +30,7 @@
         "dispatch"
       ],
       "os": "macOS",
-      "title": "Integration \u00b7 Mutation Smoke"
+      "title": "Integration · Mutation Smoke"
     }
   ],
   "swift": {
