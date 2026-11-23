@@ -14,7 +14,15 @@ Run `litmus --help` or `litmus <command> --help` for the full option reference.
 
 ## Mutation scope
 
-Litmus negates conditions, swaps ternary branches, and exchanges `&&` and `||`. It excludes tests, previews, generated code, debug-only regions, macro arguments, and files it identifies as outside compiled targets. The plan records exclusions; inspect it when project classification is ambiguous.
+Litmus mutates with operators in three tiers; each tier includes the ones before it. See [operators](operators.md) for what each does, what it never touches, and how often it detects a missing test.
+
+| Tier | Operators |
+| --- | --- |
+| `stable` (default) | `negate-condition`, `swap-ternary`, `replace-logical` |
+| `standard` | adds `replace-relational`, `flip-boolean`, `replace-arithmetic` |
+| `experimental` | adds `remove-call` |
+
+`--operator-tier TIER` picks a tier; `--operators ID,ID` names exactly which operators run (the two are alternatives); both work on `plan` and `run`. `litmus census` lists the candidates and which operator implements each. Litmus excludes tests, previews, generated code, debug-only regions, macro and attribute arguments, enum case declarations, and files it identifies as outside compiled targets. The plan records exclusions; inspect it when project classification is ambiguous.
 
 Use `--only-path GLOB` and `--exclude-path GLOB` to control files. A unified diff can be supplied with `--diff FILE`, or computed with `--diff-base REV`. `--diff-scope lines` is the default; `files` includes all sites in affected files.
 
@@ -37,9 +45,15 @@ let value = condition ? first : second
 
 Suppressed sites remain visible in the plan.
 
+## Score gates
+
+`--minimum-score PERCENT` fails a `run` or `analyze` whose mutation score is lower. `--maximum-score-drop POINTS --baseline-run RUN` fails when the score fell by more than that from an earlier run (`.json` or `.pb`). A drop is judged only between runs that measured the same thing: whole-subject runs of the same operators over the same files, with no change scope, shard, or budget stop; otherwise the gate says why it cannot compare and fails. A run with an unresolved mutant has no score and fails. These gates are independent of `--strict` and `--gate new-survivors`.
+
 ## Execution controls
 
 `--jobs`, `--batch-size`, `--suite-width`, `--timeout`, and `--timeout-factor` control concurrency, batching, and deadlines. `--memory-limit` bounds monitored process memory. `--baseline-repetitions` controls flaky-test probing. `--kill-confirmation targeted|full|none` controls verification of detected mutations.
+
+`--progress` (the default when standard error is a terminal; `--no-progress` turns it off) prints one line per decided mutant. When `--resume` or a nightly run recorded how long each mutant took, the slowest start first. `--test-target NAME` (repeatable) runs only those test targets for every mutant, with the baseline still running them all.
 
 `--background` lowers build and first-pass priority. It can substantially increase wall time and may trigger a project's own compiler timing limits. `--xcodebuild-argument ARG` passes an additional argument to Xcode; repeat it for each argument and value.
 
@@ -73,6 +87,8 @@ litmus run /path/to/repository --package-path Modules/Library \
 Litmus copies the root, executes builds and tests from the package directory, and mutates only that package. Paths in evidence remain relative to the root. `plan --package-path` supports the same discovery scope. Sibling packages are retained as build inputs, not mutation targets. `--only-path` filters still apply within the selected package. `--package-path` must name a package inside the root and cannot be combined with `--project`.
 
 `--test-plan NAME` explicitly selects a plan referenced by the scheme. Litmus does not silently replace test plans or add targets: doing so could change which tests the project intends to run. `-only-testing` can filter existing test targets but cannot repair an empty test configuration.
+
+A package whose manifest has `.package(path:)` dependencies outside the root is refused before any copy, with the command to run from their common parent.
 
 ## Check configuration without building
 

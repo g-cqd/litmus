@@ -27,6 +27,8 @@ struct WorkerSlot: Sendable {
 /// - A crash is rerun alone and counts when it repeats; a timeout is rerun alone with twice the deadline.
 /// - A schema that does not compile is split by its compiler diagnostics, then by halves, until each mutant that does
 ///   not compile alone is `unviable`.
+/// - An inactive control that differs from the baseline is retried once; if it differs again its batch is split by
+///   halves (within a budget) until the mutant that breaks it is alone, and only that one is an infrastructure error.
 public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
     let executor: Executor
     public init(executor: Executor) { self.executor = executor }
@@ -448,5 +450,5 @@ func seconds(_ duration: Duration) -> Double {
 
 /// The tool's version, written to provenance and reports.
 public enum LitmusVersion {
-    public static let current = "0.3.2"
+    public static let current = "0.4.0"
 }

@@ -106,7 +106,7 @@ public struct MutationResult: Codable, Sendable {
 
 /// The record of a run. `complete` never means that infrastructure errors were kills.
 public struct RunArtifact: Codable, Sendable {
-    public static let executionPolicy = "activation-markers/no-coverage/unviable-isolation/inactive-schema-baseline/v4"
+    public static let executionPolicy = "activation-markers/no-coverage/unviable-isolation/inactive-schema-baseline/v5"
     public let version: Int
     public let provenance: RunProvenance
     public let plan: MutationPlan
