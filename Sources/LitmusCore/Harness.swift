@@ -518,23 +518,19 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
         }
     }
 
-    /// One run, on the driver's destination or on a worker's own simulator, products snapshot and DerivedData.
+    /// One run, on the driver's destination or on a worker's own simulator and DerivedData.
     private func run(_ request: TestRunRequest, on device: PoolDevice?) async throws -> TestRunResult {
         let start = ContinuousClock.now
         func elapsedNanoseconds() -> Int64 { nanoseconds(since: start) }
         let bundle = "\(logs)/\(request.name).xcresult"
-        var products = artifacts + "/DerivedData/Build/Products"
+        // Workers share the build products: no schema is built while tests run, and a test run only reads them. Each
+        // worker writes its own DerivedData, so concurrent runs never share xcodebuild's state.
+        let products = artifacts + "/DerivedData/Build/Products"
         var derivedData: String?
         if let device {
-            // Each run gets a private clone of the products: a rebuild between schemas, or another worker, cannot
-            // change what it runs. A clone shares its blocks with the original, so it costs a directory, not a copy.
             derivedData = device.directory + "/DerivedData"
             try FileManager.default.createDirectory(atPath: derivedData ?? "", withIntermediateDirectories: true)
-            let clone = device.directory + "/products-" + UUID().uuidString.prefix(8)
-            try DirectoryClone.copy(from: products, to: clone)
-            products = clone
         }
-        defer { if device != nil { try? FileManager.default.removeItem(atPath: products) } }
         let xctestrun = try preparedTestRun(
             output: "\(logs)/\(request.name).xctestrun",
             request: request,

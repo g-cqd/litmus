@@ -198,3 +198,24 @@ func `a manifest's local dependencies are read, and those outside the root are d
     }
     #expect(failure?.description.contains("known: App_Tests, Core Tests, Plain") == true)
 }
+
+@Test func `call removal leaves value branches and guard exits alone, and mutates statement branches`() throws {
+    let source = """
+        func a(_ c: Bool) -> Int { if c { one() } else { two() } }
+        func b(_ c: Bool) { let x = if c { one() } else { two() }; use(x) }
+        func d(_ c: Int) { switch c { case 1: first(); default: second() } }
+        func e(_ c: Bool) { if c { three() } else if !c { four() } }
+        func f(_ x: Int?) { guard let x else { bail() }; use(x) }
+        func g(_ x: Int?) { guard let x else { log(); return }; use(x) }
+        """
+    let found = Set(try sites(source, [.removeCall]).map(\.original))
+    #expect(found == ["use(x)", "first()", "second()", "three()", "four()", "log()"], "\(found.sorted())")
+}
+
+@Test func `stable operators still mutate attribute arguments; the new ones do not`() throws {
+    let source = "struct S { @Clamped(limit > 0 ? limit : 1) var v = 0; @Flag(true) var w = 0 }"
+    let stable = try sites(source, MutationOperator.defaults)
+    #expect(stable.map(\.operatorID) == [.swapTernary])
+    let added = try sites(source, [.replaceRelational, .flipBoolean])
+    #expect(added.isEmpty)
+}

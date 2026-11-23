@@ -340,6 +340,9 @@ private final class Sites: SyntaxVisitor {
     /// Depth of result-builder declarations being walked (`var body: some View`, `@…Builder`): a statement edit there
     /// would change what the builder collects.
     var builderDepth = 0
+    /// Depth of attribute arguments and enum case declarations being walked: the operators added in 0.4 leave them
+    /// alone (a compile-time constant there cannot read a runtime schema), the stable ones keep 0.3's behaviour.
+    var constantDepth = 0
 
     init(_ context: SiteContext) {
         self.context = context
@@ -347,7 +350,7 @@ private final class Sites: SyntaxVisitor {
     }
 
     private func add(_ expression: some SyntaxProtocol, operatorID: MutationOperator, replacement: String) {
-        guard context.operators.contains(operatorID) else { return }
+        guard context.operators.contains(operatorID), constantDepth == 0 || operatorID.tier == .stable else { return }
         let start = expression.positionAfterSkippingLeadingTrivia.utf8Offset
         let end = expression.endPositionBeforeTrailingTrivia.utf8Offset
         let original = expression.trimmedDescription
@@ -536,13 +539,15 @@ private final class Sites: SyntaxVisitor {
         return .visitChildren
     }
     override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind {
-        // Attribute arguments are compile-time constants: a runtime schema there never compiles.
-        .skipChildren
+        constantDepth += 1
+        return .visitChildren
     }
+    override func visitPost(_ node: AttributeSyntax) { constantDepth -= 1 }
     override func visit(_ node: EnumCaseDeclSyntax) -> SyntaxVisitorContinueKind {
-        // Raw values and associated defaults are constants too.
-        .skipChildren
+        constantDepth += 1
+        return .visitChildren
     }
+    override func visitPost(_ node: EnumCaseDeclSyntax) { constantDepth -= 1 }
     override func visit(_ node: IfConfigClauseSyntax) -> SyntaxVisitorContinueKind {
         // The condition is compile-time syntax, not a runtime Boolean expression.
         if let elements = node.elements { walk(elements) }
@@ -630,9 +635,12 @@ enum CallRemoval {
     /// The call is the only statement of a body whose value it may be returned as: a closure, a getter, or a function
     /// with a result. Wrapping it in `if` would change that body's type.
     static func isImplicitReturn(_ node: CodeBlockItemSyntax) -> Bool {
-        guard let list = node.parent?.as(CodeBlockItemListSyntax.self), list.count == 1, let owner = list.parent else {
-            return false
-        }
+        guard let list = node.parent?.as(CodeBlockItemListSyntax.self), let owner = list.parent else { return false }
+        // The last statement of a `guard`'s else must leave the scope: a call there returns `Never`.
+        if node == list.last, owner.as(CodeBlockSyntax.self)?.parent?.is(GuardStmtSyntax.self) == true { return true }
+        // The last statement of an `if` or `switch` used as a value is that branch's value.
+        if node == list.last, let branch = valueBranch(owner) { return branch }
+        guard list.count == 1 else { return false }
         if owner.is(ClosureExprSyntax.self) || owner.is(AccessorBlockSyntax.self) { return true }
         guard let block = owner.as(CodeBlockSyntax.self), let holder = block.parent else { return false }
         if let accessor = holder.as(AccessorDeclSyntax.self) {
@@ -644,6 +652,32 @@ enum CallRemoval {
             return returnsValue(function.signature.returnClause)
         }
         return false
+    }
+
+    /// For a body that is a branch of an `if` or `switch`: whether that `if` or `switch` is used as a value (an
+    /// expression, or the implicit return of its own body). Nil for any other body.
+    private static func valueBranch(_ owner: Syntax) -> Bool? {
+        var statement: Syntax?
+        if let block = owner.as(CodeBlockSyntax.self), let holder = block.parent {
+            if holder.is(IfExprSyntax.self) {
+                // `else if` chains nest: climb to the outermost `if`.
+                var top = holder
+                while let parent = top.parent, parent.is(IfExprSyntax.self) { top = parent }
+                statement = top
+            } else {
+                return nil
+            }
+        } else if owner.is(SwitchCaseSyntax.self) {
+            statement = owner.parent?.parent  // SwitchCaseList → SwitchExpr
+            guard statement?.is(SwitchExprSyntax.self) == true else { return nil }
+        } else {
+            return nil
+        }
+        guard let statement else { return nil }
+        // A statement `if`/`switch` sits in an expression statement of a code block item.
+        let item = statement.parent?.as(ExpressionStmtSyntax.self)?.parent ?? statement.parent
+        guard let item = item?.as(CodeBlockItemSyntax.self) else { return true }
+        return isImplicitReturn(item)
     }
 
     private static func returnsValue(_ clause: ReturnClauseSyntax?) -> Bool {
