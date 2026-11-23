@@ -733,6 +733,10 @@ final class RunSession<Executor: ProcessExecutor> {
         )
     }
 
+    /// How many schema builds a lineage of one batch may spend isolating the mutants that break its control: enough
+    /// to find a few of them, not enough to chase a failure that is not theirs.
+    static func bisectBudget(for count: Int) -> Int { 3 * (Int.bitWidth - count.leadingZeroBitCount + 1) }
+
     /// Builds each batch's schema, bisects the ones that do not compile, controls and judges the reached mutants.
     func runBatches() async throws {
         let budgetEnd = self.budgetEnd
@@ -754,6 +758,8 @@ final class RunSession<Executor: ProcessExecutor> {
             classes.flatMap { SchemaWriter.batches($0, limit: options.batchSize) }.reversed()
         )
         var buildIndex = 0
+        /// The bisection budget left to each mutant's lineage of failing controls.
+        var controlBudget: [String: Int] = [:]
         var lastBuild = Duration.zero
         while let group = pending.popLast() {
             try Task.checkCancellation()
@@ -843,27 +849,59 @@ final class RunSession<Executor: ProcessExecutor> {
             if let known = established {
                 current = known
                 phase = clock.now
-                control = try await known.judge.execute(
+                var first = try await known.judge.execute(
                     name: "\(name)-control",
                     activeID: "",
                     deadline: known.deadline
                 )
-                guard control.result.outcome == .passed, control.result.counts == known.counts else {
-                    for site in group {
-                        try runner.record(
-                            site,
-                            .infrastructureError,
-                            "inactive schema control differs from the unmutated baseline: \(control.result.reason)",
-                            control.result.evidence,
-                            into: &artifact,
-                            sink
-                        )
-                    }
-                    try installedGroup.restore()
-                    installed = nil
-                    account("tests", since: phase)
-                    continue
+                func sound(_ execution: Judge.Execution) -> Bool {
+                    execution.result.outcome == .passed && execution.result.counts == known.counts
                 }
+                if !sound(first) {
+                    // One failure may be the machine or a flaky test, not the schema: look again before blaming a mutant.
+                    let again = try await known.judge.execute(
+                        name: "\(name)-control-retry",
+                        activeID: "",
+                        deadline: known.deadline
+                    )
+                    if sound(again) {
+                        artifact.notes.append(
+                            "the inactive control of \(name) failed once and passed on retry (a flaky test or a busy machine); its verdicts stand"
+                        )
+                        first = again
+                    } else {
+                        try installedGroup.restore()
+                        installed = nil
+                        account("tests", since: phase)
+                        let remaining = controlBudget[group[0].id] ?? Self.bisectBudget(for: group.count)
+                        if group.count > 1, remaining > 0 {
+                            artifact.notes.append(
+                                "the inactive control of \(name) differs from the unmutated baseline (\(again.result.reason)); bisecting its \(group.count) mutants"
+                            )
+                            let middle = group.count / 2
+                            for site in group { controlBudget[site.id] = remaining - 1 }
+                            pending.append(Array(group[middle...]))
+                            pending.append(Array(group[..<middle]))
+                        } else {
+                            let why =
+                                group.count == 1
+                                ? "its inactive schema makes the suite differ from the unmutated baseline"
+                                : "the inactive control kept differing and the bisection budget is spent"
+                            for site in group {
+                                try runner.record(
+                                    site,
+                                    .infrastructureError,
+                                    "\(why): \(again.result.reason)",
+                                    again.result.evidence,
+                                    into: &artifact,
+                                    sink
+                                )
+                            }
+                        }
+                        continue
+                    }
+                }
+                control = first
             } else {
                 // The inactive schema is the baseline: with no mutant active every site evaluates its
                 // original expression, so this build behaves as the unmutated one, and its run is the control too.

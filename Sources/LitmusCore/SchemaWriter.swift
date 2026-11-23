@@ -95,6 +95,9 @@ public enum SchemaWriter {
         let prefix: [UInt8] = placement.isTopLevelCode ? Array(("\n" + declarations).utf8) : []
         var output: [UInt8] = []
         output.reserveCapacity(bytes.count + sorted.count * 96 + declarations.utf8.count)
+        // A build-tool lint plugin (SwiftLint) must not fail the build over generated code it was not written for. A
+        // shebang has to stay the first line.
+        if !source.hasPrefix("#!") { output.append(contentsOf: Array("// swiftlint:disable all\n".utf8)) }
         var ranges: [String: Range<Int>] = [:]
         var cursor = 0
         func copy(upTo offset: Int) {

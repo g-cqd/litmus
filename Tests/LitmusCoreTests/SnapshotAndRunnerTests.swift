@@ -61,6 +61,11 @@ private final class FakeExecutor: ProcessExecutor {
         var active = Active.fail
         var poison: String?
         var poisonDiagnostic = true
+        /// An inactive control run fails while any source holds this text: a replacement that breaks the suite even
+        /// when its mutant is not active.
+        var controlPoison: String?
+        /// How many times the control run fails before it passes, for a flaky machine.
+        var controlFailures = 0
         /// Lines between the poisoned replacement and the error reported (a flow error at the end of a function).
         var diagnosticOffset = 0
         /// How long each build takes.
@@ -71,7 +76,17 @@ private final class FakeExecutor: ProcessExecutor {
     let deadlines = Mutex<[Int]>([])
     let reports = Mutex<[String]>([])
     let builds = Mutex(0)
+    let controlRuns = Mutex(0)
     init(_ config: Config = Config()) { self.config = config }
+
+    private func controlBroken(_ directory: String) throws -> Bool {
+        if let poison = config.controlPoison {
+            for path in sources(directory) where try String(contentsOfFile: path, encoding: .utf8).contains(poison) {
+                return true
+            }
+        }
+        return false
+    }
 
     private func sources(_ directory: String) -> [String] {
         let enumerator = FileManager.default.enumerator(atPath: directory + "/Sources")
@@ -135,7 +150,20 @@ private final class FakeExecutor: ProcessExecutor {
                 }
             }
         }
-        let outcome: Active = active ? config.active : (config.failsBaseline ? .fail : .pass)
+        var controlFlaky = false
+        if !active, config.controlFailures > 0,
+            try sources(directory).contains(where: {
+                try String(contentsOfFile: $0, encoding: .utf8).contains("_reach(")
+            })
+        {
+            controlFlaky = controlRuns.withLock {
+                $0 += 1
+                return $0 <= config.controlFailures
+            }
+        }
+        let controlBroken = try controlBroken(directory)
+        let outcome: Active =
+            active ? config.active : (config.failsBaseline || controlBroken || controlFlaky ? .fail : .pass)
         switch outcome {
         case .hang: return ProcessOutput(exitStatus: 124, stdout: [], stderr: [], truncated: false, timedOut: true)
         case .crash:
@@ -962,4 +990,47 @@ private func runIn(
     #expect(inPlace.key(mutations[0]) != (try context(inPlace: true)).key(mutations[0]))
     // A copy cannot build ../Kit at all: its whole snapshot is what the key covers.
     #expect(try context(inPlace: false).key(mutations[0]) == (try context(inPlace: false)).key(mutations[0]))
+}
+
+private let fourConditions = """
+    public func f(_ a: Bool, _ b: Bool, _ c: Bool, _ d: Bool) -> Int {
+        if a { return 1 }
+        if b { return 2 }
+        if c { return 3 }
+        if d { return 4 }
+        return 0
+    }
+    """
+
+@Test func `a control that differs once is retried and its verdicts stand`() async throws {
+    // The unmutated baseline runs first; the schema's control then fails once and passes on its retry.
+    let executor = FakeExecutor(.init(controlFailures: 1))
+    let (result, base) = try await run(executor, source: fourConditions) { $0.inactiveSchemaBaseline = false }
+    defer { try? FileManager.default.removeItem(at: base) }
+    #expect(result.results.count == 4)
+    #expect(result.results.allSatisfy { $0.verdict == .killed }, "\(result.results.map(\.verdict))")
+    #expect(result.notes.contains { $0.contains("passed on retry") })
+    #expect(!result.notes.contains { $0.contains("bisecting") })
+}
+
+@Test func `a control that keeps differing is bisected to the mutant that breaks it`() async throws {
+    let executor = FakeExecutor(.init(controlPoison: "!(c)"))
+    let (result, base) = try await run(executor, source: fourConditions) { $0.inactiveSchemaBaseline = false }
+    defer { try? FileManager.default.removeItem(at: base) }
+    let byOriginal = Dictionary(uniqueKeysWithValues: result.results.map { ($0.mutation.original, $0) })
+    #expect(byOriginal["a"]?.verdict == .killed)
+    #expect(byOriginal["b"]?.verdict == .killed)
+    #expect(byOriginal["d"]?.verdict == .killed)
+    #expect(byOriginal["c"]?.verdict == .infrastructureError)
+    #expect(byOriginal["c"]?.reason.contains("inactive schema makes the suite differ") == true)
+    #expect(result.notes.contains { $0.contains("bisecting") })
+    #expect(!result.isSuccessfulExecution, "an unresolved mutant still blocks a green run")
+}
+
+@Test func `bisection is bounded: a control that always differs does not build forever`() async throws {
+    let executor = FakeExecutor(.init(controlPoison: "_reach("))
+    let (result, base) = try await run(executor, source: fourConditions) { $0.inactiveSchemaBaseline = false }
+    defer { try? FileManager.default.removeItem(at: base) }
+    #expect(result.results.allSatisfy { $0.verdict == .infrastructureError })
+    #expect(executor.builds.withLock { $0 } <= 1 + 2 * 4 + 1, "builds: \(executor.builds.withLock { $0 })")
 }

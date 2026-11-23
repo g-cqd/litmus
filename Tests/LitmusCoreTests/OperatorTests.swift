@@ -111,3 +111,18 @@ private func sites(_ source: String, _ operators: Set<MutationOperator> = everyt
     #expect(plan.mutations.count == 2)
     #expect(Set(plan.suppressed.map(\.line)) == [3])
 }
+
+@Test func `a generated schema silences lint plugins, keeps a shebang first, and maps diagnostics past the directive`()
+    throws
+{
+    let source = "func f(_ a: Bool) -> Int { a ? 1 : 2 }\n"
+    let found = try sites(source, [.swapTernary])
+    let schema = try SchemaWriter.schema(source, mutations: found)
+    #expect(schema.text.hasPrefix("// swiftlint:disable all\n"))
+    let line = try #require(schema.lines[found[0].id])
+    #expect(line.lowerBound == 2, "the directive is line 1; the function starts on line 2")
+    let script = "#!/usr/bin/env swift\nlet x = true ? 1 : 2\n"
+    let top = try SchemaWriter.schema(script, mutations: try sites(script, [.swapTernary]))
+    #expect(top.text.hasPrefix("#!/usr/bin/env swift\n"))
+    #expect(!top.text.contains("swiftlint:disable all"))
+}
