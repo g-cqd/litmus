@@ -40,6 +40,11 @@ struct Run: AsyncParsableCommand {
             "Simulators to test on at once for an Xcode run on an iOS Simulator, 1...16 (default 1: the destination itself). More are clones of it that Litmus makes, boots together and deletes at the end."
     )
     var simulators: Int = 1
+    @Option(
+        help:
+            "Run only this test target for every mutant (repeatable), instead of selecting per mutant. The baseline still runs them all."
+    )
+    var testTarget: [String] = []
     @Flag(
         inversion: .prefixedNo,
         help: "One line on standard error per decided mutant (default: when standard error is a terminal)."
@@ -194,6 +199,7 @@ struct Run: AsyncParsableCommand {
         options.operators = try subject.operatorSet()
         options.simulators = simulators
         options.progress = progress
+        options.testTargets = testTarget
         options.keepResultBundles = keepResultBundles
         do { options.scope = try await change.scope(root: subject.absoluteRoot) } catch let error as ValidationError {
             throw error

@@ -100,7 +100,12 @@ public struct BuildDriver: Codable, Sendable, Equatable {
             throw LitmusFailure("source root is not a directory: \(workspace)")
         }
         guard testPlan == nil || usesXcode else { throw LitmusFailure("--test-plan requires --scheme") }
-        guard let packagePath else { return }
+        guard let packagePath else {
+            if !usesXcode, let message = LocalDependencies.diagnosis(root: workspace, packageDirectory: workspace) {
+                throw LitmusFailure(message)
+            }
+            return
+        }
         let directory = executionDirectory(workspace: workspace)
         let canonical = SourcePath.canonical(directory)
         guard canonical.hasPrefix(SourcePath.canonical(workspace) + "/"),
@@ -109,6 +114,9 @@ public struct BuildDriver: Codable, Sendable, Equatable {
             throw LitmusFailure(
                 "--package-path \(packagePath) must resolve to a package inside root (Package.swift missing or path escapes root)"
             )
+        }
+        if !usesXcode, let message = LocalDependencies.diagnosis(root: workspace, packageDirectory: directory) {
+            throw LitmusFailure(message)
         }
     }
 

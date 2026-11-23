@@ -719,7 +719,18 @@ final class RunSession<Executor: ProcessExecutor> {
                     + "mutants (\(changed) with a changed key; the rest not reached by any test alone)"
             )
         }
-        if harness.selectsModules, options.selectTestTargets {
+        if !options.testTargets.isEmpty {
+            guard harness.selectsModules else {
+                throw LitmusFailure(
+                    "--test-target needs a harness that selects test modules (swiftpm-direct or xcodebuild), not \(harness.kind)"
+                )
+            }
+            let chosen = try Self.testTargets(options.testTargets, among: Set(baselineByModule.keys))
+            for site in toRun { judge.covering[site.id] = chosen }
+            artifact.notes.append(
+                "every mutant ran only the test targets \(chosen.sorted().joined(separator: ", ")) (--test-target)"
+            )
+        } else if harness.selectsModules, options.selectTestTargets {
             judge.covering = Runner.coveringModules(
                 toRun,
                 root: snapshot.root,
@@ -747,6 +758,21 @@ final class RunSession<Executor: ProcessExecutor> {
             let (left, right) = (hints[lhs.element.id] ?? 0, hints[rhs.element.id] ?? 0)
             return left != right ? left > right : lhs.offset < rhs.offset
         }.map(\.element)
+    }
+
+    /// The modules `requested` names among those the baseline ran; a SwiftPM spelling and an Xcode target name both
+    /// match. Unknown names are an error that lists the known ones.
+    static func testTargets(_ requested: [String], among known: Set<String>) throws -> Set<String> {
+        var chosen: Set<String> = []
+        for name in requested {
+            guard let found = [name, Runner.moduleName(name)].first(where: known.contains) else {
+                throw LitmusFailure(
+                    "--test-target \(name) is not a test target of this run; known: \(known.sorted().joined(separator: ", "))"
+                )
+            }
+            chosen.insert(found)
+        }
+        return chosen
     }
 
     /// How many schema builds a lineage of one batch may spend isolating the mutants that break its control: enough

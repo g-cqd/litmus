@@ -151,3 +151,50 @@ private func sites(_ source: String, _ operators: Set<MutationOperator> = everyt
     #expect(written[0] == "litmus: [ 1/12] killed              Sources/F.swift:1 swap-ternary")
     #expect(written[1].hasPrefix("litmus: [ 2/12] survived") && written[1].hasSuffix("(reused)"))
 }
+
+@Test
+func `a manifest's local dependencies are read, and those outside the root are diagnosed with the command to run`()
+    throws
+{
+    let manifest = """
+        // swift-tools-version: 6.0
+        let package = Package(name: "Lib", dependencies: [
+            .package(path: "../Sibling"),
+            .package(name: "Named", path: "Local/Inner"),
+            .package(url: "https://example.com/x.git", from: "1.0.0"),
+        ])
+        """
+    #expect(LocalDependencies.paths(inManifest: manifest) == ["../Sibling", "Local/Inner"])
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-deps-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: base) }
+    let library = base.appendingPathComponent("repo/Library")
+    try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+    try Data(manifest.utf8).write(to: library.appendingPathComponent("Package.swift"))
+    try FileManager.default.createDirectory(
+        at: base.appendingPathComponent("repo/Sibling"),
+        withIntermediateDirectories: true
+    )
+    // Run from Library itself: its sibling is outside.
+    let alone = try #require(LocalDependencies.diagnosis(root: library.path, packageDirectory: library.path))
+    #expect(
+        alone.contains(
+            "litmus run \(URL(fileURLWithPath: base.path + "/repo").resolvingSymlinksInPath().path) --package-path Library"
+        )
+    )
+    // Run from the repository with --package-path: the sibling is inside.
+    #expect(LocalDependencies.diagnosis(root: base.path + "/repo", packageDirectory: library.path) == nil)
+    #expect(LocalDependencies.commonAncestor(["/a/b/c", "/a/b/d", "/a/b"]) == "/a/b")
+    #expect(LocalDependencies.commonAncestor(["/a", "/b"]) == "/")
+}
+
+@Test func `requested test targets must be ones the baseline ran, in either spelling`() throws {
+    let known: Set<String> = ["App_Tests", "Core Tests", "Plain"]
+    #expect(
+        try RunSession<BoundedExecutor>.testTargets(["App-Tests", "Plain"], among: known) == ["App_Tests", "Plain"]
+    )
+    #expect(try RunSession<BoundedExecutor>.testTargets(["Core Tests"], among: known) == ["Core Tests"])
+    let failure = #expect(throws: LitmusFailure.self) {
+        try RunSession<BoundedExecutor>.testTargets(["Missing"], among: known)
+    }
+    #expect(failure?.description.contains("known: App_Tests, Core Tests, Plain") == true)
+}

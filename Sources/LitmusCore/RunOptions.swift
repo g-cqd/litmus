@@ -37,6 +37,9 @@ public struct RunOptions: Sendable {
     public var simulators = 1
     /// Keep every Xcode result bundle; only each run's summary otherwise.
     public var keepResultBundles = false
+    /// Test modules every mutant runs, instead of all of them (and instead of the per-mutant selection); empty runs
+    /// them all.
+    public var testTargets: [String] = []
     /// One line on standard error per decided mutant.
     public var progress = false
     public var batchSize = 64
