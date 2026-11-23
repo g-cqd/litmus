@@ -72,6 +72,21 @@ public struct BuildDriver: Codable, Sendable, Equatable {
         self.root = root; self.container = container; self.scheme = scheme; self.destination = destination
     }
 
+    /// The same driver with another destination (a resolved simulator id), keeping every other choice.
+    public func with(destination: String) throws -> BuildDriver {
+        var copy = try BuildDriver(
+            root: root,
+            container: container,
+            packagePath: packagePath,
+            scheme: scheme,
+            destination: destination
+        )
+        copy.testPlan = testPlan
+        copy.swiftPMBuildSystem = swiftPMBuildSystem
+        copy.xcodebuildArguments = xcodebuildArguments
+        return copy
+    }
+
     /// The package execution directory, distinct from the snapshot and evidence root.
     public func executionDirectory(workspace: String) -> String {
         packagePath.map { workspace + "/" + $0 } ?? workspace

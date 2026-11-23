@@ -13,7 +13,7 @@ final class RunSession<Executor: ProcessExecutor> {
     typealias Established = Runner.Established
     let runner: Runner
     let executor: Executor
-    let driver: BuildDriver
+    var driver: BuildDriver
     let options: RunOptions
     let clock = ContinuousClock()
     let started: ContinuousClock.Instant
@@ -36,6 +36,7 @@ final class RunSession<Executor: ProcessExecutor> {
     var toRun: [Mutation] = []
     var buildSupervision = Supervision()
     var workspaceReleased = false
+    var resolvedDestinationNote: String?
     /// The schema currently written into the workspace, restored on any exit.
     var installed: InstalledSchema?
 
@@ -87,6 +88,7 @@ final class RunSession<Executor: ProcessExecutor> {
     func run() async throws -> RunArtifact {
         phase = clock.now
         if let finished = try await scopeFastPath() { return finished }
+        try await resolveDestination()
         try await prepareWorkspace()
         // Planning and configuration validation can fail before the execution checkpoint exists.
         defer { releaseWorkspace() }
@@ -158,6 +160,20 @@ final class RunSession<Executor: ProcessExecutor> {
             return artifact
         }
         return nil
+    }
+
+    /// A simulator named by `name=…,OS=…` becomes the one `id=<UDID>` it denotes, so the build, the tests and the
+    /// evidence all name the same device (and the direct simulator harness, which needs the id, can be used).
+    func resolveDestination() async throws {
+        guard driver.usesXcode, let destination = driver.destination,
+            SimulatorInventory.isSimulatorDestination(destination)
+        else { return }
+        let inventory = try await SimulatorInventory.load(using: executor, directory: root)
+        let device = try inventory.resolve(destination)
+        guard device.destination != destination else { return }
+        driver = try driver.with(destination: device.destination)
+        resolvedDestinationNote =
+            "destination \(destination) resolved to \(device.name), iOS \(device.version), \(device.udid)"
     }
 
     /// Creates the owned workspace the run builds and mutates in.
@@ -245,6 +261,7 @@ final class RunSession<Executor: ProcessExecutor> {
             artifact.notes.append("symbolic link left out of the workspace (never followed): \(link)")
         }
         artifact.notes += prepared.notes
+        if let resolvedDestinationNote { artifact.notes.append(resolvedDestinationNote) }
         if prepared.restore != nil {
             // In place: every file to mutate must be tracked and unmodified, so git can restore it as a last resort.
             try await runner.requireCleanGit(Set(plan.mutations.map(\.path)).sorted(), root: root)
