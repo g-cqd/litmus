@@ -44,29 +44,11 @@ enum XcodeResultStream {
         return identifier["_value"] as? String
     }
 
-    /// A supervision monitor that stops the run at the first failed test of the stream at `path` (which must exist).
+    /// A supervision monitor that stops the run at the first failed test of the stream at `path`.
     static func monitor(path: String) -> @Sendable (_ stop: @escaping @Sendable (String) -> Void) async -> Void {
-        { stop in
-            var offset: UInt64 = 0
-            var pending: [UInt8] = []
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(50))
-                guard let handle = FileHandle(forReadingAtPath: path) else { continue }
-                defer { try? handle.close() }
-                guard (try? handle.seek(toOffset: offset)) != nil else { return }
-                // Nothing yet (or nothing new) is not the end of the stream: Xcode writes it as the tests run.
-                guard let chunk = try? handle.read(upToCount: 4 << 20), !chunk.isEmpty else { continue }
-                offset += UInt64(chunk.count)
-                pending += chunk
-                // A stream that grows past the bound is not being read usefully: stop watching.
-                guard pending.count < 64 << 20 else { return }
-                let seen = XcodeResultStream.scan(pending)
-                if seen.failed {
-                    stop(failFastReason)
-                    return
-                }
-                pending.removeFirst(seen.consumed)
-            }
+        StreamWatch.monitor(path: path, interval: .milliseconds(50), chunk: 4 << 20, bound: 64 << 20) { pending in
+            let seen = scan(pending)
+            return StreamWatch.Look(failed: seen.failed, consumed: seen.consumed)
         }
     }
 }

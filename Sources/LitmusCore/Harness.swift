@@ -146,25 +146,15 @@ func runWatching(
 ) async throws -> (output: ProcessOutput?, stoppedOnFailure: Bool) {
     var supervision = base
     if failFast, let events {
-        supervision.monitor = { stop in
-            var offset: UInt64 = 0
-            var pending: [UInt8] = []
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(15))
-                guard let handle = FileHandle(forReadingAtPath: events) else { continue }
-                defer { try? handle.close() }
-                guard (try? handle.seek(toOffset: offset)) != nil else { return }
-                // An empty read is a stream not written yet, not the end of it.
-                guard let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty else { continue }
-                offset += UInt64(chunk.count)
-                pending += chunk
-                // A stream that cannot be read as events: stop watching; the run is judged by its final evidence.
-                guard let scan = try? TestEvidence.swiftTestingEvents(pending), pending.count < 4 << 20 else { return }
-                if scan.failed {
-                    stop(failFastReason)
-                    return
-                }
-                pending.removeFirst(scan.consumed)
+        supervision.monitor = StreamWatch.monitor(
+            path: events,
+            interval: .milliseconds(15),
+            chunk: 1 << 20,
+            bound: 4 << 20
+        ) {
+            pending in
+            (try? TestEvidence.swiftTestingEvents(pending)).map {
+                StreamWatch.Look(failed: $0.failed, consumed: $0.consumed)
             }
         }
     }
