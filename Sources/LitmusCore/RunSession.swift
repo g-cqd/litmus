@@ -34,6 +34,8 @@ final class RunSession<Executor: ProcessExecutor> {
     var nightly: RunArtifact?
     var sink: Sink!
     var toRun: [Mutation] = []
+    /// What each mutant cost in an earlier run, to start the slowest first.
+    var durationHints: [String: Int64] = [:]
     var buildSupervision = Supervision()
     var workspaceReleased = false
     var resolvedDestinationNote: String?
@@ -388,8 +390,13 @@ final class RunSession<Executor: ProcessExecutor> {
         sink = Sink(
             journal: try ResultJournal(path: output + "/results.journal"),
             store: store,
-            runID: provenance.runID
+            runID: provenance.runID,
+            progress: options.progress ? ProgressReporter.standardError(total: plan.mutations.count) : nil
         )
+        if let resume = options.resume { durationHints = Runner.previousDurations(runDirectory: resume) }
+        for result in nightly?.results ?? [] where result.nanoseconds > 0 {
+            durationHints[result.mutation.id] = durationHints[result.mutation.id] ?? result.nanoseconds
+        }
         var reused: (resumed: Int, stored: Int) = (0, 0)
         for mutation in plan.mutations {
             guard let key = artifact.results.first(where: { $0.mutation.id == mutation.id })?.reuseKey else { continue }
@@ -733,6 +740,15 @@ final class RunSession<Executor: ProcessExecutor> {
         )
     }
 
+    /// `sites` with the slowest first, by what each cost before; sites without history keep their order, after those
+    /// with it. Workers that start the long runs first finish together instead of waiting on one straggler.
+    static func longestFirst(_ sites: [Mutation], hints: [String: Int64]) -> [Mutation] {
+        sites.enumerated().sorted { lhs, rhs in
+            let (left, right) = (hints[lhs.element.id] ?? 0, hints[rhs.element.id] ?? 0)
+            return left != right ? left > right : lhs.offset < rhs.offset
+        }.map(\.element)
+    }
+
     /// How many schema builds a lineage of one batch may spend isolating the mutants that break its control: enough
     /// to find a few of them, not enough to chase a failure that is not theirs.
     static func bisectBudget(for count: Int) -> Int { 3 * (Int.bitWidth - count.leadingZeroBitCount + 1) }
@@ -967,7 +983,7 @@ final class RunSession<Executor: ProcessExecutor> {
             var reruns: [Judge.Pending] = []
             var late: [Mutation] = []
             try await forEachConcurrently(
-                covered,
+                Self.longestFirst(covered, hints: durationHints),
                 limit: workerCount,
                 { site in
                     if let budgetEnd, ContinuousClock.now >= budgetEnd { return Judge.Step.notStarted(site) }

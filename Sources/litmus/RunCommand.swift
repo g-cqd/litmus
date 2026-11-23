@@ -40,6 +40,11 @@ struct Run: AsyncParsableCommand {
             "Simulators to test on at once for an Xcode run on an iOS Simulator, 1...16 (default 1: the destination itself). More are clones of it that Litmus makes, boots together and deletes at the end."
     )
     var simulators: Int = 1
+    @Flag(
+        inversion: .prefixedNo,
+        help: "One line on standard error per decided mutant (default: when standard error is a terminal)."
+    )
+    var progress: Bool = isatty(STDERR_FILENO) != 0
     @Flag(help: "Keep every Xcode result bundle (hundreds of MiB each on an app); only each run's summary otherwise.")
     var keepResultBundles = false
     @Option(help: "Memory limit of a test process and what it starts, in MiB; past it, a crash. 0: none.")
@@ -187,6 +192,7 @@ struct Run: AsyncParsableCommand {
         options.include = try subject.includes()
         options.operators = try subject.operatorSet()
         options.simulators = simulators
+        options.progress = progress
         options.keepResultBundles = keepResultBundles
         do { options.scope = try await change.scope(root: subject.absoluteRoot) } catch let error as ValidationError {
             throw error

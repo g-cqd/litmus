@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import LitmusCore
@@ -125,4 +126,28 @@ private func sites(_ source: String, _ operators: Set<MutationOperator> = everyt
     let top = try SchemaWriter.schema(script, mutations: try sites(script, [.swapTernary]))
     #expect(top.text.hasPrefix("#!/usr/bin/env swift\n"))
     #expect(!top.text.contains("swiftlint:disable all"))
+}
+
+@Test func `the slowest mutants start first, and those without history keep their order after them`() throws {
+    let source =
+        "func f(_ a: Bool, _ b: Bool, _ c: Bool, _ d: Bool) -> Int { (a ? 1 : 2) + (b ? 1 : 2) + (c ? 1 : 2) + (d ? 1 : 2) }"
+    let found = try sites(source, [.swapTernary])
+    #expect(found.count == 4)
+    let hints = [found[2].id: Int64(900), found[0].id: 50]
+    let ordered = RunSession<BoundedExecutor>.longestFirst(found, hints: hints).map(\.id)
+    #expect(ordered == [found[2].id, found[0].id, found[1].id, found[3].id])
+    #expect(RunSession<BoundedExecutor>.longestFirst(found, hints: [:]).map(\.id) == found.map(\.id))
+}
+
+@Test func `progress numbers each decided mutant against the total and marks a reused one`() throws {
+    let lines = Mutex<[String]>([])
+    let reporter = ProgressReporter(total: 12) { line in lines.withLock { $0.append(line) } }
+    let site = try #require(try sites("func f(_ a: Bool) -> Int { a ? 1 : 2 }", [.swapTernary]).first)
+    reporter.report(MutationResult(mutation: site, verdict: .killed, reason: "killed"))
+    var reused = MutationResult(mutation: site, verdict: .survived, reason: "kept")
+    reused.reusedFrom = "an earlier run"
+    reporter.report(reused)
+    let written = lines.withLock { $0 }
+    #expect(written[0] == "litmus: [ 1/12] killed              Sources/F.swift:1 swap-ternary")
+    #expect(written[1].hasPrefix("litmus: [ 2/12] survived") && written[1].hasSuffix("(reused)"))
 }

@@ -64,6 +64,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         let journal: ResultJournal
         let store: ResultStore?
         let runID: String
+        var progress: ProgressReporter? = nil
     }
 
     /// The resolved verdicts of an earlier run (`--resume`), by reuse key: its checkpoint, then its journal (later
@@ -92,6 +93,17 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             byKey[key] = ReusedResult(result: result, runID: artifact.provenance.runID)
         }
         return byKey
+    }
+
+    /// How long each mutant took in an earlier run (`run.json` and its journal), by mutation id: ids are anchored to
+    /// the code, so they outlive the edits that change a verdict's reuse key.
+    static func previousDurations(runDirectory: String) -> [String: Int64] {
+        let directory = SourcePath.canonical(runDirectory)
+        var results = (try? ArtifactCodec.read(RunArtifact.self, path: directory + "/run.json"))?.results ?? []
+        if let journal = try? ResultJournal.read(path: directory + "/results.journal") { results += journal.results }
+        var durations: [String: Int64] = [:]
+        for result in results where result.nanoseconds > 0 { durations[result.mutation.id] = result.nanoseconds }
+        return durations
     }
 
     /// Records `sites` as not run within the budget.
@@ -216,6 +228,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         result.reuseKey = artifact.results[index].reuseKey
         artifact.results[index] = result
         try sink.journal.append(result)
+        sink.progress?.report(result)
         if let store = sink.store, let key = result.reuseKey, result.reusedFrom == nil {
             // A cache: a record that cannot be written is a later miss, never a failed run.
             do { try store.put(key, result, runID: sink.runID) } catch {

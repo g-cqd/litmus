@@ -37,6 +37,8 @@ public struct RunOptions: Sendable {
     public var simulators = 1
     /// Keep every Xcode result bundle; only each run's summary otherwise.
     public var keepResultBundles = false
+    /// One line on standard error per decided mutant.
+    public var progress = false
     public var batchSize = 64
     /// Deadline of one build, in seconds.
     public var buildTimeout = 900
