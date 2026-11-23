@@ -30,6 +30,8 @@ public struct RunOptions: Sendable {
     /// When not empty, only files matching these substrings or globs are mutated.
     public var include: [String] = []
     /// Maximum non-overlapping sites per schema build, 1...256.
+    /// The operators mutated; the stable tier unless a run asks for more.
+    public var operators = MutationOperator.defaults
     public var batchSize = 64
     /// Deadline of one build, in seconds.
     public var buildTimeout = 900

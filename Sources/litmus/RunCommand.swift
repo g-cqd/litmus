@@ -178,6 +178,7 @@ struct Run: AsyncParsableCommand {
         }
         options.exclude = try subject.excludes()
         options.include = try subject.includes()
+        options.operators = try subject.operatorSet()
         do { options.scope = try await change.scope(root: subject.absoluteRoot) } catch let error as ValidationError {
             throw error
         } catch { try fail(error, code: .usage) }

@@ -32,7 +32,8 @@ struct Plan: AsyncParsableCommand {
                 include: try subject.includes(),
                 packagePath: packagePath,
                 jobs: jobs,
-                scope: try await change.scope(root: subject.absoluteRoot)
+                scope: try await change.scope(root: subject.absoluteRoot),
+                operators: try subject.operatorSet()
             )
         } catch let error as ValidationError {
             throw error
@@ -74,8 +75,9 @@ struct Census: AsyncParsableCommand {
             "production files \(report.files), excluded \(report.excludedFiles), degraded \(report.degradedFiles.count)"
         )
         for entry in report.entries {
+            let rule = entry.implementedBy.map { "\t\($0.rawValue) (\($0.tier.rawValue))" } ?? ""
             print(
-                "\(entry.operatorID)\t\(entry.shape.rawValue)\tsites \(entry.sites)\tmutants \(entry.mutants)\tblocked \(entry.blocked)"
+                "\(entry.operatorID)\t\(entry.shape.rawValue)\tsites \(entry.sites)\tmutants \(entry.mutants)\tblocked \(entry.blocked)\(rule)"
             )
         }
     }

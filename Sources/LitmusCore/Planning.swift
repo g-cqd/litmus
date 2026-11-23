@@ -34,7 +34,11 @@ public enum MutationPlanner {
     /// Parses and folds standard Swift operators, rejecting malformed or excessively nested input.
     /// - Note: Syntax discovery only; the schema build proves each candidate compiles.
     /// - Complexity: O(*n*) in the syntax nodes of `source`.
-    public static func discover(in source: String, path: String) throws -> Discovery {
+    public static func discover(
+        in source: String,
+        path: String,
+        operators: Set<MutationOperator> = MutationOperator.defaults
+    ) throws -> Discovery {
         let parsed = Parser.parse(source: source)
         guard !parsed.hasError, !SyntaxDepth.exceeds(parsed, limit: 256) else {
             throw LitmusFailure("\(path): invalid syntax or syntax nesting exceeds 256")
@@ -44,7 +48,8 @@ public enum MutationPlanner {
             path: path,
             fingerprint: Digest.sha256(Array(source.utf8)),
             converter: SourceLocationConverter(fileName: path, tree: tree),
-            anchors: Anchors(fileText: tree.description)
+            anchors: Anchors(fileText: tree.description),
+            operators: operators
         )
         let visitor = Sites(context)
         visitor.walk(tree)
@@ -52,8 +57,12 @@ public enum MutationPlanner {
     }
 
     /// The schematisable sites of one file, in source order.
-    public static func mutations(in source: String, path: String) throws -> [Mutation] {
-        try discover(in: source, path: path).sites
+    public static func mutations(
+        in source: String,
+        path: String,
+        operators: Set<MutationOperator> = MutationOperator.defaults
+    ) throws -> [Mutation] {
+        try discover(in: source, path: path, operators: operators).sites
     }
 
     static func ordered(_ sites: [Mutation]) -> [Mutation] {
@@ -72,7 +81,8 @@ public enum MutationPlanner {
         include: [String] = [],
         packagePath: String? = nil,
         jobs: Int = 4,
-        scope: ChangeScope? = nil
+        scope: ChangeScope? = nil,
+        operators: Set<MutationOperator> = MutationOperator.defaults
     ) async throws -> MutationPlan {
         let root = SourcePath.canonical(root)
         guard FileManager.default.fileExists(atPath: root) else { throw LitmusFailure("root does not exist: \(root)") }
@@ -84,7 +94,8 @@ public enum MutationPlanner {
                 include: include,
                 packagePath: packagePath,
                 jobs: jobs,
-                scope: scope
+                scope: scope,
+                operators: operators
             )
         }
         let discovery = SourceDiscovery.discover(under: root, isExcluded: filter.excludes)
@@ -103,7 +114,7 @@ public enum MutationPlanner {
         let files = try await mapConcurrently(discovered, limit: min(max(jobs, 1), 16)) { path in
             try Task.checkCancellation()
             return await LargeStack.run {
-                planFile(path: path, root: root, classification: classification)
+                planFile(path: path, root: root, classification: classification, operators: operators)
             }
         }
         let issues =
@@ -129,7 +140,8 @@ public enum MutationPlanner {
         include: [String],
         packagePath: String?,
         jobs: Int,
-        scope: ChangeScope
+        scope: ChangeScope,
+        operators: Set<MutationOperator>
     ) async throws -> MutationPlan {
         let wanted = include.isEmpty ? nil : PathFilter(include, root: root)
         var files: [String] = []
@@ -156,7 +168,9 @@ public enum MutationPlanner {
         let classification = ProjectLayout.discover(paths: [root]).map(ProjectClassification.load) ?? .conventionsOnly
         let planned = try await mapConcurrently(files, limit: min(max(jobs, 1), 16)) { path in
             try Task.checkCancellation()
-            return await LargeStack.run { planFile(path: path, root: root, classification: classification) }
+            return await LargeStack.run {
+                planFile(path: path, root: root, classification: classification, operators: operators)
+            }
         }
         var ranked: [(priority: Int, mutation: Mutation)] = []
         for mutation in planned.flatMap(\.mutations) {
@@ -214,7 +228,12 @@ public enum MutationPlanner {
         return .production(source, tree)
     }
 
-    private static func planFile(path: String, root: String, classification: ProjectClassification) -> MutationPlan {
+    private static func planFile(
+        path: String,
+        root: String,
+        classification: ProjectClassification,
+        operators: Set<MutationOperator>
+    ) -> MutationPlan {
         let relative = String(path.dropFirst(root.count + 1))
         func excludedFile(_ reason: String) -> MutationPlan {
             MutationPlan(root: root, analyzedFiles: 1, mutations: [], notes: [PlanNote(path: relative, reason: reason)])
@@ -234,7 +253,7 @@ public enum MutationPlanner {
                 grammar.parse(comment: comment, line: line, rule: MutationOperator.init(rawValue:))
             }
             let table = SuppressionTable(directives: directives)
-            let found = try discover(in: source, path: relative)
+            let found = try discover(in: source, path: relative, operators: operators)
             var active: [Mutation] = [], suppressed: [Mutation] = []
             var notes = found.excluded.map { PlanNote(path: relative, reason: "\($0.site.id): \($0.reason)") }
             for mutation in found.sites {
@@ -265,6 +284,7 @@ private struct SiteContext {
     let fingerprint: String
     let converter: SourceLocationConverter
     let anchors: Anchors
+    let operators: Set<MutationOperator>
 }
 
 /// The enclosing declarations of the walk, and how many identical sites each has had: what anchors a mutant's
@@ -317,13 +337,17 @@ private final class Sites: SyntaxVisitor {
     let context: SiteContext
     var sites: [Mutation] = []
     var excluded: [MutationPlanner.ExcludedSite] = []
+    /// Depth of result-builder declarations being walked (`var body: some View`, `@…Builder`): a statement edit there
+    /// would change what the builder collects.
+    var builderDepth = 0
 
     init(_ context: SiteContext) {
         self.context = context
         super.init(viewMode: .sourceAccurate)
     }
 
-    private func add(_ expression: ExprSyntax, operatorID: MutationOperator, replacement: String) {
+    private func add(_ expression: some SyntaxProtocol, operatorID: MutationOperator, replacement: String) {
+        guard context.operators.contains(operatorID) else { return }
         let start = expression.positionAfterSkippingLeadingTrivia.utf8Offset
         let end = expression.endPositionBeforeTrailingTrivia.utf8Offset
         let original = expression.trimmedDescription
@@ -371,9 +395,13 @@ private final class Sites: SyntaxVisitor {
     }
     override func visitPost(_ node: ExtensionDeclSyntax) { context.anchors.pop() }
     override func visit(_ node: FunctionDeclSyntax) -> SyntaxVisitorContinueKind {
-        enter(signature(node.name.text, node.signature.parameterClause.parameters), node, body: true)
+        if BuilderContext.isBuilder(node) { builderDepth += 1 }
+        return enter(signature(node.name.text, node.signature.parameterClause.parameters), node, body: true)
     }
-    override func visitPost(_ node: FunctionDeclSyntax) { context.anchors.pop() }
+    override func visitPost(_ node: FunctionDeclSyntax) {
+        if BuilderContext.isBuilder(node) { builderDepth -= 1 }
+        context.anchors.pop()
+    }
     override func visit(_ node: InitializerDeclSyntax) -> SyntaxVisitorContinueKind {
         enter(
             signature("init" + (node.optionalMark?.text ?? ""), node.signature.parameterClause.parameters),
@@ -392,9 +420,13 @@ private final class Sites: SyntaxVisitor {
     override func visitPost(_ node: SubscriptDeclSyntax) { context.anchors.pop() }
     override func visit(_ node: VariableDeclSyntax) -> SyntaxVisitorContinueKind {
         let names = node.bindings.map { normalized($0.pattern.trimmedDescription) }.joined(separator: ",")
+        if BuilderContext.isBuilder(node) { builderDepth += 1 }
         return enter(names, node, body: true)
     }
-    override func visitPost(_ node: VariableDeclSyntax) { context.anchors.pop() }
+    override func visitPost(_ node: VariableDeclSyntax) {
+        if BuilderContext.isBuilder(node) { builderDepth -= 1 }
+        context.anchors.pop()
+    }
     override func visit(_ node: AccessorDeclSyntax) -> SyntaxVisitorContinueKind {
         enter(node.accessorSpecifier.text, node, body: true)
     }
@@ -429,18 +461,87 @@ private final class Sites: SyntaxVisitor {
         return .visitChildren
     }
     override func visit(_ node: InfixOperatorExprSyntax) -> SyntaxVisitorContinueKind {
-        guard let op = node.operator.as(BinaryOperatorExprSyntax.self), ["&&", "||"].contains(op.operator.text) else {
-            return .visitChildren
+        guard let op = node.operator.as(BinaryOperatorExprSyntax.self) else { return .visitChildren }
+        let symbol = op.operator.text
+        if ["&&", "||"].contains(symbol) {
+            let other = symbol == "&&" ? "||" : "&&"
+            // Operands keep their folded grouping: `a || b || c` is `(a || b) || c`, whose outer mutant is
+            // `(a || b) && (c)`, not the regrouped text `a || b && c`.
+            add(
+                node,
+                operatorID: .replaceLogical,
+                replacement:
+                    "(\(node.leftOperand.trimmedDescription)) \(other) (\(node.rightOperand.trimmedDescription))"
+            )
+        } else if let replacements = Self.relational[symbol] {
+            for replacement in replacements {
+                add(node, operatorID: .replaceRelational, replacement: swapping(op, in: node, for: replacement))
+            }
+        } else if let replacement = Self.arithmetic[symbol],
+            !Self.isStringLiteral(node.leftOperand), !Self.isStringLiteral(node.rightOperand)
+        {
+            // `"a" + b` is concatenation: its `-` never compiles, so it would only cost a build to find out.
+            add(node, operatorID: .replaceArithmetic, replacement: swapping(op, in: node, for: replacement))
         }
-        let other = op.operator.text == "&&" ? "||" : "&&"
-        // Operands keep their folded grouping: `a || b || c` is `(a || b) || c`, whose outer mutant is
-        // `(a || b) && (c)`, not the regrouped text `a || b && c`.
-        add(
-            ExprSyntax(node),
-            operatorID: .replaceLogical,
-            replacement: "(\(node.leftOperand.trimmedDescription)) \(other) (\(node.rightOperand.trimmedDescription))"
-        )
         return .visitChildren
+    }
+
+    /// Boundary shifts and negations: `<` becomes `<=` (boundary) and `>=` (negation), and so on; equality flips.
+    static let relational: [String: [String]] = [
+        "<": ["<=", ">="], "<=": ["<", ">"], ">": [">=", "<="], ">=": [">", "<"], "==": ["!="], "!=": ["=="],
+    ]
+    static let arithmetic: [String: String] = ["+": "-", "-": "+", "*": "/", "/": "*", "%": "*"]
+
+    private static func isStringLiteral(_ expression: ExprSyntax) -> Bool {
+        expression.is(StringLiteralExprSyntax.self)
+    }
+
+    /// The text of `node` with only its operator token replaced, so comments and layout around it survive.
+    private func swapping(_ op: BinaryOperatorExprSyntax, in node: InfixOperatorExprSyntax, for replacement: String)
+        -> String
+    {
+        let text = Array(node.trimmedDescription.utf8)
+        let base = node.positionAfterSkippingLeadingTrivia.utf8Offset
+        let start = op.operator.positionAfterSkippingLeadingTrivia.utf8Offset - base
+        let end = op.operator.endPositionBeforeTrailingTrivia.utf8Offset - base
+        guard start >= 0, end <= text.count, start < end else { return node.trimmedDescription }
+        return String(decoding: text[..<start] + Array(replacement.utf8) + text[end...], as: UTF8.self)
+    }
+
+    override func visit(_ node: BooleanLiteralExprSyntax) -> SyntaxVisitorContinueKind {
+        // A literal in a `case` pattern is matched, not evaluated: flipping it breaks exhaustiveness.
+        guard !node.hasAncestor(SwitchCaseItemSyntax.self) else { return .visitChildren }
+        add(node, operatorID: .flipBoolean, replacement: node.literal.text == "true" ? "false" : "true")
+        return .visitChildren
+    }
+
+    override func visit(_ node: CodeBlockItemSyntax) -> SyntaxVisitorContinueKind {
+        guard context.operators.contains(.removeCall), builderDepth == 0, let expression = node.item.as(ExprSyntax.self)
+        else { return .visitChildren }
+        var inner = expression
+        while true {
+            if let wrapped = inner.as(TryExprSyntax.self) {
+                inner = wrapped.expression
+            } else if let wrapped = inner.as(AwaitExprSyntax.self) {
+                inner = wrapped.expression
+            } else {
+                break
+            }
+        }
+        guard let call = inner.as(FunctionCallExprSyntax.self),
+            !CallRemoval.isLogging(call.calledExpression.trimmedDescription),
+            !CallRemoval.isImplicitReturn(node)
+        else { return .visitChildren }
+        add(expression, operatorID: .removeCall, replacement: "()")
+        return .visitChildren
+    }
+    override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind {
+        // Attribute arguments are compile-time constants: a runtime schema there never compiles.
+        .skipChildren
+    }
+    override func visit(_ node: EnumCaseDeclSyntax) -> SyntaxVisitorContinueKind {
+        // Raw values and associated defaults are constants too.
+        .skipChildren
     }
     override func visit(_ node: IfConfigClauseSyntax) -> SyntaxVisitorContinueKind {
         // The condition is compile-time syntax, not a runtime Boolean expression.
@@ -469,5 +570,84 @@ public enum Digest {
     /// Lower-case hexadecimal SHA-256 of `bytes`, using aemi's platform-backed `ContentDigest`.
     public static func sha256(_ bytes: [UInt8]) -> String {
         ContentDigest.sha256Hex(bytes)
+    }
+}
+
+extension SyntaxProtocol {
+    /// Whether some ancestor is a `type`.
+    fileprivate func hasAncestor<T: SyntaxProtocol>(_ type: T.Type) -> Bool {
+        var current = parent
+        while let node = current {
+            if node.is(type) { return true }
+            current = node.parent
+        }
+        return false
+    }
+}
+
+/// Result builders collect statements as values, so a statement edit inside one changes what is built.
+enum BuilderContext {
+    static func isBuilder(_ node: some SyntaxProtocol) -> Bool {
+        if let variable = node.as(VariableDeclSyntax.self) {
+            return hasBuilderAttribute(variable.attributes)
+                || variable.bindings.contains {
+                    $0.pattern.trimmedDescription == "body"
+                        && $0.typeAnnotation?.type.trimmedDescription.hasPrefix("some ") == true
+                }
+        }
+        if let function = node.as(FunctionDeclSyntax.self) {
+            return hasBuilderAttribute(function.attributes)
+                || function.signature.returnClause?.type.trimmedDescription.hasPrefix("some ") == true
+        }
+        return false
+    }
+
+    private static func hasBuilderAttribute(_ attributes: AttributeListSyntax) -> Bool {
+        attributes.contains {
+            $0.as(AttributeSyntax.self)?.attributeName.trimmedDescription.hasSuffix("Builder") == true
+        }
+    }
+}
+
+/// Which call statements `remove-call` leaves alone.
+enum CallRemoval {
+    private static let names: Set<String> = [
+        "print", "debugPrint", "dump", "NSLog", "os_log", "assert", "assertionFailure", "precondition",
+        "preconditionFailure", "fatalError", "swift_unreachable",
+    ]
+    private static let loggerMethods: Set<String> = [
+        "debug", "info", "notice", "error", "warning", "fault", "trace", "critical", "log",
+    ]
+
+    /// Logging, assertions, and initializer chaining: removing them proves nothing or cannot compile.
+    static func isLogging(_ callee: String) -> Bool {
+        if callee == "super.init" || callee == "self.init" { return true }
+        let last = callee.split(separator: ".").last.map(String.init) ?? callee
+        if names.contains(callee) || names.contains(last) { return true }
+        return callee.contains(".") && loggerMethods.contains(last)
+    }
+
+    /// The call is the only statement of a body whose value it may be returned as: a closure, a getter, or a function
+    /// with a result. Wrapping it in `if` would change that body's type.
+    static func isImplicitReturn(_ node: CodeBlockItemSyntax) -> Bool {
+        guard let list = node.parent?.as(CodeBlockItemListSyntax.self), list.count == 1, let owner = list.parent else {
+            return false
+        }
+        if owner.is(ClosureExprSyntax.self) || owner.is(AccessorBlockSyntax.self) { return true }
+        guard let block = owner.as(CodeBlockSyntax.self), let holder = block.parent else { return false }
+        if let accessor = holder.as(AccessorDeclSyntax.self) {
+            return accessor.accessorSpecifier.tokenKind == .keyword(.get)
+                || accessor.accessorSpecifier.tokenKind == .keyword(._read)
+                || accessor.accessorSpecifier.tokenKind == .keyword(._modify)
+        }
+        if let function = holder.as(FunctionDeclSyntax.self) {
+            return returnsValue(function.signature.returnClause)
+        }
+        return false
+    }
+
+    private static func returnsValue(_ clause: ReturnClauseSyntax?) -> Bool {
+        guard let type = clause?.type.trimmedDescription else { return false }
+        return !["Void", "()", "Swift.Void"].contains(type)
     }
 }

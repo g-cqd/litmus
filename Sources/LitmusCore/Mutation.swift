@@ -1,8 +1,80 @@
-/// The initial operator tier; raw values are persistent rule identifiers.
+internal import Foundation
+
+/// How much evidence supports an operator; each tier includes the ones before it.
+public enum OperatorTier: String, Codable, CaseIterable, Sendable, Comparable {
+    /// The original operators: conditions, ternaries and logical connectives. The default.
+    case stable
+    /// Comparison, boolean-literal and arithmetic operators; opt in with `--operator-tier standard`.
+    case standard
+    /// Statement removal, which changes control flow and so needs the most review of its survivors.
+    case experimental
+
+    private var rank: Int { Self.allCases.firstIndex(of: self) ?? 0 }
+    public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rank < rhs.rank }
+}
+
+/// The operators and their persistent rule identifiers (raw values), which suppression directives
+/// (`// @lm:accept:next replace-relational`), baselines and result stores name.
 public enum MutationOperator: String, Codable, CaseIterable, Sendable {
     case negateCondition = "negate-condition"
     case swapTernary = "swap-ternary"
     case replaceLogical = "replace-logical"
+    case replaceRelational = "replace-relational"
+    case flipBoolean = "flip-boolean"
+    case replaceArithmetic = "replace-arithmetic"
+    case removeCall = "remove-call"
+
+    /// The kind of edit it makes, which decides how its schema is written.
+    public var shape: SchemaShape {
+        switch self {
+        case .removeCall: .statement
+        default: .expression
+        }
+    }
+
+    public var tier: OperatorTier {
+        switch self {
+        case .negateCondition, .swapTernary, .replaceLogical: .stable
+        case .replaceRelational, .flipBoolean, .replaceArithmetic: .standard
+        case .removeCall: .experimental
+        }
+    }
+
+    /// One line for `--help` and reports.
+    public var summary: String {
+        switch self {
+        case .negateCondition: "negate an if, guard or while condition"
+        case .swapTernary: "negate the condition of a ternary (swap its branches)"
+        case .replaceLogical: "exchange && and ||"
+        case .replaceRelational: "shift comparison boundaries and negate comparisons (< <= > >= == !=)"
+        case .flipBoolean: "flip true and false literals"
+        case .replaceArithmetic: "exchange + and -, * and /, and turn % into *"
+        case .removeCall: "skip a call statement whose result is unused"
+        }
+    }
+
+    /// The operators of `tier` and every tier before it.
+    public static func operators(upTo tier: OperatorTier) -> Set<MutationOperator> {
+        Set(allCases.filter { $0.tier <= tier })
+    }
+
+    /// What a run mutates unless told otherwise.
+    public static let defaults = operators(upTo: .stable)
+
+    /// The operators named by a comma-separated list of rule identifiers.
+    public static func parse(_ list: String) throws -> Set<MutationOperator> {
+        var result: Set<MutationOperator> = []
+        for name in list.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) where !name.isEmpty {
+            guard let found = MutationOperator(rawValue: name) else {
+                throw LitmusFailure(
+                    "unknown operator \(name); known: \(allCases.map(\.rawValue).joined(separator: ", "))"
+                )
+            }
+            result.insert(found)
+        }
+        guard !result.isEmpty else { throw LitmusFailure("--operators names no operator") }
+        return result
+    }
 }
 
 /// A source-accurate edit. Byte offsets refer to the original UTF-8 source, never a rewritten tree.

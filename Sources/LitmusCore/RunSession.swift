@@ -126,7 +126,8 @@ final class RunSession<Executor: ProcessExecutor> {
             include: options.include,
             packagePath: driver.packagePath,
             jobs: 8,
-            scope: scope
+            scope: scope,
+            operators: options.operators
         )
         account("plan", since: phase)
         if sourcePlan.mutations.isEmpty {
@@ -197,7 +198,8 @@ final class RunSession<Executor: ProcessExecutor> {
             include: options.include,
             packagePath: driver.packagePath,
             jobs: 8,
-            scope: options.scope
+            scope: options.scope,
+            operators: options.operators
         )
         account("plan", since: phase)
         plan = MutationPlan(
@@ -594,6 +596,7 @@ final class RunSession<Executor: ProcessExecutor> {
             harness.controlsSwiftTesting ? options.baselineRepetitions : nil
         artifact.policy?.flakyTests = flaky
         artifact.policy?.suiteWidth = options.suiteWidth
+        artifact.policy?.operators = options.operators.map(\.rawValue).sorted()
         artifact.policy?.testTargetSelection = harness.selectsModules && options.selectTestTargets
         var judge = Judge(
             harness: harness,

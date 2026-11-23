@@ -114,10 +114,17 @@ public enum SchemaWriter {
         for group in groups {
             let first = group[0]
             copy(upTo: first.start)
-            // `(m1 ? (r1) : m2 ? (r2) : (original))`: at most one activation holds in a process.
-            var replacement = "("
-            for site in group { replacement += "\(symbol)_\(site.id) ? (\(site.replacement)) : " }
-            replacement += "(\(first.original)))"
+            var replacement: String
+            if first.operatorID.shape == .statement {
+                // A statement is skipped, not replaced: `if !m { original }`. It never shares a range with another site.
+                guard group.count == 1 else { throw LitmusFailure("a statement site shares its range: \(first.id)") }
+                replacement = "if !\(symbol)_\(first.id) { \(first.original) }"
+            } else {
+                // `(m1 ? (r1) : m2 ? (r2) : (original))`: at most one activation holds in a process.
+                replacement = "("
+                for site in group { replacement += "\(symbol)_\(site.id) ? (\(site.replacement)) : " }
+                replacement += "(\(first.original)))"
+            }
             let start = output.count
             output.append(contentsOf: replacement.utf8)
             for site in group { ranges[site.id] = start..<output.count }

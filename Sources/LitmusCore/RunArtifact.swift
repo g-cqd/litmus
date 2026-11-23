@@ -27,6 +27,8 @@ public struct RunPolicy: Codable, Sendable, Equatable {
     public var testTargetSelection: Bool? = nil
     /// Which build the baseline ran on: `inactive-schema` or `unmutated`; nil before 0.3.
     public var baselineBuild: String? = nil
+    /// The operators mutated, as rule ids; nil before 0.4 (the three stable ones).
+    public var operators: [String]? = nil
 }
 
 /// The limits a run was given, and what they left untested.

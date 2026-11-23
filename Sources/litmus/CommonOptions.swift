@@ -14,6 +14,34 @@ struct SubjectOptions: ParsableArguments {
     var exclusions: [String] = []
     @Option(name: .customLong("only-path"), help: "Mutate only files matching a substring/glob (repeatable).")
     var inclusions: [String] = []
+    @Option(
+        help:
+            "Operators to mutate, comma-separated rule ids (default: the stable tier). Known: negate-condition, swap-ternary, replace-logical, replace-relational, flip-boolean, replace-arithmetic, remove-call."
+    )
+    var operators: String?
+    @Option(
+        help:
+            "Operator tier to mutate: stable (default), standard (adds comparisons, booleans, arithmetic) or experimental (adds call removal)."
+    )
+    var operatorTier: String?
+    /// The operators this run or plan mutates; `--operators` names them exactly, a tier includes every tier before it.
+    func operatorSet() throws -> Set<MutationOperator> {
+        do {
+            if let operators {
+                guard operatorTier == nil else {
+                    throw ValidationError("--operators and --operator-tier are alternatives; give one")
+                }
+                return try MutationOperator.parse(operators)
+            }
+            guard let operatorTier else { return MutationOperator.defaults }
+            guard let tier = OperatorTier(rawValue: operatorTier) else {
+                throw ValidationError("operator tier must be stable, standard or experimental")
+            }
+            return MutationOperator.operators(upTo: tier)
+        } catch let error as ValidationError {
+            throw error
+        } catch { try fail(error, code: .usage) }
+    }
     var absoluteRoot: String { URL(fileURLWithPath: root).standardizedFileURL.resolvingSymlinksInPath().path }
     func excludes() throws -> [String] {
         do { return try LitmusConfiguration.load(root: absoluteRoot, explicit: config).exclude + exclusions } catch {
