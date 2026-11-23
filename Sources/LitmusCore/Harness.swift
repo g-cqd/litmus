@@ -62,21 +62,51 @@ func filterPattern(for test: String) -> String {
     "^" + NSRegularExpression.escapedPattern(for: test) + "(/|$)"
 }
 
+/// What a harness can honour; the runner adapts its policy to it instead of branching on harness types.
+public struct HarnessCapabilities: Sendable, Equatable {
+    /// Workers that may run at once against one build.
+    public var maximumWorkers: Int
+    /// Whether ``TestRunRequest/onlySwiftTesting`` is honoured, so a kill can be confirmed on its failing tests alone.
+    public var selectsTests: Bool
+    /// Whether ``TestRunRequest/onlyModules`` is honoured, with ``TestRunResult/moduleCounts`` reported.
+    public var selectsModules: Bool
+    /// Whether it runs Swift Testing itself and so can repeat the suite, skip tests and cap its width; `xcodebuild`
+    /// cannot.
+    public var controlsSwiftTesting: Bool
+
+    public init(
+        maximumWorkers: Int = 1,
+        selectsTests: Bool = false,
+        selectsModules: Bool = false,
+        controlsSwiftTesting: Bool = false
+    ) {
+        self.maximumWorkers = max(1, maximumWorkers)
+        self.selectsTests = selectsTests
+        self.selectsModules = selectsModules
+        self.controlsSwiftTesting = controlsSwiftTesting
+    }
+}
+
 /// Runs the subject's tests against the current build products.
 public protocol TestHarness: Sendable {
-    /// Workers that may run at once against one build.
-    var maximumWorkers: Int { get }
+    /// What the harness honours.
+    var capabilities: HarnessCapabilities { get }
     /// A description for provenance.
     var kind: String { get }
-    /// Whether ``TestRunRequest/onlySwiftTesting`` is honoured, so a kill can be confirmed on its failing tests alone.
-    var selectsTests: Bool { get }
-    /// Whether ``TestRunRequest/onlyModules``, `skipSwiftTesting`, `repetitions` and `parallelizationWidth` are
-    /// honoured, with ``TestRunResult/moduleCounts`` reported.
-    var selectsModules: Bool { get }
-    /// Whether it runs Swift Testing itself and so can repeat the suite, skip tests and cap its width (the direct
-    /// harness); `xcodebuild` cannot.
-    var controlsSwiftTesting: Bool { get }
     func run(_ request: TestRunRequest) async throws -> TestRunResult
+}
+
+extension TestHarness {
+    public var maximumWorkers: Int { capabilities.maximumWorkers }
+    public var selectsTests: Bool { capabilities.selectsTests }
+    public var selectsModules: Bool { capabilities.selectsModules }
+    public var controlsSwiftTesting: Bool { capabilities.controlsSwiftTesting }
+}
+
+/// Nanoseconds elapsed since `start` on the continuous clock.
+func nanoseconds(since start: ContinuousClock.Instant) -> Int64 {
+    let duration = ContinuousClock.now - start
+    return duration.components.seconds * 1_000_000_000 + duration.components.attoseconds / 1_000_000_000
 }
 
 /// The common environment of every subject process: the selector, the marker directory, a private `TMPDIR`, and the
@@ -183,11 +213,8 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
     let toolchain: Toolchain
     let workspace: String
     let logs: String
-    public let maximumWorkers: Int
+    public let capabilities: HarnessCapabilities
     public var kind: String { "swiftpm-direct" }
-    public var selectsTests: Bool { true }
-    public var selectsModules: Bool { true }
-    public var controlsSwiftTesting: Bool { true }
 
     public init(
         executor: Executor,
@@ -202,7 +229,12 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
         self.toolchain = toolchain
         self.workspace = workspace
         self.logs = logs
-        maximumWorkers = max(1, workers)
+        capabilities = HarnessCapabilities(
+            maximumWorkers: workers,
+            selectsTests: true,
+            selectsModules: true,
+            controlsSwiftTesting: true
+        )
     }
 
     /// Groups `swift test list` lines by module and matches them to built bundles: `<Module>.xctest`, or the single
@@ -257,10 +289,7 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
 
     public func run(_ request: TestRunRequest) async throws -> TestRunResult {
         let start = ContinuousClock.now
-        func elapsed() -> Int64 {
-            let duration = ContinuousClock.now - start
-            return duration.components.seconds * 1_000_000_000 + duration.components.attoseconds / 1_000_000_000
-        }
+        func elapsed() -> Int64 { nanoseconds(since: start) }
         func remaining() -> Int { max(1, request.deadline - Int(elapsed() / 1_000_000_000)) }
         var environment = subjectEnvironment(request)
         environment["DYLD_FRAMEWORK_PATH"] = toolchain.frameworks
@@ -404,11 +433,8 @@ public struct SwiftPMToolHarness<Executor: ProcessExecutor>: TestHarness {
     let workspace: String
     let artifacts: String
     let logs: String
-    public var maximumWorkers: Int { 1 }
+    public var capabilities: HarnessCapabilities { HarnessCapabilities() }
     public var kind: String { "swift-test" }
-    public var selectsTests: Bool { false }
-    public var selectsModules: Bool { false }
-    public var controlsSwiftTesting: Bool { false }
 
     public init(executor: Executor, driver: BuildDriver, workspace: String, artifacts: String, logs: String) {
         self.executor = executor
@@ -466,12 +492,9 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
     let workspace: String
     let artifacts: String
     let logs: String
-    public var maximumWorkers: Int { 1 }
     public var kind: String { "xcodebuild" }
-    public var selectsTests: Bool { false }
     /// `-only-testing:<target>`, with counts per test bundle from the result bundle.
-    public var selectsModules: Bool { true }
-    public var controlsSwiftTesting: Bool { false }
+    public var capabilities: HarnessCapabilities { HarnessCapabilities(selectsModules: true) }
 
     public init(executor: Executor, driver: BuildDriver, workspace: String, artifacts: String, logs: String) {
         self.executor = executor
@@ -483,10 +506,7 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
 
     public func run(_ request: TestRunRequest) async throws -> TestRunResult {
         let start = ContinuousClock.now
-        func nanoseconds() -> Int64 {
-            let duration = ContinuousClock.now - start
-            return duration.components.seconds * 1_000_000_000 + duration.components.attoseconds / 1_000_000_000
-        }
+        func elapsedNanoseconds() -> Int64 { nanoseconds(since: start) }
         let bundle = "\(logs)/\(request.name).xcresult"
         let xctestrun = try preparedTestRun(output: "\(logs)/\(request.name).xctestrun", request: request)
         let command = try driver.testCommand(
@@ -511,7 +531,7 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
             TestRunResult(
                 outcome: outcome,
                 counts: counts,
-                nanoseconds: nanoseconds(),
+                nanoseconds: elapsedNanoseconds(),
                 evidence: evidence,
                 reason: reason
             )

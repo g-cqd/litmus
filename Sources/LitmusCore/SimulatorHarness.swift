@@ -137,11 +137,10 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
     let helper: SimulatorHelper.Built
     let workspace: String
     let logs: String
-    public var maximumWorkers: Int { 1 }
+    public var capabilities: HarnessCapabilities {
+        HarnessCapabilities(selectsTests: true, selectsModules: true, controlsSwiftTesting: true)
+    }
     public var kind: String { "simulator-direct" }
-    public var selectsTests: Bool { true }
-    public var selectsModules: Bool { true }
-    public var controlsSwiftTesting: Bool { true }
 
     /// The simulator id of an Xcode destination (`id=<UDID>`), or nil.
     static func simulatorID(_ destination: String) -> String? {
@@ -224,10 +223,7 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
 
     public func run(_ request: TestRunRequest) async throws -> TestRunResult {
         let start = ContinuousClock.now
-        func elapsed() -> Int64 {
-            let duration = ContinuousClock.now - start
-            return duration.components.seconds * 1_000_000_000 + duration.components.attoseconds / 1_000_000_000
-        }
+        func elapsed() -> Int64 { nanoseconds(since: start) }
         func remaining() -> Int { max(1, request.deadline - Int(elapsed() / 1_000_000_000)) }
         var passed = 0, skipped = 0
         var evidence: [String] = []
