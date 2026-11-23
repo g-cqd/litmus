@@ -131,23 +131,35 @@ public struct BuildDriver: Codable, Sendable, Equatable {
     }
 
     /// Runs the same entire selected suite for the baseline, every inactive schema and each active mutant.
-    /// - Parameter onlyTesting: Xcode test targets to run (`-only-testing:`); nil runs the whole test plan.
+    /// - Parameters:
+    ///   - onlyTesting: Xcode test targets to run (`-only-testing:`); nil runs the whole test plan.
+    ///   - resultStream: a file Xcode writes its event stream to while tests run (it must exist), for stopping early.
+    ///   - destination: the device to run on, when a worker has its own; the driver's otherwise.
+    ///   - derivedData: the DerivedData directory a worker owns; the run's otherwise.
     public func testCommand(
         workspace: String,
         artifacts: String,
         result: String,
         xctestrun: String? = nil,
-        onlyTesting: [String]? = nil
+        onlyTesting: [String]? = nil,
+        resultStream: String? = nil,
+        destination workerDestination: String? = nil,
+        derivedData: String? = nil
     ) throws -> ToolCommand {
         if usesXcode {
-            guard let destination, let xctestrun else { throw LitmusFailure("missing Xcode test artifact/destination") }
+            guard let destination = workerDestination ?? destination, let xctestrun else {
+                throw LitmusFailure("missing Xcode test artifact/destination")
+            }
             return ToolCommand(
                 executable: "/usr/bin/xcrun",
                 arguments: [
                     "xcodebuild", "test-without-building", "-xctestrun", xctestrun,
                     "-destination", destination, "-resultBundlePath", result, "-derivedDataPath",
-                    artifacts + "/DerivedData", "-parallel-testing-enabled", "NO",
-                ] + xcodebuildArguments + (onlyTesting ?? []).sorted().map { "-only-testing:" + $0 }
+                    derivedData ?? artifacts + "/DerivedData", "-parallel-testing-enabled", "NO",
+                    // A failing mutant is expected: no sysdiagnose for it.
+                    "-collect-test-diagnostics", "never",
+                ] + (resultStream.map { ["-resultStreamPath", $0] } ?? []) + xcodebuildArguments
+                    + (onlyTesting ?? []).sorted().map { "-only-testing:" + $0 }
             )
         }
         return ToolCommand(
@@ -158,6 +170,22 @@ public struct BuildDriver: Codable, Sendable, Equatable {
         )
     }
 
+    /// `ARCHS` and `ONLY_ACTIVE_ARCH` for a simulator build: Xcode would otherwise build the app for both simulator
+    /// architectures while Swift packages in the same build hold only the host's. An explicit setting wins.
+    static func simulatorArchitectureSettings(for arguments: [String], destination: String?) -> [String] {
+        guard destination?.contains("Simulator") == true else { return [] }
+        guard !arguments.contains(where: { $0.hasPrefix("ARCHS=") || $0.hasPrefix("ONLY_ACTIVE_ARCH=") }) else {
+            return []
+        }
+        #if arch(arm64)
+            return ["ARCHS=arm64", "ONLY_ACTIVE_ARCH=YES"]
+        #elseif arch(x86_64)
+            return ["ARCHS=x86_64", "ONLY_ACTIVE_ARCH=YES"]
+        #else
+            return []
+        #endif
+    }
+
     private var xcodeArguments: [String] {
         var arguments: [String] = []
         if let container { arguments += [container.hasSuffix(".xcworkspace") ? "-workspace" : "-project", container] }
@@ -165,5 +193,6 @@ public struct BuildDriver: Codable, Sendable, Equatable {
         if let destination { arguments += ["-destination", destination] }
         if let testPlan { arguments += ["-testPlan", testPlan] }
         return arguments + xcodebuildArguments
+            + Self.simulatorArchitectureSettings(for: xcodebuildArguments, destination: destination)
     }
 }

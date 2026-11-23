@@ -232,6 +232,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         workspace: String,
         artifacts: String,
         logs: String,
+        fleet: SimulatorFleet? = nil,
         notes: inout [String]
     ) async throws -> any TestHarness {
         if driver.usesXcode {
@@ -241,7 +242,9 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 driver: driver,
                 workspace: workspace,
                 artifacts: artifacts,
-                logs: logs
+                logs: logs,
+                fleet: fleet,
+                keepResultBundles: options.keepResultBundles
             )
             guard options.simulatorHarness, let destination = driver.destination,
                 let udid = SimulatorDirectHarness<Executor>.simulatorID(destination)
@@ -255,6 +258,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             do {
                 return try await simulatorHarness(
                     udid: udid,
+                    fleet: fleet ?? .single(udid: udid, directory: workspace),
                     workspace: driver.executionDirectory(workspace: workspace),
                     artifacts: artifacts,
                     logs: logs,
@@ -321,6 +325,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
     ///; nil, with a note, to use `xcodebuild`.
     func simulatorHarness(
         udid: String,
+        fleet: SimulatorFleet,
         workspace: String,
         artifacts: String,
         logs: String,
@@ -355,7 +360,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
         }
         let direct = SimulatorDirectHarness(
             executor: executor,
-            udid: udid,
+            fleet: fleet,
             bundles: bundles,
             helper: helper,
             workspace: workspace,

@@ -153,9 +153,9 @@ func runWatching(
                 try? await Task.sleep(for: .milliseconds(15))
                 guard let handle = FileHandle(forReadingAtPath: events) else { continue }
                 defer { try? handle.close() }
-                guard (try? handle.seek(toOffset: offset)) != nil,
-                    let chunk = try? handle.read(upToCount: 1 << 20)
-                else { return }
+                guard (try? handle.seek(toOffset: offset)) != nil else { return }
+                // An empty read is a stream not written yet, not the end of it.
+                guard let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty else { continue }
                 offset += UInt64(chunk.count)
                 pending += chunk
                 // A stream that cannot be read as events: stop watching; the run is judged by its final evidence.
@@ -492,30 +492,79 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
     let workspace: String
     let artifacts: String
     let logs: String
+    /// Simulators Litmus made, one worker each; nil runs on the driver's one destination.
+    let fleet: SimulatorFleet?
+    /// Keep every run's result bundle (hundreds of MiB each on a real app); the summary is kept either way.
+    let keepResultBundles: Bool
     public var kind: String { "xcodebuild" }
     /// `-only-testing:<target>`, with counts per test bundle from the result bundle.
-    public var capabilities: HarnessCapabilities { HarnessCapabilities(selectsModules: true) }
+    public var capabilities: HarnessCapabilities {
+        HarnessCapabilities(maximumWorkers: fleet?.count ?? 1, selectsModules: true)
+    }
 
-    public init(executor: Executor, driver: BuildDriver, workspace: String, artifacts: String, logs: String) {
+    public init(
+        executor: Executor,
+        driver: BuildDriver,
+        workspace: String,
+        artifacts: String,
+        logs: String,
+        fleet: SimulatorFleet? = nil,
+        keepResultBundles: Bool = false
+    ) {
         self.executor = executor
         self.driver = driver
         self.workspace = workspace
         self.artifacts = artifacts
         self.logs = logs
+        self.fleet = fleet
+        self.keepResultBundles = keepResultBundles
     }
 
     public func run(_ request: TestRunRequest) async throws -> TestRunResult {
+        guard let fleet, fleet.count > 1 else { return try await run(request, on: nil) }
+        return try await fleet.withDevice { device in
+            let result = try await self.run(request, on: device)
+            return (result, result.outcome == .crashed || result.outcome == .timedOut)
+        }
+    }
+
+    /// One run, on the driver's destination or on a worker's own simulator, products snapshot and DerivedData.
+    private func run(_ request: TestRunRequest, on device: PoolDevice?) async throws -> TestRunResult {
         let start = ContinuousClock.now
         func elapsedNanoseconds() -> Int64 { nanoseconds(since: start) }
         let bundle = "\(logs)/\(request.name).xcresult"
-        let xctestrun = try preparedTestRun(output: "\(logs)/\(request.name).xctestrun", request: request)
+        var products = artifacts + "/DerivedData/Build/Products"
+        var derivedData: String?
+        if let device {
+            // Each run gets a private clone of the products: a rebuild between schemas, or another worker, cannot
+            // change what it runs. A clone shares its blocks with the original, so it costs a directory, not a copy.
+            derivedData = device.directory + "/DerivedData"
+            try FileManager.default.createDirectory(atPath: derivedData ?? "", withIntermediateDirectories: true)
+            let clone = device.directory + "/products-" + UUID().uuidString.prefix(8)
+            try DirectoryClone.copy(from: products, to: clone)
+            products = clone
+        }
+        defer { if device != nil { try? FileManager.default.removeItem(atPath: products) } }
+        let xctestrun = try preparedTestRun(
+            output: "\(logs)/\(request.name).xctestrun",
+            request: request,
+            products: products
+        )
+        // With fail-fast, Xcode's event stream shows the first failed test, and the run stops there.
+        let stream = request.failFast ? "\(logs)/\(request.name).stream.jsonl" : nil
+        if let stream { _ = FileManager.default.createFile(atPath: stream, contents: nil) }
         let command = try driver.testCommand(
             workspace: workspace,
             artifacts: artifacts,
             result: bundle,
             xctestrun: xctestrun,
-            onlyTesting: request.onlyModules.map { Array($0) }
+            onlyTesting: request.onlyModules.map { Array($0) },
+            resultStream: stream,
+            destination: device?.destination,
+            derivedData: derivedData
         )
+        var supervision = request.supervision
+        if let stream { supervision.monitor = XcodeResultStream.monitor(path: stream) }
         // The memory limit covers `xcodebuild`'s session; the simulator's test host is outside it, and is ended after
         // the run through the token its `.xctestrun` environment carries.
         let output = try await executor.execute(
@@ -523,10 +572,11 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
             directory: driver.executionDirectory(workspace: workspace),
             environment: subjectEnvironment(request),
             timeout: request.deadline,
-            supervision: request.supervision
+            supervision: supervision
         )
         try writeLog(output, path: "\(logs)/\(request.name).log")
         var evidence = ["logs/\(request.name).log"]
+        func discardBundle() { if !keepResultBundles { try? FileManager.default.removeItem(atPath: bundle) } }
         func result(_ outcome: TestRunOutcome, _ counts: TestCounts?, _ reason: String) -> TestRunResult {
             TestRunResult(
                 outcome: outcome,
@@ -536,7 +586,20 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
                 reason: reason
             )
         }
-        if output.timedOut { return result(.timedOut, nil, "xcodebuild exceeded \(request.deadline) s") }
+        if output.stopReason == failFastReason, let stream {
+            // Stopped at the first failed test: the bundle is incomplete, and the stream names what failed.
+            let scanned = (try? BoundedFileReader.read(path: stream, cap: 64 << 20)).map(XcodeResultStream.scan)
+            evidence.append("logs/\(request.name).stream.jsonl")
+            discardBundle()
+            var stopped = result(.failed, nil, "an Xcode test failed (stopped early)")
+            stopped.failingTests = scanned?.failedTests ?? []
+            return stopped
+        }
+        if let stream { try? FileManager.default.removeItem(atPath: stream) }
+        if output.timedOut {
+            discardBundle()
+            return result(.timedOut, nil, "xcodebuild exceeded \(request.deadline) s")
+        }
         let summary = try await executor.execute(
             ToolCommand(
                 executable: "/usr/bin/xcrun",
@@ -548,13 +611,16 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
         )
         guard summary.exitStatus == 0, !summary.truncated, let counts = try? TestEvidence.xcresult(summary.stdout)
         else {
+            // Kept whatever the options say: it is what a person debugging an unusable run looks at.
+            evidence.append("logs/\(request.name).xcresult")
             return result(.unusable, nil, "xcresult summary unavailable (xcodebuild exit \(output.exitStatus))")
         }
         try Data(summary.stdout).write(
             to: URL(fileURLWithPath: "\(logs)/\(request.name).summary.json"),
             options: .atomic
         )
-        evidence += ["logs/\(request.name).summary.json", "logs/\(request.name).xcresult"]
+        evidence += ["logs/\(request.name).summary.json"]
+        if keepResultBundles { evidence.append("logs/\(request.name).xcresult") }
         // Counts per test bundle, what `-only-testing` selections are checked against; left out unless they add up
         // to the summary's.
         let tests = try await executor.execute(
@@ -573,6 +639,7 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
             }
             if sum == (counts.passed, counts.failed, counts.skipped) { modules = parsed }
         }
+        discardBundle()
         func finished(_ outcome: TestRunOutcome, _ reason: String) -> TestRunResult {
             var finished = result(outcome, counts, reason)
             finished.moduleCounts = modules
@@ -589,8 +656,7 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
 
     /// PropertyListSerialization supplies heterogeneous SDK data; the untyped boundary is contained here.
     /// Xcode-relative paths are absolutised before moving the plist outside Build/Products.
-    private func preparedTestRun(output: String, request: TestRunRequest) throws -> String {
-        let products = artifacts + "/DerivedData/Build/Products"
+    private func preparedTestRun(output: String, request: TestRunRequest, products: String) throws -> String {
         let candidates = try FileManager.default.contentsOfDirectory(atPath: products)
             .filter { $0.hasSuffix(".xctestrun") }.sorted()
         guard candidates.count == 1, let file = candidates.first else {

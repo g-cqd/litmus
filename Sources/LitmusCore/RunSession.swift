@@ -37,6 +37,11 @@ final class RunSession<Executor: ProcessExecutor> {
     var buildSupervision = Supervision()
     var workspaceReleased = false
     var resolvedDestinationNote: String?
+    /// The simulator the destination names, when the run is on one.
+    var resolvedDevice: SimulatorDevice?
+    /// Simulators made for this run (`--simulators`), being made while the first schema builds.
+    var poolTask: Task<SimulatorPool<Executor>, any Error>?
+    var poolTornDown = false
     /// The schema currently written into the workspace, restored on any exit.
     var installed: InstalledSchema?
 
@@ -97,9 +102,12 @@ final class RunSession<Executor: ProcessExecutor> {
         try await selectWork()
         do {
             guard !toRun.isEmpty else { return try finish() }
+            startSimulatorPool()
             try await runBatches()
+            await teardownSimulators()
             return try finish()
         } catch {
+            await teardownSimulators()
             try? installed?.restore()
             releaseWorkspace()
             if let journal = prepared.restore, !journal.outstanding.isEmpty {
@@ -170,10 +178,60 @@ final class RunSession<Executor: ProcessExecutor> {
         else { return }
         let inventory = try await SimulatorInventory.load(using: executor, directory: root)
         let device = try inventory.resolve(destination)
+        resolvedDevice = device
         guard device.destination != destination else { return }
         driver = try driver.with(destination: device.destination)
         resolvedDestinationNote =
             "destination \(destination) resolved to \(device.name), iOS \(device.version), \(device.udid)"
+    }
+
+    /// Starts making the extra simulators, so that they boot while the first schema builds.
+    func startSimulatorPool() {
+        guard options.simulators > 1 else { return }
+        guard let device = resolvedDevice else { return }
+        let (executor, output, count) = (executor, output, options.simulators)
+        poolTask = Task {
+            try await SimulatorPool.create(executor: executor, template: device, count: count, directory: output)
+        }
+    }
+
+    /// The fleet to test on: the simulators made for the run, or nil to use the destination's own.
+    func simulatorFleet(notes: inout [String]) async -> SimulatorFleet? {
+        guard let poolTask else {
+            if options.simulators > 1 {
+                notes.append(
+                    "--simulators \(options.simulators) ignored: the run is not on an iOS Simulator destination"
+                )
+            }
+            return nil
+        }
+        do {
+            let pool = try await poolTask.value
+            notes.append(
+                "\(pool.devices.count) simulators made for this run and deleted at its end: "
+                    + pool.devices.map(\.udid).joined(separator: ", ")
+            )
+            return pool.fleet
+        } catch {
+            notes.append("could not make \(options.simulators) simulators (\(error)); using the destination's own")
+            self.poolTask = nil
+            return nil
+        }
+    }
+
+    /// Deletes the simulators made for the run. Not cancelled with the run: a stopped run must still clean up.
+    func teardownSimulators() async {
+        guard let poolTask, !poolTornDown else { return }
+        poolTornDown = true
+        let failures = await Task.detached { () -> [String] in
+            guard let pool = try? await poolTask.value else { return [] }
+            return await pool.teardown()
+        }.value
+        if !failures.isEmpty, artifact != nil {
+            artifact.notes.append(
+                "simulators left behind (the next run deletes them): " + failures.joined(separator: "; ")
+            )
+        }
     }
 
     /// Creates the owned workspace the run builds and mutates in.
@@ -472,6 +530,7 @@ final class RunSession<Executor: ProcessExecutor> {
             workspace: snapshot.root,
             artifacts: artifacts,
             logs: logs,
+            fleet: await simulatorFleet(notes: &harnessNotes),
             notes: &harnessNotes
         )
         artifact.notes += harnessNotes

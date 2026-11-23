@@ -122,7 +122,7 @@ enum SimulatorHelper {
 /// Runs hostless test bundles on a booted simulator through Litmus's helper: `simctl spawn` per bundle, Swift
 /// Testing through its ABI entry point with structured events (fail-fast, test names, filters, repetitions), XCTest
 /// through `XCTestSuite`. Measured 3.3–4.3 s per run against 9–11 s for `xcodebuild test-without-building`.
-/// One worker: one simulator.
+/// One worker per simulator of its fleet: the user's one, or several Litmus made.
 public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
     struct Bundle: Sendable, Equatable {
         let module: String
@@ -132,13 +132,18 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
     }
 
     let executor: Executor
-    let udid: String
+    let fleet: SimulatorFleet
     let bundles: [Bundle]
     let helper: SimulatorHelper.Built
     let workspace: String
     let logs: String
     public var capabilities: HarnessCapabilities {
-        HarnessCapabilities(selectsTests: true, selectsModules: true, controlsSwiftTesting: true)
+        HarnessCapabilities(
+            maximumWorkers: fleet.count,
+            selectsTests: true,
+            selectsModules: true,
+            controlsSwiftTesting: true
+        )
     }
     public var kind: String { "simulator-direct" }
 
@@ -203,6 +208,10 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
     /// test. Anything else means `xcodebuild`.
     func probe() async throws -> Bool {
         guard let bundle = bundles.first else { return false }
+        return try await fleet.withDevice { device in (try await self.probe(bundle, on: device.udid), false) }
+    }
+
+    private func probe(_ bundle: Bundle, on udid: String) async throws -> Bool {
         let events = logs + "/simulator-probe.events.jsonl"
         let output = try await executor.execute(
             ToolCommand(
@@ -222,6 +231,14 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
     }
 
     public func run(_ request: TestRunRequest) async throws -> TestRunResult {
+        try await fleet.withDevice { device in
+            let result = try await self.run(request, on: device.udid)
+            // A crashed or timed-out run may leave the simulator in a state the next run should not inherit.
+            return (result, result.outcome == .crashed || result.outcome == .timedOut)
+        }
+    }
+
+    private func run(_ request: TestRunRequest, on udid: String) async throws -> TestRunResult {
         let start = ContinuousClock.now
         func elapsed() -> Int64 { nanoseconds(since: start) }
         func remaining() -> Int { max(1, request.deadline - Int(elapsed() / 1_000_000_000)) }

@@ -32,6 +32,11 @@ public struct RunOptions: Sendable {
     /// Maximum non-overlapping sites per schema build, 1...256.
     /// The operators mutated; the stable tier unless a run asks for more.
     public var operators = MutationOperator.defaults
+    /// Simulators to test on at once, for an Xcode run on an iOS Simulator: Litmus makes this many (clones of the
+    /// destination, booted together) and deletes them at the end. One uses the destination itself.
+    public var simulators = 1
+    /// Keep every Xcode result bundle; only each run's summary otherwise.
+    public var keepResultBundles = false
     public var batchSize = 64
     /// Deadline of one build, in seconds.
     public var buildTimeout = 900
@@ -108,7 +113,8 @@ public struct RunOptions: Sendable {
     func validate() throws {
         guard (1...256).contains(batchSize), (1...86_400).contains(buildTimeout), (1...86_400).contains(timeoutCap),
             (1...100).contains(timeoutFactor), (1...86_400).contains(minimumTimeout), minimumTimeout <= timeoutCap,
-            (1...256).contains(jobs), (0...1_048_576).contains(memoryLimitMiB), (1...100).contains(baselineRepetitions),
+            (1...256).contains(jobs), (1...16).contains(simulators), (0...1_048_576).contains(memoryLimitMiB),
+            (1...100).contains(baselineRepetitions),
             suiteWidth.map({ (1...256).contains($0) }) ?? true,
             budgetSeconds.map({ (1...604_800).contains($0) }) ?? true, maxMutants.map({ $0 >= 1 }) ?? true,
             (1...1_048_576).contains(storeLimitMiB)
