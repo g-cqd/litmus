@@ -125,3 +125,39 @@ func fail(_ error: any Error, code: ExitStatus) throws -> Never {
     stderr("litmus: error: \(error)")
     throw ExitCode(code.rawValue)
 }
+
+/// Numeric limits on the mutation score (`--minimum-score`, `--maximum-score-drop`).
+struct GateOptions: ParsableArguments {
+    @Option(help: "Fail when the mutation score is below this percentage (0...100).") var minimumScore: Double?
+    @Option(help: "Fail when the score fell by more than this many percentage points from --baseline-run.")
+    var maximumScoreDrop: Double?
+    @Option(help: "An earlier run (.json or .pb) the score drop is measured against; both must be whole-subject runs.")
+    var baselineRun: String?
+
+    func validate() throws {
+        for (name, value) in [("--minimum-score", minimumScore), ("--maximum-score-drop", maximumScoreDrop)] {
+            if let value, !(0...100).contains(value) { throw ValidationError("\(name) must be between 0 and 100") }
+        }
+        if maximumScoreDrop != nil, baselineRun == nil {
+            throw ValidationError("--maximum-score-drop needs --baseline-run")
+        }
+    }
+
+    /// The gate, with its baseline run read.
+    func gate() throws -> QualityGate {
+        var baseline: RunArtifact?
+        if let baselineRun {
+            do { baseline = try ArtifactCodec.read(RunArtifact.self, path: baselineRun) } catch {
+                try fail(error, code: .badConfiguration)
+            }
+        }
+        return QualityGate(minimumScore: minimumScore, maximumScoreDrop: maximumScoreDrop, baseline: baseline)
+    }
+
+    /// Prints why the run fails the gate; true when it does.
+    func fails(_ artifact: RunArtifact) throws -> Bool {
+        let failures = try gate().failures(for: artifact)
+        for failure in failures { stderr("litmus: gate: \(failure)") }
+        return !failures.isEmpty
+    }
+}

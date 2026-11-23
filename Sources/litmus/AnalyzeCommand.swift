@@ -22,6 +22,7 @@ struct Analyze: AsyncParsableCommand {
     var baseline: String?
     @Option(help: "Write the current findings' anchored fingerprints as a baseline to this file, then exit 0.")
     var writeBaseline: String?
+    @OptionGroup var limits: GateOptions
     @Option(help: "new-survivors: fail on survivors and uncovered mutants the --baseline (base branch) does not hold.")
     var gate: String?
     mutating func run() async throws {
@@ -86,6 +87,7 @@ struct Analyze: AsyncParsableCommand {
         } catch { try fail(error, code: .outputFailure) }
         stderr(LitmusReportFormat.summary(report))
         if !report.successfulExecution { throw ExitCode(ExitStatus.internalFailure.rawValue) }
+        if try limits.fails(artifact) { throw ExitCode(ExitStatus.findings.rawValue) }
         let failOnWarnings = strict || gate != nil
         if report.findings.contains(where: { $0.severity == "error" || failOnWarnings && $0.severity == "warning" }) {
             throw ExitCode(ExitStatus.findings.rawValue)

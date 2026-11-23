@@ -97,6 +97,7 @@ struct Run: AsyncParsableCommand {
     var report: String?
     @Option(help: "With --report: baseline file whose findings are left out (the base branch's, for the gate).")
     var baseline: String?
+    @OptionGroup var limits: GateOptions
     @Option(help: "With --report: new-survivors fails on survivors the --baseline does not hold.")
     var gate: String?
     @Option(
@@ -251,7 +252,8 @@ struct Run: AsyncParsableCommand {
             )
         }
         if !artifact.isSuccessfulExecution { throw ExitCode(ExitStatus.internalFailure.rawValue) }
-        if reportFindings { throw ExitCode(ExitStatus.findings.rawValue) }
+        let belowGate = try limits.fails(artifact)
+        if reportFindings || belowGate { throw ExitCode(ExitStatus.findings.rawValue) }
     }
 
     /// Whether the report printed findings that fail the run (errors, and warnings under the gate).

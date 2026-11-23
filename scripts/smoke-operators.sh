@@ -47,4 +47,15 @@ assert not any('print' in o for o,_ in by), 'logging must not be removed'
 assert sorted(r['policy']['operators']) == sorted(['negate-condition','swap-ternary','replace-logical','replace-relational','flip-boolean','replace-arithmetic','remove-call'])
 print('operators:', dict(c))
 PY
+# Score gates: the run scored 8 of 12 mutants (66.67 %).
+"$BIN" analyze "$WORK/subject" --results "$WORK/run/run.json" --minimum-score 66 > /dev/null 2>&1
+set +e
+"$BIN" analyze "$WORK/subject" --results "$WORK/run/run.json" --minimum-score 80 > /dev/null 2> "$WORK/gate.err"; BELOW=$?
+set -e
+[[ "$BELOW" != 0 ]] && grep -q "below the minimum 80 %" "$WORK/gate.err"
+set +e
+"$BIN" analyze "$WORK/subject" --results "$WORK/run/run.json" --maximum-score-drop 5 --baseline-run "$WORK/run/run.json" > /dev/null 2>&1; SAME=$?
+"$BIN" analyze "$WORK/subject" --results "$WORK/run/run.json" --maximum-score-drop 5 > /dev/null 2>&1; NOBASE=$?
+set -e
+[[ "$SAME" == 0 && "$NOBASE" != 0 ]]
 printf 'Operator smoke passed: tiers plan as documented; every standard and experimental verdict is as expected; sources untouched.\n'
