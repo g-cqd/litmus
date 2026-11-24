@@ -27,6 +27,8 @@ public struct RunPolicy: Codable, Sendable, Equatable {
     public var testTargetSelection: Bool? = nil
     /// Which build the baseline ran on: `inactive-schema` or `unmutated`; nil before 0.3.
     public var baselineBuild: String? = nil
+    /// The operators mutated, as rule ids; nil before 0.4 (the three stable ones).
+    public var operators: [String]? = nil
 }
 
 /// The limits a run was given, and what they left untested.
@@ -104,7 +106,7 @@ public struct MutationResult: Codable, Sendable {
 
 /// The record of a run. `complete` never means that infrastructure errors were kills.
 public struct RunArtifact: Codable, Sendable {
-    public static let executionPolicy = "activation-markers/no-coverage/unviable-isolation/inactive-schema-baseline/v4"
+    public static let executionPolicy = "activation-markers/no-coverage/unviable-isolation/inactive-schema-baseline/v5"
     public let version: Int
     public let provenance: RunProvenance
     public let plan: MutationPlan

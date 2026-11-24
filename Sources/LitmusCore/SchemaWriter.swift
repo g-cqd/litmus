@@ -95,6 +95,9 @@ public enum SchemaWriter {
         let prefix: [UInt8] = placement.isTopLevelCode ? Array(("\n" + declarations).utf8) : []
         var output: [UInt8] = []
         output.reserveCapacity(bytes.count + sorted.count * 96 + declarations.utf8.count)
+        // A build-tool lint plugin (SwiftLint) must not fail the build over generated code it was not written for. A
+        // shebang has to stay the first line.
+        if !source.hasPrefix("#!") { output.append(contentsOf: Array("// swiftlint:disable all\n".utf8)) }
         var ranges: [String: Range<Int>] = [:]
         var cursor = 0
         func copy(upTo offset: Int) {
@@ -114,10 +117,17 @@ public enum SchemaWriter {
         for group in groups {
             let first = group[0]
             copy(upTo: first.start)
-            // `(m1 ? (r1) : m2 ? (r2) : (original))`: at most one activation holds in a process.
-            var replacement = "("
-            for site in group { replacement += "\(symbol)_\(site.id) ? (\(site.replacement)) : " }
-            replacement += "(\(first.original)))"
+            var replacement: String
+            if first.operatorID.shape == .statement {
+                // A statement is skipped, not replaced: `if !m { original }`. It never shares a range with another site.
+                guard group.count == 1 else { throw LitmusFailure("a statement site shares its range: \(first.id)") }
+                replacement = "if !\(symbol)_\(first.id) { \(first.original) }"
+            } else {
+                // `(m1 ? (r1) : m2 ? (r2) : (original))`: at most one activation holds in a process.
+                replacement = "("
+                for site in group { replacement += "\(symbol)_\(site.id) ? (\(site.replacement)) : " }
+                replacement += "(\(first.original)))"
+            }
             let start = output.count
             output.append(contentsOf: replacement.utf8)
             for site in group { ranges[site.id] = start..<output.count }

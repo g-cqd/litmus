@@ -21,6 +21,12 @@ assert r['provenance']['driver']['packagePath']=='Library'
 PY
 AFTER="$(shasum -a 256 "$WORK/subject/Library/Sources/Library/Value.swift" "$WORK/subject/Sibling/Sources/Sibling/Value.swift")"
 [[ "$BEFORE" == "$AFTER" ]]
+# Running from inside the package: its sibling is outside the root, and the failure names the command that works.
+if "$BIN" run "$WORK/subject/Library" --trust-project --output "$WORK/alone" > "$WORK/alone.log" 2>&1; then
+  echo 'A package with a sibling outside its root was unexpectedly accepted' >&2; exit 1
+fi
+grep -q "litmus run .*subject --package-path Library" "$WORK/alone.log"
+[[ ! -e "$WORK/alone/workspace" ]]
 # Existing output must fail before running, and retain prior evidence.
 if "$BIN" run "$WORK/subject" --package-path Library --trust-project --output "$WORK/host" > "$WORK/existing.log" 2>&1; then
   echo 'Existing output unexpectedly accepted' >&2; exit 1

@@ -10,11 +10,10 @@ import Testing
 @Suite struct ReachTests {
     /// Answers each run from a script and marks the active mutant as reached.
     final class ScriptedHarness: TestHarness {
-        var maximumWorkers: Int { 1 }
+        var capabilities: HarnessCapabilities {
+            HarnessCapabilities(selectsTests: true, selectsModules: true, controlsSwiftTesting: true)
+        }
         var kind: String { "scripted" }
-        var selectsTests: Bool { true }
-        var selectsModules: Bool { true }
-        var controlsSwiftTesting: Bool { true }
         let requests = Mutex<[TestRunRequest]>([])
         let respond: @Sendable (TestRunRequest) -> TestRunResult
 

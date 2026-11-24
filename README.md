@@ -53,7 +53,7 @@ litmus run . --trust-project --diff-base origin/main --budget 600 \
 
 Only mutation sites on changed lines are selected by default. `--diff-scope files` selects all sites in changed files. A run with no selected mutations skips building and testing.
 
-Use `--result-store DIR` to reuse eligible verdicts and `--baseline FILE --gate new-survivors` to report new survivors. A budget limits new work; it does not establish that every selected mutation was tested. See [CI and incremental runs](docs/ci.md).
+Use `--minimum-score PERCENT` to fail below a mutation score, `--operator-tier standard` for comparison, boolean and arithmetic mutations, and the [GitHub Action](docs/ci.md#github-action) to run it on a runner. Use `--result-store DIR` to reuse eligible verdicts and `--baseline FILE --gate new-survivors` to report new survivors. A budget limits new work; it does not establish that every selected mutation was tested. See [CI and incremental runs](docs/ci.md).
 
 ## Results
 
@@ -71,11 +71,12 @@ The mutation score is detected mutations divided by detected plus undetected mut
 ## Documentation
 
 - [Usage and configuration](docs/usage.md)
+- [Operators](docs/operators.md)
 - [CI and incremental runs](docs/ci.md)
 - [Execution model and limitations](docs/execution.md)
 - [Testing and performance](docs/testing.md)
 - [Security](SECURITY.md)
-- [Release notes](release-notes/v0.3.2.md)
+- [Release notes](release-notes/v0.4.0.md)
 
 ## License
 

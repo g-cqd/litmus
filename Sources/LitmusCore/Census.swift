@@ -28,6 +28,22 @@ public struct CensusEntry: Codable, Sendable, Equatable {
     public var blocked: Int
 }
 
+extension CensusEntry {
+    /// The operator `run` mutates this candidate with, when one exists; the rest only size future work.
+    public var implementedBy: MutationOperator? {
+        switch operatorID {
+        case "negate-condition (current)": .negateCondition
+        case "swap-ternary (current)": .swapTernary
+        case "logical-replace (current)": .replaceLogical
+        case "relational-equality", "relational-boundary-and-negation": .replaceRelational
+        case "boolean-literal-flip": .flipBoolean
+        case "arithmetic-replace": .replaceArithmetic
+        case "void-call-removal": .removeCall
+        default: nil
+        }
+    }
+}
+
 /// A syntax-only count of the sites candidate operators would mutate in a corpus's production files: no build, no
 /// type information. It sizes operators before they are implemented; type errors are measured by the schema build.
 public struct CensusReport: Codable, Sendable {

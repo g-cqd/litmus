@@ -6,8 +6,10 @@
 swift build --build-tests
 swift test --skip-build
 bash scripts/smoke.sh
+bash scripts/smoke-operators.sh
 ```
 
+`smoke-operators.sh` runs every standard and experimental operator on `Tests/Fixtures/Operators` and asserts each mutant's verdict (kills, survivors including an equivalent one, a call whose removal no test notices, an uncovered mutant), the tier plans, the score gates, and that the sources are untouched.
 For optimized tests, enable testable modules explicitly:
 
 ```sh

@@ -92,7 +92,7 @@ import Testing
     #expect(schema.text.contains("@usableFromInline nonisolated internal let __litmus_"))
     #expect(schema.text.contains("_\(site.id): Swift.Bool = "))
     #expect(schema.text.contains("LITMUS_COVERAGE_DIR"))
-    #expect(schema.lines[site.id] == 1...1)
+    #expect(schema.lines[site.id] == 2...2)
 }
 
 @Test func `top-level code gets its declarations before the code that reads them`() throws {
@@ -115,7 +115,7 @@ import Testing
     let schema = try SchemaWriter.schema(source, mutations: sites)
     #expect(schema.text.components(separatedBy: " ? (").count == 3)
     #expect(schema.text.contains(": (a && b)) { return 1 }"))
-    #expect(Set(schema.lines.values) == [1...1])
+    #expect(Set(schema.lines.values) == [2...2])
 }
 
 @Test func `the census counts candidate operators by schema shape and blocks statements in builders`() throws {

@@ -11,6 +11,32 @@ litmus run . --trust-project --diff-base origin/main --budget 600 \
 
 For a merge commit, `HEAD^1` can identify its target parent if the checkout includes that parent. Choose the base explicitly for other checkout strategies.
 
+## Score gates in CI
+
+```sh
+litmus run . --trust-project --operator-tier standard --budget 1500 \
+  --minimum-score 70 --maximum-score-drop 3 --baseline-run /tmp/main-run/run.json \
+  --output /tmp/litmus-run
+```
+
+`--baseline-run` is a whole-subject run on the target branch with the same operators; on a changed-lines run the drop gate refuses to compare, because a pull request's score measures only its change. Use `--minimum-score` there, or `--gate new-survivors`.
+
+## GitHub Action
+
+`action/action.yml` is a composite action for macOS runners: it builds the chosen Litmus ref, runs `litmus run` on a pull request's changed lines, writes the Markdown report to the job summary, and exports the report path, run directory and score.
+
+```yaml
+- uses: actions/checkout@v4
+  with: { fetch-depth: 0 }
+- uses: g-cqd/litmus/action@v0.4.0
+  with:
+    operator-tier: standard
+    minimum-score: "70"
+    budget-seconds: "1500"
+```
+
+Inputs: `path`, `package-path`, `scheme`, `destination`, `operator-tier`, `base`, `budget-seconds`, `minimum-score`, `baseline`, `gate`, `result-store`, `extra-arguments`. The action has been run as a script against a fixture; it has not been run on a GitHub-hosted runner.
+
 ## Workspaces
 
 - `--workspace copy` creates a fresh copy and leaves the original source unchanged.

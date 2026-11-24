@@ -72,6 +72,21 @@ public struct BuildDriver: Codable, Sendable, Equatable {
         self.root = root; self.container = container; self.scheme = scheme; self.destination = destination
     }
 
+    /// The same driver with another destination (a resolved simulator id), keeping every other choice.
+    public func with(destination: String) throws -> BuildDriver {
+        var copy = try BuildDriver(
+            root: root,
+            container: container,
+            packagePath: packagePath,
+            scheme: scheme,
+            destination: destination
+        )
+        copy.testPlan = testPlan
+        copy.swiftPMBuildSystem = swiftPMBuildSystem
+        copy.xcodebuildArguments = xcodebuildArguments
+        return copy
+    }
+
     /// The package execution directory, distinct from the snapshot and evidence root.
     public func executionDirectory(workspace: String) -> String {
         packagePath.map { workspace + "/" + $0 } ?? workspace
@@ -85,7 +100,12 @@ public struct BuildDriver: Codable, Sendable, Equatable {
             throw LitmusFailure("source root is not a directory: \(workspace)")
         }
         guard testPlan == nil || usesXcode else { throw LitmusFailure("--test-plan requires --scheme") }
-        guard let packagePath else { return }
+        guard let packagePath else {
+            if !usesXcode, let message = LocalDependencies.diagnosis(root: workspace, packageDirectory: workspace) {
+                throw LitmusFailure(message)
+            }
+            return
+        }
         let directory = executionDirectory(workspace: workspace)
         let canonical = SourcePath.canonical(directory)
         guard canonical.hasPrefix(SourcePath.canonical(workspace) + "/"),
@@ -94,6 +114,9 @@ public struct BuildDriver: Codable, Sendable, Equatable {
             throw LitmusFailure(
                 "--package-path \(packagePath) must resolve to a package inside root (Package.swift missing or path escapes root)"
             )
+        }
+        if !usesXcode, let message = LocalDependencies.diagnosis(root: workspace, packageDirectory: directory) {
+            throw LitmusFailure(message)
         }
     }
 
@@ -116,23 +139,35 @@ public struct BuildDriver: Codable, Sendable, Equatable {
     }
 
     /// Runs the same entire selected suite for the baseline, every inactive schema and each active mutant.
-    /// - Parameter onlyTesting: Xcode test targets to run (`-only-testing:`); nil runs the whole test plan.
+    /// - Parameters:
+    ///   - onlyTesting: Xcode test targets to run (`-only-testing:`); nil runs the whole test plan.
+    ///   - resultStream: a file Xcode writes its event stream to while tests run (it must exist), for stopping early.
+    ///   - destination: the device to run on, when a worker has its own; the driver's otherwise.
+    ///   - derivedData: the DerivedData directory a worker owns; the run's otherwise.
     public func testCommand(
         workspace: String,
         artifacts: String,
         result: String,
         xctestrun: String? = nil,
-        onlyTesting: [String]? = nil
+        onlyTesting: [String]? = nil,
+        resultStream: String? = nil,
+        destination workerDestination: String? = nil,
+        derivedData: String? = nil
     ) throws -> ToolCommand {
         if usesXcode {
-            guard let destination, let xctestrun else { throw LitmusFailure("missing Xcode test artifact/destination") }
+            guard let destination = workerDestination ?? destination, let xctestrun else {
+                throw LitmusFailure("missing Xcode test artifact/destination")
+            }
             return ToolCommand(
                 executable: "/usr/bin/xcrun",
                 arguments: [
                     "xcodebuild", "test-without-building", "-xctestrun", xctestrun,
                     "-destination", destination, "-resultBundlePath", result, "-derivedDataPath",
-                    artifacts + "/DerivedData", "-parallel-testing-enabled", "NO",
-                ] + xcodebuildArguments + (onlyTesting ?? []).sorted().map { "-only-testing:" + $0 }
+                    derivedData ?? artifacts + "/DerivedData", "-parallel-testing-enabled", "NO",
+                    // A failing mutant is expected: no sysdiagnose for it.
+                    "-collect-test-diagnostics", "never",
+                ] + (resultStream.map { ["-resultStreamPath", $0] } ?? []) + xcodebuildArguments
+                    + (onlyTesting ?? []).sorted().map { "-only-testing:" + $0 }
             )
         }
         return ToolCommand(
@@ -143,6 +178,22 @@ public struct BuildDriver: Codable, Sendable, Equatable {
         )
     }
 
+    /// `ARCHS` and `ONLY_ACTIVE_ARCH` for a simulator build: Xcode would otherwise build the app for both simulator
+    /// architectures while Swift packages in the same build hold only the host's. An explicit setting wins.
+    static func simulatorArchitectureSettings(for arguments: [String], destination: String?) -> [String] {
+        guard destination?.contains("Simulator") == true else { return [] }
+        guard !arguments.contains(where: { $0.hasPrefix("ARCHS=") || $0.hasPrefix("ONLY_ACTIVE_ARCH=") }) else {
+            return []
+        }
+        #if arch(arm64)
+            return ["ARCHS=arm64", "ONLY_ACTIVE_ARCH=YES"]
+        #elseif arch(x86_64)
+            return ["ARCHS=x86_64", "ONLY_ACTIVE_ARCH=YES"]
+        #else
+            return []
+        #endif
+    }
+
     private var xcodeArguments: [String] {
         var arguments: [String] = []
         if let container { arguments += [container.hasSuffix(".xcworkspace") ? "-workspace" : "-project", container] }
@@ -150,5 +201,6 @@ public struct BuildDriver: Codable, Sendable, Equatable {
         if let destination { arguments += ["-destination", destination] }
         if let testPlan { arguments += ["-testPlan", testPlan] }
         return arguments + xcodebuildArguments
+            + Self.simulatorArchitectureSettings(for: xcodebuildArguments, destination: destination)
     }
 }

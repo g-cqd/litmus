@@ -1,0 +1,121 @@
+name: Litmus mutation check
+description: >-
+  Builds Litmus and runs it on the lines a pull request changes, with a score gate and a report. macOS only: Litmus
+  drives xcrun, Xcode and simulators.
+author: g-cqd
+
+inputs:
+  litmus-ref:
+    description: The Litmus tag or commit to build (the action's own ref when empty).
+    default: ""
+  path:
+    description: The subject's root, relative to the workspace.
+    default: "."
+  package-path:
+    description: A package inside `path` to mutate (for a repository whose package depends on its siblings).
+    default: ""
+  scheme:
+    description: An Xcode scheme, to run through xcodebuild instead of SwiftPM.
+    default: ""
+  destination:
+    description: >-
+      The Xcode destination, for example platform=iOS Simulator,name=iPhone 16.
+    default: ""
+  operator-tier:
+    description: stable, standard or experimental.
+    default: stable
+  base:
+    description: >-
+      The revision whose changed lines are mutated. Empty uses the pull request's base on a pull request and runs the
+      whole subject otherwise.
+    default: ""
+  budget-seconds:
+    description: Stop starting mutants after this many seconds; the rest are reported as untested.
+    default: "1500"
+  minimum-score:
+    description: Fail below this mutation score (percent). Empty sets no minimum.
+    default: ""
+  baseline:
+    description: A baseline file of known findings, used by the new-survivors gate.
+    default: ""
+  gate:
+    description: >-
+      new-survivors fails on survivors the baseline does not hold; empty only fails on errors.
+    default: ""
+  result-store:
+    description: A directory to cache verdicts in between runs (pair it with actions/cache).
+    default: ""
+  extra-arguments:
+    description: Further arguments for `litmus run`, split on spaces.
+    default: ""
+
+outputs:
+  report:
+    description: The path of the JSON report.
+    value: ${{ steps.run.outputs.report }}
+  run-directory:
+    description: The run's evidence directory.
+    value: ${{ steps.run.outputs.run-directory }}
+  score:
+    description: The mutation score, in percent (empty when none could be judged).
+    value: ${{ steps.run.outputs.score }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build Litmus
+      shell: bash
+      env:
+        LITMUS_REF: ${{ inputs.litmus-ref || github.action_ref }}
+      run: |
+        set -euo pipefail
+        src="$RUNNER_TEMP/litmus-src"
+        rm -rf "$src"
+        git clone --quiet https://github.com/g-cqd/litmus.git "$src"
+        if [[ -n "$LITMUS_REF" && "$LITMUS_REF" != "main" ]]; then git -C "$src" checkout --quiet "$LITMUS_REF"; fi
+        (cd "$src" && swift build --product litmus -c release)
+        echo "LITMUS_BIN=$(cd "$src" && swift build --product litmus -c release --show-bin-path)/litmus" >> "$GITHUB_ENV"
+
+    - name: Run Litmus
+      id: run
+      shell: bash
+      env:
+        IN_PATH: ${{ inputs.path }}
+        IN_PACKAGE: ${{ inputs.package-path }}
+        IN_SCHEME: ${{ inputs.scheme }}
+        IN_DESTINATION: ${{ inputs.destination }}
+        IN_TIER: ${{ inputs.operator-tier }}
+        IN_BASE: ${{ inputs.base }}
+        IN_BUDGET: ${{ inputs.budget-seconds }}
+        IN_MINIMUM: ${{ inputs.minimum-score }}
+        IN_BASELINE: ${{ inputs.baseline }}
+        IN_GATE: ${{ inputs.gate }}
+        IN_STORE: ${{ inputs.result-store }}
+        IN_EXTRA: ${{ inputs.extra-arguments }}
+        PR_BASE: ${{ github.event.pull_request.base.sha }}
+      run: |
+        set -uo pipefail
+        out="$RUNNER_TEMP/litmus-run"
+        rm -rf "$out"
+        args=(run "$IN_PATH" --trust-project --operator-tier "$IN_TIER" --output "$out" --report json)
+        base="${IN_BASE:-$PR_BASE}"
+        if [[ -n "$base" ]]; then args+=(--diff-base "$base"); fi
+        [[ -n "$IN_PACKAGE" ]] && args+=(--package-path "$IN_PACKAGE")
+        [[ -n "$IN_SCHEME" ]] && args+=(--scheme "$IN_SCHEME")
+        [[ -n "$IN_DESTINATION" ]] && args+=(--destination "$IN_DESTINATION")
+        [[ -n "$IN_BUDGET" ]] && args+=(--budget "$IN_BUDGET")
+        [[ -n "$IN_MINIMUM" ]] && args+=(--minimum-score "$IN_MINIMUM")
+        [[ -n "$IN_STORE" ]] && args+=(--result-store "$IN_STORE")
+        if [[ -n "$IN_GATE" ]]; then args+=(--gate "$IN_GATE" --baseline "$IN_BASELINE"); fi
+        # shellcheck disable=SC2206
+        [[ -n "$IN_EXTRA" ]] && args+=($IN_EXTRA)
+        status=0
+        "$LITMUS_BIN" "${args[@]}" > "$RUNNER_TEMP/litmus-report.json" || status=$?
+        echo "report=$RUNNER_TEMP/litmus-report.json" >> "$GITHUB_OUTPUT"
+        echo "run-directory=$out" >> "$GITHUB_OUTPUT"
+        score="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1])).get("score",{}).get("percent"); print("" if v is None else v)' "$RUNNER_TEMP/litmus-report.json" 2> /dev/null || true)"
+        echo "score=$score" >> "$GITHUB_OUTPUT"
+        if [[ -f "$out/run.json" ]]; then
+          "$LITMUS_BIN" analyze "$IN_PATH" --results "$out/run.json" --format markdown >> "$GITHUB_STEP_SUMMARY" 2> /dev/null || true
+        fi
+        exit "$status"
