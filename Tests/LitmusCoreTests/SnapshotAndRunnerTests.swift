@@ -867,6 +867,7 @@ private func runIn(
     #expect(markdown.hasPrefix("## Litmus mutation testing"))
     #expect(markdown.contains("**Score 100 %**"))
     #expect(markdown.contains("Cost: "))
+    #expect(!markdown.contains("### Results by file"), "single-file runs stay compact")
 }
 
 // MARK: - Sharding

@@ -238,8 +238,17 @@ func `xcresult rejects hostile counters before arithmetic`(counter: Int) throws 
                     ],
                     [
                         "BlueprintName": "AppTests",
-                        "TestBundlePath": "__TESTROOT__/Debug-iphonesimulator/App.app/PlugIns/AppTests.xctest",
+                        "TestBundlePath": "__TESTHOST__/PlugIns/AppTests.xctest",
                         "TestHostPath": "__TESTROOT__/Debug-iphonesimulator/App.app",
+                        "TestingEnvironmentVariables": [
+                            "DYLD_INSERT_LIBRARIES": "__TESTHOST__/Frameworks/libXCTestBundleInject.dylib",
+                            "APP_ENV": "1",
+                        ],
+                    ],
+                    [
+                        "BlueprintName": "AppUITests",
+                        "TestBundlePath": "__TESTROOT__/Debug-iphonesimulator/AppUITests.xctest",
+                        "IsUITestBundle": true,
                     ],
                 ]
             ]
@@ -250,12 +259,19 @@ func `xcresult rejects hostile counters before arithmetic`(counter: Int) throws 
         to: URL(fileURLWithPath: path)
     )
     let targets = try XCTestRunTarget.targets(xctestrun: path, products: "/P", platforms: "/X/Platforms")
-    #expect(targets.map(\.name) == ["AppTests", "PackageTests"])
-    #expect(targets.map(\.isHostless) == [false, true])
-    #expect(targets[1].environment["FIXTURES"] == "/P/fixtures")
+    #expect(targets.map(\.name) == ["AppTests", "AppUITests", "PackageTests"])
+    #expect(targets.map(\.isHostless) == [false, false, true])
+    #expect(targets[0].bundlePath == "/P/Debug-iphonesimulator/App.app/PlugIns/AppTests.xctest")
+    #expect(targets[2].environment["FIXTURES"] == "/P/fixtures")
+    // UI tests cannot run directly through the helper; xcodebuild keeps them.
     #expect(SimulatorDirectHarness<BoundedExecutor>.bundles(targets) == nil)
-    let bundles = try #require(SimulatorDirectHarness<BoundedExecutor>.bundles([targets[1]]))
-    #expect(bundles.first?.binary == "/P/Debug-iphonesimulator/PackageTests.xctest/PackageTests")
+    // Both hostless and app-hosted unit test bundles are accepted; app-hosted carries hostApp and the products dir.
+    let bundles = try #require(SimulatorDirectHarness<BoundedExecutor>.bundles([targets[0], targets[2]]))
+    #expect(bundles[0].binary == "/P/Debug-iphonesimulator/App.app/PlugIns/AppTests.xctest/AppTests")
+    #expect(bundles[0].hostApp == "/P/Debug-iphonesimulator/App.app")
+    #expect(bundles[0].products == "/P/Debug-iphonesimulator")
+    #expect(bundles[1].binary == "/P/Debug-iphonesimulator/PackageTests.xctest/PackageTests")
+    #expect(bundles[1].hostApp == nil)
 
     var request = TestRunRequest(
         name: "r",

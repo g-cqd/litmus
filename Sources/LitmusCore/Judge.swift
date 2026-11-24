@@ -217,6 +217,56 @@ struct Judge: Sendable {
         }
     }
 
+    /// Whether `pending` can be confirmed by running only its failing tests (`-confirm` + a control for those tests)
+    /// concurrently across workers before any serial alone-reruns.
+    func canConfirmTargeted(_ pending: Pending) -> Bool {
+        pending.outcome == .failed && pending.activated && options.killConfirmation == .targeted
+            && reach[pending.site.id] == nil && harness.selectsTests && !pending.failingTests.isEmpty
+    }
+
+    /// Confirms a targeted kill by running only `pending.failingTests` with the mutant active, and checking that the
+    /// same tests pass without the mutant (skipping the control run when `verifiedControls` already proved those exact
+    /// tests pass alone on this schema). Returns nil when the failure did not reproduce so the caller falls back to a
+    /// serial whole-suite rerun alone.
+    /// The single failing test used to confirm `pending` quickly; deduplicates control checks across mutants killed
+    /// by the same test.
+    static func confirmingTests(for pending: Pending) -> [String]? {
+        pending.failingTests.first.map { [$0] }
+    }
+
+    func confirmTargeted(_ pending: Pending, verifiedControls: Set<[String]>) async throws -> Decision? {
+        guard let tests = Self.confirmingTests(for: pending) else { return nil }
+        let site = pending.site
+        var ledger = Ledger(
+            site: site,
+            baseline: expected(site),
+            evidence: pending.evidence,
+            nanoseconds: pending.nanoseconds
+        )
+        let active = try await run(
+            site,
+            "-confirm",
+            active: true,
+            deadline: parallelDeadline,
+            only: tests,
+            ledger: &ledger
+        )
+        guard active.result.outcome == .failed, active.reached.contains(site.id) else { return nil }
+        if !verifiedControls.contains(tests) {
+            let control = try await run(
+                site,
+                "-control",
+                active: false,
+                deadline: parallelDeadline,
+                only: tests,
+                ledger: &ledger
+            )
+            guard control.result.outcome == .passed else { return nil }
+        }
+        let killers = active.result.failingTests.isEmpty ? tests : active.result.failingTests
+        return ledger.decision(.killed, "killed by \(killers.joined(separator: ", ")), confirmed alone")
+    }
+
     /// The rerun a first run asked for, alone on the machine, with `rerunDeadline`.
     func finish(_ pending: Pending) async throws -> Decision {
         let site = pending.site

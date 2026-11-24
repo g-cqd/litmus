@@ -120,6 +120,35 @@ import Testing
         }
     }
 
+    @Test func `targeted confirmation uses one failing test and skips a control already verified on this schema`()
+        async throws
+    {
+        let harness = ScriptedHarness { request in
+            request.activeID.isEmpty ? Self.result(.passed, passed: 1) : Self.result(.failed, failing: ["M.a()"])
+        }
+        var judge = try judge(harness)
+        judge.reach = [:]
+        let pending = Judge.Pending(
+            site: site,
+            outcome: .failed,
+            activated: true,
+            failingTests: ["M.a()", "M.b()"],
+            evidence: [],
+            nanoseconds: 10
+        )
+        #expect(judge.canConfirmTargeted(pending))
+        #expect(Judge.confirmingTests(for: pending) == ["M.a()"])
+        // With control already verified, only 1 active run executes for ["M.a()"].
+        let cached = try #require(try await judge.confirmTargeted(pending, verifiedControls: [["M.a()"]]))
+        #expect(cached.verdict == .killed)
+        #expect(harness.requests.withLock { $0.map(\.onlySwiftTesting) } == [["M.a()"]])
+        // Without a verified control, both active and control run.
+        harness.requests.withLock { $0.removeAll() }
+        let uncached = try #require(try await judge.confirmTargeted(pending, verifiedControls: []))
+        #expect(uncached.verdict == .killed)
+        #expect(harness.requests.withLock { $0.map(\.activeID) } == [site.id, ""])
+    }
+
     @Test func `without reach, or with an unknown count, nothing is selected`() throws {
         var judge = try judge(ScriptedHarness { _ in Self.result(.passed, passed: 10) })
         judge.testCounts["M.also()"] = nil

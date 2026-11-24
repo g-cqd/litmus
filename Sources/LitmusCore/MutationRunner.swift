@@ -274,6 +274,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 return try await simulatorHarness(
                     udid: udid,
                     fleet: fleet ?? .single(udid: udid, directory: workspace),
+                    workers: options.jobs,
                     workspace: driver.executionDirectory(workspace: workspace),
                     artifacts: artifacts,
                     logs: logs,
@@ -341,6 +342,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
     func simulatorHarness(
         udid: String,
         fleet: SimulatorFleet,
+        workers: Int,
         workspace: String,
         artifacts: String,
         logs: String,
@@ -359,7 +361,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             platforms: helper.platforms
         )
         guard let bundles = SimulatorDirectHarness<Executor>.bundles(targets) else {
-            notes.append("simulator helper not used: a test target is hosted by an application or is a UI test")
+            notes.append("simulator helper not used: a test target is a UI test")
             return nil
         }
         // `simctl spawn` needs a booted device; xcodebuild boots it itself.
@@ -379,14 +381,16 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             bundles: bundles,
             helper: helper,
             workspace: workspace,
-            logs: logs
+            logs: logs,
+            workers: workers
         )
         guard try await direct.probe() else {
             notes.append("simulator helper not used: its probe failed (logs/simulator-probe.log); using xcodebuild")
             return nil
         }
+        let kindLabel = direct.hasAppHostedTargets ? "app-hosted unit test bundles" : "hostless test bundles"
         notes.append(
-            "hostless test bundles run on simulator \(udid) through Litmus's helper: \(bundles.map(\.module).joined(separator: ", "))"
+            "\(kindLabel) run on simulator \(udid) through Litmus's helper: \(bundles.map(\.module).joined(separator: ", "))"
         )
         return direct
     }
@@ -450,5 +454,5 @@ func seconds(_ duration: Duration) -> Double {
 
 /// The tool's version, written to provenance and reports.
 public enum LitmusVersion {
-    public static let current = "0.4.0"
+    public static let current = "0.4.1"
 }

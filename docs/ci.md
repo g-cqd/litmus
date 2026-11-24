@@ -28,7 +28,7 @@ litmus run . --trust-project --operator-tier standard --budget 1500 \
 ```yaml
 - uses: actions/checkout@v4
   with: { fetch-depth: 0 }
-- uses: g-cqd/litmus/action@v0.4.0
+- uses: g-cqd/litmus/action@v0.4.1
   with:
     operator-tier: standard
     minimum-score: "70"

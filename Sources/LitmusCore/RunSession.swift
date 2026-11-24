@@ -43,6 +43,8 @@ final class RunSession<Executor: ProcessExecutor> {
     var resolvedDevice: SimulatorDevice?
     /// Simulators made for this run (`--simulators`), being made while the first schema builds.
     var poolTask: Task<SimulatorPool<Executor>, any Error>?
+    /// A single shutdown destination simulator being booted while the first schema builds.
+    var bootTask: Task<Void, Never>?
     var poolTornDown = false
     /// The schema currently written into the workspace, restored on any exit.
     var installed: InstalledSchema?
@@ -187,18 +189,29 @@ final class RunSession<Executor: ProcessExecutor> {
             "destination \(destination) resolved to \(device.name), iOS \(device.version), \(device.udid)"
     }
 
-    /// Starts making the extra simulators, so that they boot while the first schema builds.
+    /// Starts making extra simulators (or booting a shut-down destination simulator) while the first schema builds,
+    /// so tests never pay a cold-simulator penalty on every `xcodebuild` launch.
     func startSimulatorPool() {
-        guard options.simulators > 1 else { return }
         guard let device = resolvedDevice else { return }
-        let (executor, output, count) = (executor, output, options.simulators)
-        poolTask = Task {
-            try await SimulatorPool.create(executor: executor, template: device, count: count, directory: output)
+        if options.simulators > 1 {
+            let (executor, output, count) = (executor, output, options.simulators)
+            poolTask = Task {
+                try await SimulatorPool.create(executor: executor, template: device, count: count, directory: output)
+            }
+        } else if device.isShutdown {
+            let (executor, directory, udid) = (executor, root, device.udid)
+            bootTask = Task {
+                try? await SimulatorPool.boot(executor, udid: udid, directory: directory, timeout: 300)
+            }
         }
     }
 
     /// The fleet to test on: the simulators made for the run, or nil to use the destination's own.
     func simulatorFleet(notes: inout [String]) async -> SimulatorFleet? {
+        if let bootTask {
+            await bootTask.value
+            self.bootTask = nil
+        }
         guard let poolTask else {
             if options.simulators > 1 {
                 notes.append(
@@ -451,7 +464,6 @@ final class RunSession<Executor: ProcessExecutor> {
     }
 
     /// Ends the run: complete, timed, costed, the workspace removed unless kept.
-    /// Ends the run: complete, timed, costed, the workspace removed unless kept.
     func finish() throws -> RunArtifact {
         artifact.complete = true
         if let store {
@@ -482,9 +494,11 @@ final class RunSession<Executor: ProcessExecutor> {
         }
         releaseWorkspace()
         if !options.keepWorkspace {
-            // Every verdict is recorded: a workspace that cannot be removed (Finder or Spotlight writing into it
-            // while it goes, seen 2026-11-02) is noted, never a failed run.
-            for directory in (prepared.removable ? [snapshot.root] : []) + [workers]
+            // Every verdict is recorded: remove transient workspace, workers and run-owned build artifacts (a user's
+            // `--build-directory` or persistent workspace is never touched). A directory that cannot be removed
+            // (Finder or Spotlight writing into it while it goes) is noted, never a failed run.
+            let ownedArtifacts = (prepared.removable && options.buildDirectory == nil) ? [artifacts] : []
+            for directory in (prepared.removable ? [snapshot.root] : []) + ownedArtifacts + [workers]
             where !Runner.remove(directory) {
                 artifact.notes.append("could not remove \(directory); delete it by hand")
             }
@@ -531,35 +545,68 @@ final class RunSession<Executor: ProcessExecutor> {
     func establish() async throws -> Established {
         phase = clock.now
         var harnessNotes: [String] = []
-        let harness = try await runner.makeHarness(
+        let fleet = await simulatorFleet(notes: &harnessNotes)
+        var harness = try await runner.makeHarness(
             driver: driver,
             options: options,
             workspace: snapshot.root,
             artifacts: artifacts,
             logs: logs,
-            fleet: await simulatorFleet(notes: &harnessNotes),
+            fleet: fleet,
             notes: &harnessNotes
         )
         artifact.notes += harnessNotes
         account("discovery", since: phase)
-        let allowedWorkers = min(options.jobs, harness.maximumWorkers)
-        let pool = try ResourcePool(count: allowedWorkers) { index in
-            try WorkerSlot(root: workers, index: index)
+        func makeJudge(for harness: any TestHarness) throws -> (
+            allowedWorkers: Int, pool: ResourcePool<WorkerSlot>, judge: Judge
+        ) {
+            let allowedWorkers = min(options.jobs, harness.maximumWorkers)
+            let pool = try ResourcePool(count: allowedWorkers) { index in
+                try WorkerSlot(root: workers, index: index)
+            }
+            let judge = Judge(
+                harness: harness,
+                pool: pool,
+                options: options,
+                counter: counter,
+                baseline: TestCounts(passed: 0, failed: 0, skipped: 0),
+                deadline: options.timeoutCap,
+                parallelDeadline: options.timeoutCap,
+                rerunDeadline: options.timeoutCap
+            )
+            return (allowedWorkers, pool, judge)
         }
-        let current = Judge(
-            harness: harness,
-            pool: pool,
-            options: options,
-            counter: counter,
-            baseline: TestCounts(passed: 0, failed: 0, skipped: 0),
-            deadline: options.timeoutCap,
-            parallelDeadline: options.timeoutCap,
-            rerunDeadline: options.timeoutCap
-        )
+        var (allowedWorkers, pool, current) = try makeJudge(for: harness)
         phase = clock.now
-        let usageBefore = ChildUsage.cpuSeconds()
+        var usageBefore = ChildUsage.cpuSeconds()
         var baseline = try await current.execute(name: "baseline", activeID: "", deadline: options.timeoutCap)
-        let suiteCPU = ChildUsage.cpuSeconds() - usageBefore
+        var suiteCPU = ChildUsage.cpuSeconds() - usageBefore
+        if (baseline.result.outcome != .passed || (baseline.result.counts?.passed ?? 0) == 0),
+            let direct = harness as? SimulatorDirectHarness<Executor>, direct.hasAppHostedTargets
+        {
+            // App-hosted unit tests that depend on UIApplication or host-app resources cannot run without launching
+            // the `.app`; fall back to `xcodebuild` cleanly instead of failing the run.
+            artifact.notes.append(
+                "simulator helper could not pass the app-hosted baseline (\(baseline.result.reason)); falling back to xcodebuild"
+            )
+            harness = XcodeHarness(
+                executor: executor,
+                driver: driver,
+                workspace: snapshot.root,
+                artifacts: artifacts,
+                logs: logs,
+                fleet: fleet,
+                keepResultBundles: options.keepResultBundles
+            )
+            (allowedWorkers, pool, current) = try makeJudge(for: harness)
+            usageBefore = ChildUsage.cpuSeconds()
+            baseline = try await current.execute(
+                name: "baseline-xcodebuild",
+                activeID: "",
+                deadline: options.timeoutCap
+            )
+            suiteCPU = ChildUsage.cpuSeconds() - usageBefore
+        }
         account("tests", since: phase)
         guard baseline.result.outcome == .passed, var baselineCounts = baseline.result.counts,
             baselineCounts.passed > 0
@@ -1022,7 +1069,59 @@ final class RunSession<Executor: ProcessExecutor> {
                 case .notStarted(let site): late.append(site)
                 }
             }
+            var targeted: [Judge.Pending] = []
+            var serialReruns: [Judge.Pending] = []
             for pending in reruns {
+                if deciding.canConfirmTargeted(pending) {
+                    targeted.append(pending)
+                } else {
+                    serialReruns.append(pending)
+                }
+            }
+            if !targeted.isEmpty {
+                // Verify each unique set of failing tests once on this schema with no mutant active: many mutants
+                // are killed by the same test, so repeating the identical inactive control run adds no evidence.
+                let uniqueTestSets = Array(Set(targeted.compactMap(Judge.confirmingTests))).sorted {
+                    $0.joined(separator: "\0") < $1.joined(separator: "\0")
+                }
+                var verifiedControls: Set<[String]> = []
+                try await forEachConcurrently(
+                    Array(uniqueTestSets.enumerated()),
+                    limit: workerCount,
+                    { pair -> Bool in
+                        if let budgetEnd, ContinuousClock.now >= budgetEnd { return false }
+                        let control = try await deciding.execute(
+                            name: "\(name)-confirm-control-\(pair.offset)",
+                            activeID: "",
+                            deadline: deciding.parallelDeadline,
+                            only: pair.element
+                        )
+                        return control.result.outcome == .passed
+                    }
+                ) { index, passed in
+                    if passed { verifiedControls.insert(uniqueTestSets[index]) }
+                }
+                let controls = verifiedControls
+                try await forEachConcurrently(
+                    targeted,
+                    limit: workerCount,
+                    { pending -> (Judge.Pending, Judge.Decision?, Bool) in
+                        if let budgetEnd, ContinuousClock.now >= budgetEnd { return (pending, nil, true) }
+                        let decision = try await deciding.confirmTargeted(pending, verifiedControls: controls)
+                        return (pending, decision, false)
+                    }
+                ) { _, outcome in
+                    let (pending, decision, outOfBudget) = outcome
+                    if outOfBudget {
+                        late.append(pending.site)
+                    } else if let decision {
+                        try runner.record(decision, into: &artifact, sink)
+                    } else {
+                        serialReruns.append(pending)
+                    }
+                }
+            }
+            for pending in serialReruns {
                 if let budgetEnd, clock.now >= budgetEnd {
                     late.append(pending.site)
                     continue

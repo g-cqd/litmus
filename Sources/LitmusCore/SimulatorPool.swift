@@ -12,11 +12,14 @@ public struct PoolDevice: Sendable, Equatable {
 
 /// Lends each device to one run at a time; further runs wait for a release.
 actor DeviceLeases {
+    private let all: [PoolDevice]
     private var free: [PoolDevice]
     private var waiters: [CheckedContinuation<PoolDevice, Never>] = []
+    private var cursor = 0
     let count: Int
 
     init(_ devices: [PoolDevice]) {
+        all = devices
         free = devices
         count = devices.count
     }
@@ -28,6 +31,12 @@ actor DeviceLeases {
 
     func release(_ device: PoolDevice) {
         if waiters.isEmpty { free.append(device) } else { waiters.removeFirst().resume(returning: device) }
+    }
+
+    func next() -> PoolDevice {
+        let picked = all[cursor % max(1, all.count)]
+        cursor = (cursor + 1) % max(1, all.count)
+        return picked
     }
 }
 
@@ -54,6 +63,10 @@ public struct SimulatorFleet: Sendable {
         self.isOwned = isOwned
         self.restart = restart
     }
+
+    /// Picks a simulator round-robin without taking an exclusive lease: safe for `simctl spawn`, where each run is
+    /// an independent process with its own temporary and marker directories.
+    func nextDevice() async -> PoolDevice { await leases.next() }
 
     /// Runs `body` on a free device; a device that crashed or timed out is restarted before it is lent again.
     func withDevice<T: Sendable>(

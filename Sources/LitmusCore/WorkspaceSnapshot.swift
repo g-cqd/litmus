@@ -37,7 +37,7 @@ public struct WorkspaceSnapshot: Sendable {
         // .swiftpm contains shared Xcode schemes and package configuration, not only caches.
         // Preserve those build inputs; omit user-specific Xcode state.
         limits.skippedNames = [
-            ".git", ".build", ".build-release", ".litmus", "xcuserdata", "DerivedData", "node_modules",
+            ".git", ".build", ".build-release", ".litmus", ".DS_Store", "xcuserdata", "DerivedData", "node_modules",
         ]
         limits.maxEntries = 150_000
         limits.maxFiles = 100_000

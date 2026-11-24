@@ -29,15 +29,20 @@ struct XCTestRunTarget: Sendable, Equatable {
             guard depth <= 64 else { throw LitmusFailure("xctestrun nesting exceeds 64") }
             if let dictionary = value as? [String: Any] {
                 if let bundle = dictionary["TestBundlePath"] as? String {
+                    let hostPath = (dictionary["TestHostPath"] as? String).map(resolve)
+                    func resolveTarget(_ text: String) -> String {
+                        let resolved = resolve(text)
+                        return hostPath.map { resolved.replacingOccurrences(of: "__TESTHOST__", with: $0) } ?? resolved
+                    }
                     let environment = (dictionary["EnvironmentVariables"] as? [String: String] ?? [:])
                         .merging(dictionary["TestingEnvironmentVariables"] as? [String: String] ?? [:]) { a, _ in a }
                     targets.append(
                         XCTestRunTarget(
                             name: dictionary["BlueprintName"] as? String ?? name ?? "",
-                            bundlePath: resolve(bundle),
-                            hostPath: (dictionary["TestHostPath"] as? String).map(resolve),
+                            bundlePath: resolveTarget(bundle),
+                            hostPath: hostPath,
                             isUITest: dictionary["IsUITestBundle"] as? Bool ?? false,
-                            environment: environment.mapValues(resolve)
+                            environment: environment.mapValues(resolveTarget)
                         )
                     )
                     return
@@ -57,6 +62,7 @@ struct XCTestRunTarget: Sendable, Equatable {
 enum SimulatorHelper {
     struct Built: Sendable {
         let helper: String
+        let simctl: String
         let frameworks: String
         let libraries: String
         let platforms: String
@@ -78,6 +84,7 @@ enum SimulatorHelper {
         let platform = try await query(["--sdk", "iphonesimulator", "--show-sdk-platform-path"])
         let sdk = try await query(["--sdk", "iphonesimulator", "--show-sdk-path"])
         let compiler = try await query(["--sdk", "iphonesimulator", "swiftc", "--version"])
+        let simctl = (try? await query(["--find", "simctl"])) ?? "/usr/bin/xcrun"
         #if arch(arm64)
             let architecture = "arm64"
         #else
@@ -85,24 +92,42 @@ enum SimulatorHelper {
         #endif
         let frameworks = platform + "/Developer/Library/Frameworks"
         let key = Digest.sha256(Array((simulatorHelperSource + "\u{0}" + compiler + "\u{0}" + architecture).utf8))
-        let home = directory + "/litmus-simulator-helper/" + key.prefix(24)
+        let cacheRoot: String = {
+            if let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.path {
+                let candidate = caches + "/litmus/simulator-helper"
+                if (try? FileManager.default.createDirectory(atPath: candidate, withIntermediateDirectories: true))
+                    != nil
+                {
+                    return candidate
+                }
+            }
+            return directory + "/litmus-simulator-helper"
+        }()
+        let home = cacheRoot + "/" + key.prefix(24)
         let helper = home + "/helper"
         let built = Built(
             helper: helper,
+            simctl: simctl,
             frameworks: frameworks,
             libraries: platform + "/Developer/usr/lib",
             platforms: (platform as NSString).deletingLastPathComponent
         )
         if FileManager.default.isExecutableFile(atPath: helper) { return built }
         try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
-        try AtomicFile.replace(at: home + "/main.swift", with: Array(simulatorHelperSource.utf8), durability: .none)
+        let partial = helper + ".partial-" + UUID().uuidString.prefix(8)
+        let source = home + "/main-" + UUID().uuidString.prefix(8) + ".swift"
+        defer {
+            try? FileManager.default.removeItem(atPath: source)
+            try? FileManager.default.removeItem(atPath: partial)
+        }
+        try AtomicFile.replace(at: source, with: Array(simulatorHelperSource.utf8), durability: .none)
         let output = try await executor.execute(
             ToolCommand(
                 executable: "/usr/bin/xcrun",
                 arguments: [
                     "--sdk", "iphonesimulator", "swiftc", "-parse-as-library", "-swift-version", "5", "-O",
-                    "-target", "\(architecture)-apple-ios17.0-simulator", "-sdk", sdk, home + "/main.swift",
-                    "-o", helper + ".partial", "-F", frameworks, "-Xlinker", "-framework", "-Xlinker", "XCTest",
+                    "-target", "\(architecture)-apple-ios17.0-simulator", "-sdk", sdk, source,
+                    "-o", partial, "-F", frameworks, "-Xlinker", "-framework", "-Xlinker", "XCTest",
                     "-Xlinker", "-framework", "-Xlinker", "Testing", "-Xlinker", "-rpath", "-Xlinker", frameworks,
                 ]
             ),
@@ -114,7 +139,12 @@ enum SimulatorHelper {
         guard output.exitStatus == 0, !output.timedOut else {
             throw LitmusFailure("the simulator test helper did not build (logs/simulator-helper-build.log)")
         }
-        try FileManager.default.moveItem(atPath: helper + ".partial", toPath: helper)
+        if !FileManager.default.isExecutableFile(atPath: helper) {
+            try? FileManager.default.moveItem(atPath: partial, toPath: helper)
+        }
+        guard FileManager.default.isExecutableFile(atPath: helper) else {
+            throw LitmusFailure("the simulator test helper could not be published at \(helper)")
+        }
         return built
     }
 }
@@ -128,6 +158,8 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
         let module: String
         let binary: String
         let products: String
+        /// The hosting `.app` bundle when Xcode built the test bundle with a `TEST_HOST`; nil for hostless bundles.
+        let hostApp: String?
         let environment: [String: String]
     }
 
@@ -137,9 +169,13 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
     let helper: SimulatorHelper.Built
     let workspace: String
     let logs: String
+    let workers: Int
+    /// Whether any target is hosted by an application (its baseline must pass without UIApplication; if not, the
+    /// runner falls back to `xcodebuild` automatically).
+    var hasAppHostedTargets: Bool { bundles.contains { $0.hostApp != nil } }
     public var capabilities: HarnessCapabilities {
         HarnessCapabilities(
-            maximumWorkers: fleet.count,
+            maximumWorkers: max(fleet.count, workers),
             selectsTests: true,
             selectsModules: true,
             controlsSwiftTesting: true
@@ -161,15 +197,23 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
         return nil
     }
 
-    /// The bundles of `targets`, or nil when one is hosted by an application or a UI test (then `xcodebuild` runs them).
+    /// The bundles of `targets`, or nil when one is a UI test (then `xcodebuild` runs them).
+    /// Both hostless bundles and app-hosted unit test bundles are returned; for app-hosted bundles `hostApp` points to
+    /// the `.app` directory so `dlopen` finds `<App>.debug.dylib` and embedded frameworks, and `probe()` plus the
+    /// baseline check verify that the bundle runs without launching the application host.
     static func bundles(_ targets: [XCTestRunTarget]) -> [Bundle]? {
-        guard !targets.isEmpty, targets.allSatisfy(\.isHostless) else { return nil }
+        guard !targets.isEmpty, targets.allSatisfy({ !$0.isUITest }) else { return nil }
         return targets.map { target in
             let name = ((target.bundlePath as NSString).lastPathComponent as NSString).deletingPathExtension
+            let hostApp = target.isHostless ? nil : target.hostPath
+            let products =
+                hostApp.map { ($0 as NSString).deletingLastPathComponent }
+                ?? (target.bundlePath as NSString).deletingLastPathComponent
             return Bundle(
                 module: target.name,
                 binary: target.bundlePath + "/" + name,
-                products: (target.bundlePath as NSString).deletingLastPathComponent,
+                products: products,
+                hostApp: hostApp,
                 environment: target.environment
             )
         }
@@ -194,14 +238,30 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
             environment["DEVELOPER_DIR"] = developer
         }
         var child = bundle.environment
-        child["DYLD_FRAMEWORK_PATH"] = [bundle.products, bundle.products + "/PackageFrameworks", helper.frameworks]
-            .joined(separator: ":")
-        child["DYLD_LIBRARY_PATH"] = [bundle.products, helper.libraries].joined(separator: ":")
+        // Xcode's test-runner injection libraries hook into `xcodebuild`'s testmanagerd; our helper runs directly.
+        for key in [
+            "DYLD_INSERT_LIBRARIES", "XCInjectBundleInto", "IDE_CHOSEN_LOGGING_METHOD",
+            "__XPC_DYLD_FRAMEWORK_PATH", "__XPC_DYLD_LIBRARY_PATH",
+        ] { child.removeValue(forKey: key) }
+        let hostDirectories = bundle.hostApp.map { [$0, $0 + "/Frameworks"] } ?? []
+        child["DYLD_FRAMEWORK_PATH"] =
+            ([bundle.products, bundle.products + "/PackageFrameworks"] + hostDirectories + [helper.frameworks]).joined(
+                separator: ":"
+            )
+        child["DYLD_LIBRARY_PATH"] = ([bundle.products] + hostDirectories + [helper.libraries]).joined(separator: ":")
         for (name, value) in subjectEnvironment(request) where name != "DEVELOPER_DIR" { child[name] = value }
         for (name, value) in child { environment["SIMCTL_CHILD_" + name] = value }
         // `simctl` itself carries the run's token too, so its session cleanup finds what it started.
         if let request { environment[processTokenVariable] = request.coverageDirectory }
         return environment
+    }
+
+    private func spawnCommand(udid: String, bundle: Bundle, events: String, configuration: String) -> ToolCommand {
+        let spawn = ["spawn", udid, helper.helper, bundle.binary, events, configuration]
+        if helper.simctl == "/usr/bin/xcrun" {
+            return ToolCommand(executable: "/usr/bin/xcrun", arguments: ["simctl"] + spawn)
+        }
+        return ToolCommand(executable: helper.simctl, arguments: spawn)
     }
 
     /// Whether the helper can run the first bundle at all (entry point found, bundle loaded): a run that matches no
@@ -214,12 +274,11 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
     private func probe(_ bundle: Bundle, on udid: String) async throws -> Bool {
         let events = logs + "/simulator-probe.events.jsonl"
         let output = try await executor.execute(
-            ToolCommand(
-                executable: "/usr/bin/xcrun",
-                arguments: [
-                    "simctl", "spawn", udid, helper.helper, bundle.binary, events,
-                    #"{"filter":["^litmus-probe-matches-nothing$"],"xctest":false}"#,
-                ]
+            spawnCommand(
+                udid: udid,
+                bundle: bundle,
+                events: events,
+                configuration: #"{"filter":["^litmus-probe-matches-nothing$"],"xctest":false}"#
             ),
             directory: workspace,
             environment: environment(nil, bundle: bundle),
@@ -231,7 +290,12 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
     }
 
     public func run(_ request: TestRunRequest) async throws -> TestRunResult {
-        try await fleet.withDevice { device in
+        if workers > fleet.count {
+            // Multiple `simctl spawn` processes run concurrently on the booted simulator(s) with isolated TMPDIR and
+            // coverage directories; do not take an exclusive device lease.
+            return try await run(request, on: await fleet.nextDevice().udid)
+        }
+        return try await fleet.withDevice { device in
             let result = try await self.run(request, on: device.udid)
             // A crashed or timed-out run may leave the simulator in a state the next run should not inherit.
             return (result, result.outcome == .crashed || result.outcome == .timedOut)
@@ -265,9 +329,11 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
             if let modules = request.onlyModules, !modules.contains(bundle.module) { continue }
             let stem = "\(request.name)-\(bundle.module)-simulator"
             let events = "\(logs)/\(stem).events.jsonl"
-            let command = ToolCommand(
-                executable: "/usr/bin/xcrun",
-                arguments: ["simctl", "spawn", udid, helper.helper, bundle.binary, events, Self.configuration(request)]
+            let command = spawnCommand(
+                udid: udid,
+                bundle: bundle,
+                events: events,
+                configuration: Self.configuration(request)
             )
             let (output, stopped) = try await runWatching(
                 executor,

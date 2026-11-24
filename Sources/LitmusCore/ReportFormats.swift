@@ -47,6 +47,28 @@ public enum MarkdownReport {
         }
         if !report.successfulExecution { facts.append("**Execution incomplete, stale or unresolved: see the notes.**") }
         lines += facts.map { "- " + $0 }
+        if !artifact.results.isEmpty {
+            let grouped = Dictionary(grouping: artifact.results, by: \.mutation.path)
+            if grouped.count > 1 {
+                lines += [
+                    "", "### Results by file", "",
+                    "| File | Score | Killed | Crashed | Timeout | Survived | No coverage | Unviable |",
+                    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                ]
+                for path in grouped.keys.sorted() {
+                    let items = grouped[path] ?? []
+                    let fileScore = MutationScore(
+                        items.filter { !artifact.budgetLeftUntested($0) }.map(\.verdict)
+                    )
+                    let scoreText = fileScore.percent.map { "\(format($0)) %" } ?? "n/a"
+                    func count(_ verdict: Verdict) -> Int { items.count(where: { $0.verdict == verdict }) }
+                    lines.append(
+                        "| `\(escape(path))` | \(scoreText) | \(count(.killed)) | \(count(.crashed)) | "
+                            + "\(count(.timeout)) | \(count(.survived)) | \(count(.noCoverage)) | \(count(.unviable)) |"
+                    )
+                }
+            }
+        }
         let shown = report.findings.filter { $0.severity != "note" || $0.rule == "litmus/unviable" }
         if !shown.isEmpty {
             lines += ["", "| | Location | Mutation | Verdict | Why |", "| --- | --- | --- | --- | --- |"]

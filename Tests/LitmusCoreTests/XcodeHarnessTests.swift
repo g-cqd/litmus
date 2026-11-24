@@ -69,3 +69,53 @@ private func finished(_ test: String, _ status: String) -> String {
     let driver = try BuildDriver(root: "/r", scheme: "App", destination: "platform=iOS Simulator,id=X")
     #expect(driver.buildCommand(workspace: "/w", artifacts: "/a").arguments.contains("ONLY_ACTIVE_ARCH=YES"))
 }
+
+@Test func `xcode builds and tests disable code coverage unless the caller passed it`() throws {
+    let driver = try BuildDriver(root: "/r", scheme: "App", destination: "platform=iOS Simulator,id=X")
+    let build = driver.buildCommand(workspace: "/w", artifacts: "/a").arguments
+    let test = try driver.testCommand(workspace: "/w", artifacts: "/a", result: "/r", xctestrun: "/x.xctestrun")
+        .arguments
+    #expect(build.contains("-enableCodeCoverage") && build.contains("NO"))
+    #expect(test.contains("-enableCodeCoverage") && test.contains("NO"))
+    var explicit = driver
+    explicit.xcodebuildArguments = ["-enableCodeCoverage", "YES"]
+    let explicitBuild = explicit.buildCommand(workspace: "/w", artifacts: "/a").arguments
+    #expect(explicitBuild.filter { $0 == "-enableCodeCoverage" }.count == 1)
+    #expect(explicitBuild.contains("YES"))
+}
+
+@Test func `snapshot skips Finder metadata so .DS_Store cannot make evidence stale`() {
+    #expect(WorkspaceSnapshot.limits.skippedNames.contains(".DS_Store"))
+}
+
+@Test func `simulator direct harness strips xcode injection vars and exposes app-hosted dyld paths`() {
+    let harness = SimulatorDirectHarness(
+        executor: BoundedExecutor(),
+        fleet: .single(udid: "U", directory: "/w"),
+        bundles: [
+            .init(
+                module: "AppTests",
+                binary: "/P/App.app/PlugIns/AppTests.xctest/AppTests",
+                products: "/P",
+                hostApp: "/P/App.app",
+                environment: [
+                    "DYLD_INSERT_LIBRARIES": "/P/App.app/Frameworks/libXCTestBundleInject.dylib",
+                    "XCInjectBundleInto": "unused",
+                    "CUSTOM_VAR": "kept",
+                ]
+            )
+        ],
+        helper: .init(helper: "/h", simctl: "/usr/bin/simctl", frameworks: "/F", libraries: "/L", platforms: "/Plat"),
+        workspace: "/w",
+        logs: "/logs",
+        workers: 4
+    )
+    #expect(harness.hasAppHostedTargets)
+    #expect(harness.capabilities.maximumWorkers == 4)
+    let env = harness.environment(nil, bundle: harness.bundles[0])
+    #expect(env["SIMCTL_CHILD_DYLD_INSERT_LIBRARIES"] == nil)
+    #expect(env["SIMCTL_CHILD_XCInjectBundleInto"] == nil)
+    #expect(env["SIMCTL_CHILD_CUSTOM_VAR"] == "kept")
+    #expect(env["SIMCTL_CHILD_DYLD_FRAMEWORK_PATH"]?.contains("/P/App.app:/P/App.app/Frameworks") == true)
+    #expect(env["SIMCTL_CHILD_DYLD_LIBRARY_PATH"]?.contains("/P/App.app:/P/App.app/Frameworks") == true)
+}

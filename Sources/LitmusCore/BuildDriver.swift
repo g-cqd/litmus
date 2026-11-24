@@ -127,7 +127,7 @@ public struct BuildDriver: Codable, Sendable, Equatable {
                 executable: "/usr/bin/xcrun",
                 arguments: ["xcodebuild", "build-for-testing"] + xcodeArguments + [
                     "-derivedDataPath", artifacts + "/DerivedData", "-parallel-testing-enabled", "NO",
-                ]
+                ] + Self.codeCoverageArguments(for: xcodebuildArguments)
             )
         }
         return ToolCommand(
@@ -166,7 +166,8 @@ public struct BuildDriver: Codable, Sendable, Equatable {
                     derivedData ?? artifacts + "/DerivedData", "-parallel-testing-enabled", "NO",
                     // A failing mutant is expected: no sysdiagnose for it.
                     "-collect-test-diagnostics", "never",
-                ] + (resultStream.map { ["-resultStreamPath", $0] } ?? []) + xcodebuildArguments
+                ] + Self.codeCoverageArguments(for: xcodebuildArguments)
+                    + (resultStream.map { ["-resultStreamPath", $0] } ?? []) + xcodebuildArguments
                     + (onlyTesting ?? []).sorted().map { "-only-testing:" + $0 }
             )
         }
@@ -176,6 +177,13 @@ public struct BuildDriver: Codable, Sendable, Equatable {
                 "--skip-build", "--parallel", "--num-workers", "1", "--xunit-output", result,
             ]
         )
+    }
+
+    /// Disables Xcode's LLVM code coverage instrumentation unless the caller passed `-enableCodeCoverage`:
+    /// Litmus measures reach through its own lightweight activation markers, so profiling every mutant only adds
+    /// build and profdata-merge overhead.
+    static func codeCoverageArguments(for arguments: [String]) -> [String] {
+        arguments.contains("-enableCodeCoverage") ? [] : ["-enableCodeCoverage", "NO"]
     }
 
     /// `ARCHS` and `ONLY_ACTIVE_ARCH` for a simulator build: Xcode would otherwise build the app for both simulator
