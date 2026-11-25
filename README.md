@@ -81,3 +81,9 @@ The mutation score is detected mutations divided by detected plus undetected mut
 ## License
 
 See [LICENSE](LICENSE).
+
+## Contributing & Security
+
+- [Contributing](CONTRIBUTING.md)
+- [Security](SECURITY.md)
+- [License](LICENSE)
