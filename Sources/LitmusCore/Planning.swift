@@ -747,8 +747,24 @@ enum BuilderContext {
     /// view-builder closures like `Section { ... }` or `VStack { ... }` to avoid double-counting parent + children,
     /// and skipping sole statements inside non-builder closures like `Button("...") { model.calculate() }` actions).
     static func isLeafViewElement(_ call: FunctionCallExprSyntax, in node: CodeBlockItemSyntax) -> Bool {
-        guard let list = node.parent?.as(CodeBlockItemListSyntax.self), list.count > 1 else { return false }
+        guard let list = node.parent?.as(CodeBlockItemListSyntax.self), let owner = list.parent else { return false }
         guard !isInsideActionClosure(node) else { return false }
+        if list.count == 1 {
+            // A sole statement inside an `if`, `switch`, accessor or `@ViewBuilder` function body is directly in the
+            // view builder (e.g. `if let msg { Text(msg) }`). A sole statement inside an arbitrary closure (like
+            // `.map { format($0) }`) may return a non-View value, so skip single-statement closures.
+            let isDirectBuilderBlock: Bool
+            if owner.is(AccessorBlockSyntax.self) || owner.is(SwitchCaseSyntax.self) {
+                isDirectBuilderBlock = true
+            } else if let block = owner.as(CodeBlockSyntax.self), let holder = block.parent {
+                isDirectBuilderBlock =
+                    holder.is(IfExprSyntax.self) || holder.is(AccessorDeclSyntax.self)
+                    || holder.is(FunctionDeclSyntax.self)
+            } else {
+                isDirectBuilderBlock = false
+            }
+            guard isDirectBuilderBlock else { return false }
+        }
         // A call whose trailing closure is a view container (e.g. `Section { ... }`, `VStack { ... }`, `Group { ... }`)
         // wraps child elements; mutating its leaves avoids counting one untested screen N+1 times.
         // Exception: interactive controls like `Button("...") { action() }` have an imperative action closure, not

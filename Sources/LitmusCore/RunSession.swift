@@ -299,6 +299,7 @@ final class RunSession<Executor: ProcessExecutor> {
             notes: clonePlan.notes
         )
         plan.scope = clonePlan.scope
+        plan.skipped = clonePlan.skipped
         guard !plan.mutations.isEmpty else {
             throw LitmusFailure("no mutable production sites; inspect plan exclusions")
         }

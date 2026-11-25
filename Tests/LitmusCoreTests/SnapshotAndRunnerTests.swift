@@ -1035,3 +1035,33 @@ private let fourConditions = """
     #expect(result.results.allSatisfy { $0.verdict == .infrastructureError })
     #expect(executor.builds.withLock { $0 } <= 1 + 2 * 4 + 1, "builds: \(executor.builds.withLock { $0 })")
 }
+
+@Test func `run preserves skipped view-builder counts from clonePlan into RunArtifact and MarkdownReport`()
+    async throws
+{
+    let source = """
+        public struct CheckoutView {
+            public var error: String?
+            public var body: some View {
+                VStack {
+                    Text("Header")
+                    if let error {
+                        Text(error)
+                    }
+                }
+            }
+            public func check(_ value: Int) -> Bool { value > 0 }
+        }
+        """
+    let executor = FakeExecutor(.init())
+    let (artifact, base) = try await run(executor, source: source) {
+        $0.operators = [.replaceRelational, .removeCall]
+    }
+    defer { try? FileManager.default.removeItem(at: base) }
+    #expect(artifact.plan.skipped?[MutationPlanner.skippedViewBuilderReason] == 2)
+    let report = try await MutationReport.make(artifact, root: base.path + "/input")
+    let markdown = MarkdownReport.render(report, artifact: artifact)
+    #expect(
+        markdown.contains("Skipped: 2 SwiftUI view-builder leaf element(s) left alone (opt in: remove-view-element)")
+    )
+}

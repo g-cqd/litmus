@@ -311,21 +311,27 @@ func `remove-call records skipped SwiftUI view-builder leaf elements and remove-
 {
     let source = """
         struct CheckoutView {
+            var error: String?
+            var items: [Int]
             var body: some View {
                 VStack {
                     Section("Order") {
                         Text("Title")
                         Button("Submit") { submit() }
                     }
-                    Text("Footer")
+                    if let error {
+                        Text(error)
+                    }
+                    Text(items.map { format($0) }.joined())
                 }
             }
             func submit() {}
+            func format(_ n: Int) -> String { String(n) }
         }
         """
     let withCallRemoval = try MutationPlanner.discover(in: source, path: "View.swift", operators: [.removeCall])
     #expect(withCallRemoval.sites.isEmpty)
-    #expect(withCallRemoval.skipped[MutationPlanner.skippedViewBuilderReason] == 3)
+    #expect(withCallRemoval.skipped[MutationPlanner.skippedViewBuilderReason] == 4)
 
     let withViewRemoval = try MutationPlanner.discover(
         in: source,
@@ -337,7 +343,8 @@ func `remove-call records skipped SwiftUI view-builder leaf elements and remove-
         Set(withViewRemoval.sites.map(\.original)) == [
             #"Text("Title")"#,
             #"Button("Submit") { submit() }"#,
-            #"Text("Footer")"#,
+            #"Text(error)"#,
+            #"Text(items.map { format($0) }.joined())"#,
         ]
     )
     let schema = try SchemaWriter.schema(source, mutations: withViewRemoval.sites)
