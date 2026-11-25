@@ -1,6 +1,7 @@
 internal import AemiIO
 internal import AemiJSON
 internal import Foundation
+internal import IndexStoreSupport
 internal import SourceCorpus
 
 /// A test target of a built `.xctestrun`, its placeholders resolved.
@@ -84,7 +85,8 @@ enum SimulatorHelper {
         let platform = try await query(["--sdk", "iphonesimulator", "--show-sdk-platform-path"])
         let sdk = try await query(["--sdk", "iphonesimulator", "--show-sdk-path"])
         let compiler = try await query(["--sdk", "iphonesimulator", "swiftc", "--version"])
-        let simctl = (try? await query(["--find", "simctl"])) ?? "/usr/bin/xcrun"
+        let resolvedSimctl = try? await query(["--find", "simctl"])
+        let simctl = resolvedSimctl.flatMap { BinaryTrustChecker.isTrusted(at: $0) ? $0 : nil } ?? "/usr/bin/xcrun"
         #if arch(arm64)
             let architecture = "arm64"
         #else
@@ -112,7 +114,9 @@ enum SimulatorHelper {
             libraries: platform + "/Developer/usr/lib",
             platforms: (platform as NSString).deletingLastPathComponent
         )
-        if FileManager.default.isExecutableFile(atPath: helper) { return built }
+        if FileManager.default.isExecutableFile(atPath: helper), BinaryTrustChecker.isTrusted(at: helper) {
+            return built
+        }
         try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
         let partial = helper + ".partial-" + UUID().uuidString.prefix(8)
         let source = home + "/main-" + UUID().uuidString.prefix(8) + ".swift"

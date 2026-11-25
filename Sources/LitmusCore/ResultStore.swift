@@ -331,7 +331,7 @@ public final class ResultStore: Sendable {
             return (version, record, key, run, tag)
         }
         guard fields.0 == Self.version, let record = fields.1, let key = fields.2, let runID = fields.3,
-            let stored = fields.4, stored == tag(record, key: key, runID: runID)
+            let stored = fields.4, HMAC.constantTimeEqual(stored, tag(record, key: key, runID: runID))
         else { throw LitmusFailure(secret == nil ? "bad version or digest" : "bad version or tag (LITMUS_STORE_KEY)") }
         return (try ProtobufDecoder().decode(JournalRecord.self, fromBytes: record), key, runID)
     }
@@ -349,5 +349,14 @@ enum HMAC {
             let hex = String(byte, radix: 16)
             return hex.count == 1 ? "0" + hex : hex
         }.joined()
+    }
+
+    static func constantTimeEqual(_ lhs: String, _ rhs: String) -> Bool {
+        let a = Array(lhs.utf8)
+        let b = Array(rhs.utf8)
+        guard a.count == b.count else { return false }
+        var diff: UInt8 = 0
+        for index in 0..<a.count { diff |= a[index] ^ b[index] }
+        return diff == 0
     }
 }
