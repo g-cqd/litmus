@@ -24,8 +24,15 @@ public enum XcodeTestConfiguration {
         // An automatically generated or ambiguous scheme must be resolved by Xcode, not guessed here.
         guard schemes.count == 1, let path = schemes.first else { return }
         let bytes = try BoundedFileReader.read(path: path, cap: 4 << 20)
+        guard !bytes.contains(0), let schemeText = String(bytes: bytes, encoding: .utf8) else {
+            throw LitmusFailure("scheme \(scheme) must be UTF-8 without NUL bytes: \(path)")
+        }
+        guard !schemeText.contains("<!DOCTYPE"), !schemeText.contains("<!ENTITY") else {
+            throw LitmusFailure("scheme \(scheme) contains disallowed XML doctype or entity declarations: \(path)")
+        }
         let delegate = SchemeTests()
         let parser = XMLParser(data: Data(bytes))
+        parser.shouldResolveExternalEntities = false
         // SAFETY: retain the delegate through synchronous parsing and clear the unowned pointer afterwards.
         unsafe parser.delegate = delegate
         let parsed = withExtendedLifetime(delegate) { parser.parse() }
