@@ -44,7 +44,7 @@ assert verdicts('items.append(item)','remove-call') == [('()','killed')], by
 assert verdicts('recorder.record("noisy")','remove-call') == [('()','killed')], by
 assert verdicts('value * 2','replace-arithmetic') == [('value / 2','noCoverage')], by
 assert not any('print' in o for o,_ in by), 'logging must not be removed'
-assert sorted(r['policy']['operators']) == sorted(['negate-condition','swap-ternary','replace-logical','replace-relational','flip-boolean','replace-arithmetic','remove-call'])
+assert sorted(r['policy']['operators']) == sorted(['negate-condition','swap-ternary','replace-logical','replace-relational','flip-boolean','replace-arithmetic','replace-range','remove-negation','replace-nil-coalescing','remove-call'])
 print('operators:', dict(c))
 PY
 # Score gates: the run scored 8 of 12 mutants (66.67 %).
