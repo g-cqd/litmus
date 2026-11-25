@@ -10,8 +10,12 @@ Each operator has a rule identifier, used by `--operators`, by suppression direc
 | `replace-logical` | stable | exchange `&&` and `\|\|`, keeping operand grouping |
 | `replace-relational` | standard | `<` to `<=` and `>=`; `<=` to `<` and `>`; `>` to `>=` and `<=`; `>=` to `>` and `<`; `==` and `!=` exchanged |
 | `flip-boolean` | standard | `true` and `false` exchanged |
-| `replace-arithmetic` | standard | `+` and `-` exchanged, `*` and `/` exchanged, `%` to `*` |
+| `replace-arithmetic` | standard | `+` and `-` exchanged, `*` and `/` exchanged, `%` to `*`, and compound assignments (`+=`, `-=`, `*=`, `/=`, `%=`) |
+| `replace-range` | standard | shift range upper bounds (`a..<b` to `a..<((b) + 1)`, `a...b` to `a...((b) - 1)`) |
+| `remove-negation` | standard | remove unary logical negation (`!x` to `x`) outside direct conditions |
+| `replace-nil-coalescing` | standard | replace nil-coalescing (`a ?? b`) with its fallback (`b`) |
 | `remove-call` | experimental | skip a call statement whose result is unused |
+| `remove-view-element` | experimental (UI, opt-in) | skip a leaf SwiftUI view-builder element (`--operators` only; reported separately from logic score) |
 
 ## What is left alone
 

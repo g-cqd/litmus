@@ -135,6 +135,21 @@ public struct RunArtifact: Codable, Sendable {
         let untested = Set(budget?.untested ?? [])
         return MutationScore(results.filter { !untested.contains($0.mutation.id) }.map(\.verdict))
     }
+    /// The score over logic-domain mutants only; nil when the run contains no UI-domain mutants (equal to `score`).
+    public var logicScore: MutationScore? {
+        let untested = Set(budget?.untested ?? [])
+        let ui = results.filter { $0.mutation.operatorID.domain == .ui && !untested.contains($0.mutation.id) }
+        guard !ui.isEmpty else { return nil }
+        let logic = results.filter { $0.mutation.operatorID.domain == .logic && !untested.contains($0.mutation.id) }
+        return MutationScore(logic.map(\.verdict))
+    }
+    /// The score over UI-domain mutants only (`remove-view-element`); nil when none ran.
+    public var uiScore: MutationScore? {
+        let untested = Set(budget?.untested ?? [])
+        let ui = results.filter { $0.mutation.operatorID.domain == .ui && !untested.contains($0.mutation.id) }
+        guard !ui.isEmpty else { return nil }
+        return MutationScore(ui.map(\.verdict))
+    }
 
     public init(provenance: RunProvenance, plan: MutationPlan) {
         version = 2

@@ -17,12 +17,24 @@ public struct LitmusFailure: Error, Sendable, CustomStringConvertible {
 
 /// Statically discovers candidates; overload resolution and active build conditions are validated by the actual build.
 public enum MutationPlanner {
+    /// Reason key recorded in `MutationPlan.skipped` when `remove-call` leaves SwiftUI view-builder leaf elements
+    /// untouched (opt in with `--operators remove-view-element`).
+    public static let skippedViewBuilderReason =
+        "SwiftUI view-builder leaf element(s) left alone (opt in: remove-view-element)"
     /// What syntax discovery found in one file.
     public struct Discovery: Sendable, Equatable {
         /// Sites that can be schematised.
         public let sites: [Mutation]
         /// Sites found but deliberately not mutated, with the reason; never dropped silently.
         public let excluded: [ExcludedSite]
+        /// Counts of sites skipped by context policy (e.g. view-builder statements left alone by `remove-call`).
+        public let skipped: [String: Int]
+
+        public init(sites: [Mutation], excluded: [ExcludedSite], skipped: [String: Int] = [:]) {
+            self.sites = sites
+            self.excluded = excluded
+            self.skipped = skipped
+        }
     }
 
     /// A site that exists in the source but is not mutated.
@@ -53,7 +65,7 @@ public enum MutationPlanner {
         )
         let visitor = Sites(context)
         visitor.walk(tree)
-        return Discovery(sites: ordered(visitor.sites), excluded: visitor.excluded)
+        return Discovery(sites: ordered(visitor.sites), excluded: visitor.excluded, skipped: visitor.skipped)
     }
 
     /// The schematisable sites of one file, in source order.
@@ -124,13 +136,15 @@ public enum MutationPlanner {
             + classification.unknownProjects.map {
                 PlanNote(path: $0.path, reason: "classification uses conventions: \($0.reason)")
             }
-        return MutationPlan(
+        var result = MutationPlan(
             root: root,
             analyzedFiles: files.count,
             mutations: files.flatMap(\.mutations),
             suppressed: files.flatMap(\.suppressed),
             notes: issues + files.flatMap(\.notes)
         )
+        result.skipped = mergeSkipped(files.compactMap(\.skipped))
+        return result
     }
 
     /// The plan of the changed Swift files only: no directory walk, so a change touching no Swift file costs nothing.
@@ -188,6 +202,7 @@ public enum MutationPlanner {
             suppressed: planned.flatMap(\.suppressed).filter { scope.priority(of: $0) != nil },
             notes: notes + planned.flatMap(\.notes)
         )
+        plan.skipped = mergeSkipped(planned.compactMap(\.skipped))
         plan.scope = PlanScope(
             source: scope.source,
             digest: scope.digest,
@@ -198,6 +213,14 @@ public enum MutationPlanner {
             onChangedLines: ranked.filter { $0.priority == 0 }.map(\.mutation.id)
         )
         return plan
+    }
+
+    private static func mergeSkipped(_ parts: [[String: Int]]) -> [String: Int]? {
+        var totals: [String: Int] = [:]
+        for part in parts {
+            for (reason, count) in part where count > 0 { totals[reason, default: 0] += count }
+        }
+        return totals.isEmpty ? nil : totals
     }
 
     /// A file a mutation tool may mutate, or why not.
@@ -267,7 +290,15 @@ public enum MutationPlanner {
                     active.append(mutation)
                 }
             }
-            return MutationPlan(root: root, analyzedFiles: 1, mutations: active, suppressed: suppressed, notes: notes)
+            var filePlan = MutationPlan(
+                root: root,
+                analyzedFiles: 1,
+                mutations: active,
+                suppressed: suppressed,
+                notes: notes
+            )
+            filePlan.skipped = found.skipped.isEmpty ? nil : found.skipped
+            return filePlan
         } catch {
             return MutationPlan(
                 root: root,
@@ -337,9 +368,13 @@ private final class Sites: SyntaxVisitor {
     let context: SiteContext
     var sites: [Mutation] = []
     var excluded: [MutationPlanner.ExcludedSite] = []
+    /// Counts of sites skipped by context policy (e.g. view-builder statements when `remove-call` is active).
+    var skipped: [String: Int] = [:]
     /// Depth of result-builder declarations being walked (`var body: some View`, `@…Builder`): a statement edit there
     /// would change what the builder collects.
     var builderDepth = 0
+    /// Depth of SwiftUI view-builder declarations whose builder supports `buildOptional` (`if !m { ... }`).
+    var viewBuilderDepth = 0
     /// Depth of attribute arguments and enum case declarations being walked: the operators added in 0.4 leave them
     /// alone (a compile-time constant there cannot read a runtime schema), the stable ones keep 0.3's behaviour.
     var constantDepth = 0
@@ -399,10 +434,12 @@ private final class Sites: SyntaxVisitor {
     override func visitPost(_ node: ExtensionDeclSyntax) { context.anchors.pop() }
     override func visit(_ node: FunctionDeclSyntax) -> SyntaxVisitorContinueKind {
         if BuilderContext.isBuilder(node) { builderDepth += 1 }
+        if BuilderContext.isOptionalSupportingViewBuilder(node) { viewBuilderDepth += 1 }
         return enter(signature(node.name.text, node.signature.parameterClause.parameters), node, body: true)
     }
     override func visitPost(_ node: FunctionDeclSyntax) {
         if BuilderContext.isBuilder(node) { builderDepth -= 1 }
+        if BuilderContext.isOptionalSupportingViewBuilder(node) { viewBuilderDepth -= 1 }
         context.anchors.pop()
     }
     override func visit(_ node: InitializerDeclSyntax) -> SyntaxVisitorContinueKind {
@@ -424,10 +461,12 @@ private final class Sites: SyntaxVisitor {
     override func visit(_ node: VariableDeclSyntax) -> SyntaxVisitorContinueKind {
         let names = node.bindings.map { normalized($0.pattern.trimmedDescription) }.joined(separator: ",")
         if BuilderContext.isBuilder(node) { builderDepth += 1 }
+        if BuilderContext.isOptionalSupportingViewBuilder(node) { viewBuilderDepth += 1 }
         return enter(names, node, body: true)
     }
     override func visitPost(_ node: VariableDeclSyntax) {
         if BuilderContext.isBuilder(node) { builderDepth -= 1 }
+        if BuilderContext.isOptionalSupportingViewBuilder(node) { viewBuilderDepth -= 1 }
         context.anchors.pop()
     }
     override func visit(_ node: AccessorDeclSyntax) -> SyntaxVisitorContinueKind {
@@ -485,6 +524,31 @@ private final class Sites: SyntaxVisitor {
         {
             // `"a" + b` is concatenation: its `-` never compiles, so it would only cost a build to find out.
             add(node, operatorID: .replaceArithmetic, replacement: swapping(op, in: node, for: replacement))
+        } else if let replacement = Self.compoundAssignment[symbol],
+            !(symbol == "+=" && Self.isCollectionOrStringLiteral(node.rightOperand))
+        {
+            add(node, operatorID: .replaceArithmetic, replacement: swapping(op, in: node, for: replacement))
+        } else if (symbol == "..<" || symbol == "..."),
+            !node.hasAncestor(SwitchCaseItemSyntax.self),
+            !Self.isStringLiteral(node.leftOperand), !Self.isStringLiteral(node.rightOperand)
+        {
+            // Preserve Range vs ClosedRange type by shifting the upper bound rather than swapping `..<` and `...`
+            // (a ternary schema requires identical branch types).
+            let shifted =
+                symbol == "..<"
+                ? "((\(node.rightOperand.trimmedDescription)) + 1)" : "((\(node.rightOperand.trimmedDescription)) - 1)"
+            let replacement = "\(node.leftOperand.trimmedDescription)\(symbol)\(shifted)"
+            add(node, operatorID: .replaceRange, replacement: replacement)
+        } else if symbol == "??", !Self.isNeverCall(node.rightOperand) {
+            // `a ?? fatalError()` has a `Never` fallback that cannot balance the ternary schema's branches.
+            add(node, operatorID: .replaceNilCoalescing, replacement: node.rightOperand.trimmedDescription)
+        }
+        return .visitChildren
+    }
+
+    override func visit(_ node: PrefixOperatorExprSyntax) -> SyntaxVisitorContinueKind {
+        if node.operator.text == "!", !Self.isDirectCondition(node) {
+            add(node, operatorID: .removeNegation, replacement: node.expression.trimmedDescription)
         }
         return .visitChildren
     }
@@ -494,9 +558,29 @@ private final class Sites: SyntaxVisitor {
         "<": ["<=", ">="], "<=": ["<", ">"], ">": [">=", "<="], ">=": [">", "<"], "==": ["!="], "!=": ["=="],
     ]
     static let arithmetic: [String: String] = ["+": "-", "-": "+", "*": "/", "/": "*", "%": "*"]
+    static let compoundAssignment: [String: String] = ["+=": "-=", "-=": "+=", "*=": "/=", "/=": "*=", "%=": "*="]
 
     private static func isStringLiteral(_ expression: ExprSyntax) -> Bool {
         expression.is(StringLiteralExprSyntax.self)
+    }
+
+    private static func isCollectionOrStringLiteral(_ expression: ExprSyntax) -> Bool {
+        expression.is(StringLiteralExprSyntax.self) || expression.is(ArrayExprSyntax.self)
+    }
+
+    private static func isNeverCall(_ expression: ExprSyntax) -> Bool {
+        guard let call = expression.as(FunctionCallExprSyntax.self) else { return false }
+        let last = call.calledExpression.trimmedDescription.split(separator: ".").last.map(String.init) ?? ""
+        return ["fatalError", "preconditionFailure", "assertionFailure", "swift_unreachable"].contains(last)
+    }
+
+    /// True when `!x` is the whole expression of an `if`/`guard`/`while` condition or ternary predicate, where
+    /// `negate-condition` or `swap-ternary` already emits the identical mutation.
+    private static func isDirectCondition(_ node: PrefixOperatorExprSyntax) -> Bool {
+        guard let parent = node.parent else { return false }
+        if parent.is(ConditionElementSyntax.self) { return true }
+        if let ternary = parent.as(TernaryExprSyntax.self), ternary.condition.id == node.id { return true }
+        return false
     }
 
     /// The text of `node` with only its operator token replaced, so comments and layout around it survive.
@@ -519,8 +603,7 @@ private final class Sites: SyntaxVisitor {
     }
 
     override func visit(_ node: CodeBlockItemSyntax) -> SyntaxVisitorContinueKind {
-        guard context.operators.contains(.removeCall), builderDepth == 0, let expression = node.item.as(ExprSyntax.self)
-        else { return .visitChildren }
+        guard let expression = node.item.as(ExprSyntax.self) else { return .visitChildren }
         var inner = expression
         while true {
             if let wrapped = inner.as(TryExprSyntax.self) {
@@ -531,11 +614,20 @@ private final class Sites: SyntaxVisitor {
                 break
             }
         }
-        guard let call = inner.as(FunctionCallExprSyntax.self),
-            !CallRemoval.isLogging(call.calledExpression.trimmedDescription),
-            !CallRemoval.isImplicitReturn(node)
-        else { return .visitChildren }
-        add(expression, operatorID: .removeCall, replacement: "()")
+        guard let call = inner.as(FunctionCallExprSyntax.self) else { return .visitChildren }
+        if builderDepth == 0 {
+            guard context.operators.contains(.removeCall),
+                !CallRemoval.isLogging(call.calledExpression.trimmedDescription),
+                !CallRemoval.isImplicitReturn(node)
+            else { return .visitChildren }
+            add(expression, operatorID: .removeCall, replacement: "()")
+        } else if viewBuilderDepth > 0, BuilderContext.isLeafViewElement(call, in: node) {
+            if context.operators.contains(.removeViewElement) {
+                add(expression, operatorID: .removeViewElement, replacement: "()")
+            } else if context.operators.contains(.removeCall) {
+                skipped[MutationPlanner.skippedViewBuilderReason, default: 0] += 1
+            }
+        }
         return .visitChildren
     }
     override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind {
@@ -592,6 +684,19 @@ extension SyntaxProtocol {
 
 /// Result builders collect statements as values, so a statement edit inside one changes what is built.
 enum BuilderContext {
+    private static let optionalViewBuilders: Set<String> = [
+        "ViewBuilder", "SwiftUI.ViewBuilder",
+        "ToolbarContentBuilder", "SwiftUI.ToolbarContentBuilder",
+        "SceneBuilder", "SwiftUI.SceneBuilder",
+        "CommandsBuilder", "SwiftUI.CommandsBuilder",
+    ]
+    private static let viewBodyTypes: Set<String> = [
+        "some View", "some SwiftUI.View",
+        "some Scene", "some SwiftUI.Scene",
+        "some ToolbarContent", "some SwiftUI.ToolbarContent",
+        "some Commands", "some SwiftUI.Commands",
+    ]
+
     static func isBuilder(_ node: some SyntaxProtocol) -> Bool {
         if let variable = node.as(VariableDeclSyntax.self) {
             return hasBuilderAttribute(variable.attributes)
@@ -607,9 +712,83 @@ enum BuilderContext {
         return false
     }
 
+    /// True only for SwiftUI builders whose `buildOptional` accepts `if !m { element }` statements.
+    static func isOptionalSupportingViewBuilder(_ node: some SyntaxProtocol) -> Bool {
+        if let variable = node.as(VariableDeclSyntax.self) {
+            return hasOptionalViewBuilderAttribute(variable.attributes)
+                || variable.bindings.contains {
+                    $0.pattern.trimmedDescription == "body"
+                        && $0.typeAnnotation.map { viewBodyTypes.contains(normalized($0.type.trimmedDescription)) }
+                            == true
+                }
+        }
+        if let function = node.as(FunctionDeclSyntax.self) {
+            return hasOptionalViewBuilderAttribute(function.attributes)
+        }
+        return false
+    }
+
+    /// True for a leaf view statement inside a multi-statement builder block (skipping containers with trailing
+    /// view-builder closures like `Section { ... }` or `VStack { ... }` to avoid double-counting parent + children,
+    /// and skipping sole statements inside non-builder closures like `Button("...") { model.calculate() }` actions).
+    static func isLeafViewElement(_ call: FunctionCallExprSyntax, in node: CodeBlockItemSyntax) -> Bool {
+        guard let list = node.parent?.as(CodeBlockItemListSyntax.self), list.count > 1 else { return false }
+        guard !isInsideActionClosure(node) else { return false }
+        // A call whose trailing closure is a view container (e.g. `Section { ... }`, `VStack { ... }`, `Group { ... }`)
+        // wraps child elements; mutating its leaves avoids counting one untested screen N+1 times.
+        // Exception: interactive controls like `Button("...") { action() }` have an imperative action closure, not
+        // child views — treat them as leaf elements.
+        if call.trailingClosure != nil {
+            let callee = baseCalleeName(call)
+            let imperativeControlNames: Set<String> = ["Button", "Link", "Stepper", "Toggle", "Slider", "Picker"]
+            if !imperativeControlNames.contains(callee) { return false }
+        }
+        return true
+    }
+
+    /// True if `node` sits inside an imperative action closure (e.g. `Button("Go") { model.calculate() }`) rather
+    /// than directly inside a view-builder block.
+    private static func isInsideActionClosure(_ node: CodeBlockItemSyntax) -> Bool {
+        var current: Syntax? = node.parent
+        while let cur = current {
+            if let closure = cur.as(ClosureExprSyntax.self),
+                let call = closure.parent?.as(FunctionCallExprSyntax.self)
+            {
+                let callee = baseCalleeName(call)
+                if ["Button", "onAppear", "onDisappear", "onChange", "task", "onTapGesture", "onSubmit"].contains(
+                    callee
+                ) {
+                    return true
+                }
+            }
+            if cur.is(VariableDeclSyntax.self) || cur.is(FunctionDeclSyntax.self) { break }
+            current = cur.parent
+        }
+        return false
+    }
+
+    private static func baseCalleeName(_ call: FunctionCallExprSyntax) -> String {
+        var expr: ExprSyntax = call.calledExpression
+        while let member = expr.as(MemberAccessExprSyntax.self), let base = member.base {
+            if let innerCall = base.as(FunctionCallExprSyntax.self) {
+                expr = innerCall.calledExpression
+            } else {
+                return member.declName.baseName.text
+            }
+        }
+        return expr.trimmedDescription.split(separator: ".").last.map(String.init) ?? expr.trimmedDescription
+    }
+
     private static func hasBuilderAttribute(_ attributes: AttributeListSyntax) -> Bool {
         attributes.contains {
             $0.as(AttributeSyntax.self)?.attributeName.trimmedDescription.hasSuffix("Builder") == true
+        }
+    }
+
+    private static func hasOptionalViewBuilderAttribute(_ attributes: AttributeListSyntax) -> Bool {
+        attributes.contains {
+            guard let name = $0.as(AttributeSyntax.self)?.attributeName.trimmedDescription else { return false }
+            return optionalViewBuilders.contains(name)
         }
     }
 }

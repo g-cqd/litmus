@@ -11,7 +11,14 @@ public enum MarkdownReport {
             report.counts[verdict.rawValue].map { "\(verdict.rawValue) \($0)" }
         }
         let score = artifact.score
-        if let percent = score.percent {
+        if let logic = artifact.logicScore, let ui = artifact.uiScore, let percent = score.percent {
+            let logicPart =
+                logic.percent.map { "Logic \(format($0)) % (\(logic.detected)/\(logic.detected + logic.undetected))" }
+                ?? "Logic n/a"
+            let uiPart =
+                ui.percent.map { "UI \(format($0)) % (\(ui.detected)/\(ui.detected + ui.undetected))" } ?? "UI n/a"
+            lines.append("**Score \(format(percent)) %** — \(logicPart) · \(uiPart)")
+        } else if let percent = score.percent {
             let covered = score.coveredPercent.map { "; \(format($0)) % of covered mutants" } ?? ""
             lines.append(
                 "**Score \(format(percent)) %** (\(score.detected) detected of \(score.detected + score.undetected)"
@@ -44,6 +51,12 @@ public enum MarkdownReport {
                 "Cost: \(format(cost.wallSeconds)) s, \(cost.builds) build(s), \(cost.testRuns) test run(s), "
                     + "CPU \(format(cost.childCPUSeconds)) s, peak \(format(cost.childPeakRSSMiB)) MiB"
             )
+        }
+        if let skipped = artifact.plan.skipped, !skipped.isEmpty {
+            let summary = skipped.keys.sorted().compactMap { reason in
+                skipped[reason].map { "\($0) \(reason)" }
+            }.joined(separator: "; ")
+            if !summary.isEmpty { facts.append("Skipped: \(summary)") }
         }
         if !report.successfulExecution { facts.append("**Execution incomplete, stale or unresolved: see the notes.**") }
         lines += facts.map { "- " + $0 }

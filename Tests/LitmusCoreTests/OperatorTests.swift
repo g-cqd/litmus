@@ -21,7 +21,11 @@ private func sites(_ source: String, _ operators: Set<MutationOperator> = everyt
 @Test func `tiers are cumulative and parse from rule identifiers`() throws {
     #expect(MutationOperator.operators(upTo: .standard).contains(.replaceRelational))
     #expect(!MutationOperator.operators(upTo: .standard).contains(.removeCall))
-    #expect(MutationOperator.operators(upTo: .experimental) == Set(MutationOperator.allCases))
+    #expect(
+        MutationOperator.operators(upTo: .experimental)
+            == Set(MutationOperator.allCases.filter { $0.domain == .logic })
+    )
+    #expect(!MutationOperator.operators(upTo: .experimental).contains(.removeViewElement))
     #expect(try MutationOperator.parse("flip-boolean, remove-call") == [.flipBoolean, .removeCall])
     #expect(throws: LitmusFailure.self) { try MutationOperator.parse("nope") }
     #expect(throws: LitmusFailure.self) { try MutationOperator.parse(" , ") }
@@ -218,4 +222,186 @@ func `a manifest's local dependencies are read, and those outside the root are d
     #expect(stable.map(\.operatorID) == [.swapTernary])
     let added = try sites(source, [.replaceRelational, .flipBoolean])
     #expect(added.isEmpty)
+}
+
+@Test func `compound assignment exchanges operators and skips string or array literal appends`() throws {
+    let source = """
+        func f(_ a: Int, _ b: Int) -> Int {
+            var total = a
+            total += b
+            total -= 1
+            total *= 2
+            total /= 2
+            total %= 3
+            var text = "a"
+            text += "b"
+            var items: [Int] = []
+            items += [1]
+            return total
+        }
+        """
+    let found = try sites(source, [.replaceArithmetic])
+    let pairs = Set(found.map { "\($0.original) -> \($0.replacement)" })
+    #expect(
+        pairs == [
+            "total += b -> total -= b",
+            "total -= 1 -> total += 1",
+            "total *= 2 -> total /= 2",
+            "total /= 2 -> total *= 2",
+            "total %= 3 -> total *= 3",
+        ]
+    )
+}
+
+@Test func `range boundary operator shifts upper bounds while preserving range type and skipping switch patterns`()
+    throws
+{
+    let source = """
+        func f(_ n: Int) -> Int {
+            var sum = 0
+            for i in 0..<n { sum += i }
+            let closed = 1...20
+            switch n {
+            case 0..<5: return sum
+            case 5...10: return closed.count
+            default: return 0
+            }
+        }
+        """
+    let found = try sites(source, [.replaceRange])
+    #expect(found.count == 2)
+    #expect(found.contains { $0.original == "0..<n" && $0.replacement == "0..<((n) + 1)" })
+    #expect(found.contains { $0.original == "1...20" && $0.replacement == "1...((20) - 1)" })
+}
+
+@Test func `unary negation removal mutates expressions and skips direct if, guard, while and ternary conditions`()
+    throws
+{
+    let source = """
+        func f(_ a: Bool, _ b: Bool) -> Bool {
+            if !a { return !b }
+            guard !a else { return false }
+            while !b { break }
+            let t = !a ? 1 : 2
+            let combined = !a && !b
+            return combined && t > 0
+        }
+        """
+    let found = try sites(source, [.removeNegation])
+    #expect(found.map(\.original) == ["!b", "!a", "!b"])
+    #expect(found.map(\.replacement) == ["b", "a", "b"])
+}
+
+@Test func `nil coalescing replaces with fallback and skips Never-returning calls`() throws {
+    let source = """
+        func f(_ a: Int?, _ b: Int) -> Int {
+            let x = a ?? b
+            let y = a ?? fatalError("boom")
+            return x + y
+        }
+        """
+    let found = try sites(source, [.replaceNilCoalescing])
+    #expect(found.map(\.original) == ["a ?? b"])
+    #expect(found.map(\.replacement) == ["b"])
+}
+
+@Test
+func `remove-call records skipped SwiftUI view-builder leaf elements and remove-view-element mutates only leaves`()
+    throws
+{
+    let source = """
+        struct CheckoutView {
+            var body: some View {
+                VStack {
+                    Section("Order") {
+                        Text("Title")
+                        Button("Submit") { submit() }
+                    }
+                    Text("Footer")
+                }
+            }
+            func submit() {}
+        }
+        """
+    let withCallRemoval = try MutationPlanner.discover(in: source, path: "View.swift", operators: [.removeCall])
+    #expect(withCallRemoval.sites.isEmpty)
+    #expect(withCallRemoval.skipped[MutationPlanner.skippedViewBuilderReason] == 3)
+
+    let withViewRemoval = try MutationPlanner.discover(
+        in: source,
+        path: "View.swift",
+        operators: [.removeViewElement]
+    )
+    #expect(withViewRemoval.skipped.isEmpty)
+    #expect(
+        Set(withViewRemoval.sites.map(\.original)) == [
+            #"Text("Title")"#,
+            #"Button("Submit") { submit() }"#,
+            #"Text("Footer")"#,
+        ]
+    )
+    let schema = try SchemaWriter.schema(source, mutations: withViewRemoval.sites)
+    for site in withViewRemoval.sites {
+        #expect(schema.text.contains("if !__litmus_"))
+        #expect(schema.text.contains("_\(site.id) { \(site.original) }"))
+    }
+}
+
+@Test func `markdown report splits logic and UI scores and lists skipped view-builder sites`() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-md-\(UUID().uuidString)").path
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    try FileManager.default.createDirectory(atPath: root + "/Sources/App", withIntermediateDirectories: true)
+    let source = """
+        struct V {
+            var body: some View {
+                Text("a")
+                Text("b")
+            }
+            func check(_ x: Int) -> Bool { x > 0 }
+        }
+        """
+    let filePath = root + "/Sources/App/V.swift"
+    try Data(source.utf8).write(to: URL(fileURLWithPath: filePath))
+
+    let logicPlan = try await MutationPlanner.plan(root: root, operators: [.replaceRelational, .removeCall])
+    #expect(logicPlan.skipped?[MutationPlanner.skippedViewBuilderReason] == 2)
+    let entries = try await WorkspaceSnapshot.currentEntries(root)
+    let snap = Digest.sha256(try ArtifactCodec.json(entries))
+    let prov = RunProvenance(
+        toolVersion: LitmusVersion.current,
+        snapshotSHA256: snap,
+        inputs: entries,
+        driver: try BuildDriver(root: root, scheme: nil, destination: nil),
+        toolchain: "test",
+        startedAt: "2026-11-25T00:00:00Z",
+        executionPolicy: RunArtifact.executionPolicy
+    )
+    var logicArtifact = RunArtifact(provenance: prov, plan: logicPlan)
+    logicArtifact.complete = true
+    logicArtifact.results = logicPlan.mutations.map {
+        MutationResult(mutation: $0, verdict: .killed, reason: "killed")
+    }
+    let logicReport = try await MutationReport.make(logicArtifact, root: root, relative: true)
+    let logicMd = MarkdownReport.render(logicReport, artifact: logicArtifact)
+    #expect(
+        logicMd.contains("Skipped: 2 SwiftUI view-builder leaf element(s) left alone (opt in: remove-view-element)")
+    )
+    #expect(logicArtifact.logicScore == nil && logicArtifact.uiScore == nil)
+
+    let mixedPlan = try await MutationPlanner.plan(
+        root: root,
+        operators: [.replaceRelational, .removeViewElement]
+    )
+    var mixedArtifact = RunArtifact(provenance: prov, plan: mixedPlan)
+    mixedArtifact.complete = true
+    mixedArtifact.results = mixedPlan.mutations.map { m in
+        MutationResult(
+            mutation: m,
+            verdict: m.operatorID.domain == .logic ? .killed : .survived,
+            reason: m.operatorID.domain == .logic ? "killed" : "survived"
+        )
+    }
+    let mixedReport = try await MutationReport.make(mixedArtifact, root: root, relative: true)
+    let mixedMd = MarkdownReport.render(mixedReport, artifact: mixedArtifact)
+    #expect(mixedMd.contains("Logic 100 % (2/2) · UI 0 % (0/2)"))
 }

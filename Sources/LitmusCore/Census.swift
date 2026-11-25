@@ -37,7 +37,10 @@ extension CensusEntry {
         case "logical-replace (current)": .replaceLogical
         case "relational-equality", "relational-boundary-and-negation": .replaceRelational
         case "boolean-literal-flip": .flipBoolean
-        case "arithmetic-replace": .replaceArithmetic
+        case "arithmetic-replace", "compound-assignment-replace": .replaceArithmetic
+        case "range-boundary": .replaceRange
+        case "not-removal": .removeNegation
+        case "nil-coalescing-to-default": .replaceNilCoalescing
         case "void-call-removal": .removeCall
         default: nil
         }

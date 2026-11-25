@@ -16,12 +16,12 @@ struct SubjectOptions: ParsableArguments {
     var inclusions: [String] = []
     @Option(
         help:
-            "Operators to mutate, comma-separated rule ids (default: the stable tier). Known: negate-condition, swap-ternary, replace-logical, replace-relational, flip-boolean, replace-arithmetic, remove-call."
+            "Operators to mutate, comma-separated rule ids (default: the stable tier). Known: negate-condition, swap-ternary, replace-logical, replace-relational, flip-boolean, replace-arithmetic, replace-range, remove-negation, replace-nil-coalescing, remove-call, remove-view-element."
     )
     var operators: String?
     @Option(
         help:
-            "Operator tier to mutate: stable (default), standard (adds comparisons, booleans, arithmetic) or experimental (adds call removal)."
+            "Operator tier to mutate: stable (default), standard (adds comparisons, booleans, arithmetic, ranges, negation, nil-coalescing) or experimental (adds call removal). UI operators (remove-view-element) require --operators."
     )
     var operatorTier: String?
     /// The operators this run or plan mutates; `--operators` names them exactly, a tier includes every tier before it.
