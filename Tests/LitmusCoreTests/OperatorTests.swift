@@ -412,3 +412,41 @@ func `remove-call records skipped SwiftUI view-builder leaf elements and remove-
     let mixedMd = MarkdownReport.render(mixedReport, artifact: mixedArtifact)
     #expect(mixedMd.contains("Logic 100 % (2/2) · UI 0 % (0/2)"))
 }
+
+@Test func `modifier-chained view containers and chained action modifiers are excluded from remove-view-element`()
+    throws
+{
+    let source = """
+        struct SummaryView {
+            var body: some View {
+                VStack(alignment: .leading) {
+                    Text("Subtotal")
+                    Button("Save") { save() }.buttonStyle(.bordered)
+                }
+                .accessibilityElement(children: .combine)
+                .onAppear {
+                    load()
+                    track()
+                }
+            }
+            func save() {}
+            func load() {}
+            func track() {}
+        }
+        """
+    let withCallRemoval = try MutationPlanner.discover(in: source, path: "Summary.swift", operators: [.removeCall])
+    #expect(withCallRemoval.sites.isEmpty)
+    #expect(withCallRemoval.skipped[MutationPlanner.skippedViewBuilderReason] == 2)
+
+    let withViewRemoval = try MutationPlanner.discover(
+        in: source,
+        path: "Summary.swift",
+        operators: [.removeViewElement]
+    )
+    #expect(
+        Set(withViewRemoval.sites.map(\.original)) == [
+            #"Text("Subtotal")"#,
+            #"Button("Save") { save() }.buttonStyle(.bordered)"#,
+        ]
+    )
+}

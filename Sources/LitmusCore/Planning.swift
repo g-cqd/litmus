@@ -765,12 +765,13 @@ enum BuilderContext {
             }
             guard isDirectBuilderBlock else { return false }
         }
-        // A call whose trailing closure is a view container (e.g. `Section { ... }`, `VStack { ... }`, `Group { ... }`)
-        // wraps child elements; mutating its leaves avoids counting one untested screen N+1 times.
-        // Exception: interactive controls like `Button("...") { action() }` have an imperative action closure, not
-        // child views — treat them as leaf elements.
-        if call.trailingClosure != nil {
-            let callee = baseCalleeName(call)
+        // A call whose root (unwrapping chained view modifiers like `.accessibilityElement(...)`) has a trailing
+        // closure is a view container (e.g. `Section { ... }`, `VStack { ... }.padding()`); mutating its leaves avoids
+        // counting one untested screen N+1 times. Interactive controls (`Button`, `Stepper`, ...) keep their imperative
+        // action closure and stay leaf elements.
+        let root = rootCall(of: call)
+        if root.trailingClosure != nil {
+            let callee = baseCalleeName(root)
             let imperativeControlNames: Set<String> = ["Button", "Link", "Stepper", "Toggle", "Slider", "Picker"]
             if !imperativeControlNames.contains(callee) { return false }
         }
@@ -785,7 +786,7 @@ enum BuilderContext {
             if let closure = cur.as(ClosureExprSyntax.self),
                 let call = closure.parent?.as(FunctionCallExprSyntax.self)
             {
-                let callee = baseCalleeName(call)
+                let callee = immediateCalleeName(call)
                 if ["Button", "onAppear", "onDisappear", "onChange", "task", "onTapGesture", "onSubmit"].contains(
                     callee
                 ) {
@@ -798,16 +799,28 @@ enum BuilderContext {
         return false
     }
 
-    private static func baseCalleeName(_ call: FunctionCallExprSyntax) -> String {
-        var expr: ExprSyntax = call.calledExpression
-        while let member = expr.as(MemberAccessExprSyntax.self), let base = member.base {
-            if let innerCall = base.as(FunctionCallExprSyntax.self) {
-                expr = innerCall.calledExpression
-            } else {
-                return member.declName.baseName.text
-            }
+    /// Unwraps chained method/modifier calls (`VStack { ... }.padding().accessibilityElement(...)`) to the innermost
+    /// `FunctionCallExprSyntax` (`VStack { ... }`).
+    private static func rootCall(of call: FunctionCallExprSyntax) -> FunctionCallExprSyntax {
+        var current = call
+        while let member = current.calledExpression.as(MemberAccessExprSyntax.self),
+            let base = member.base?.as(FunctionCallExprSyntax.self)
+        {
+            current = base
         }
-        return expr.trimmedDescription.split(separator: ".").last.map(String.init) ?? expr.trimmedDescription
+        return current
+    }
+
+    private static func immediateCalleeName(_ call: FunctionCallExprSyntax) -> String {
+        if let member = call.calledExpression.as(MemberAccessExprSyntax.self) {
+            return member.declName.baseName.text
+        }
+        let text = call.calledExpression.trimmedDescription
+        return text.split(separator: ".").last.map(String.init) ?? text
+    }
+
+    private static func baseCalleeName(_ call: FunctionCallExprSyntax) -> String {
+        immediateCalleeName(rootCall(of: call))
     }
 
     private static func hasBuilderAttribute(_ attributes: AttributeListSyntax) -> Bool {
