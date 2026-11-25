@@ -16,13 +16,13 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-syntax.git", exact: "604.0.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", exact: "1.8.2"),
-        .package(url: "https://github.com/Aemi-Studio/aemi.git", revision: "9e38d1bee60d5d65acffef4538c671b49860c6af"),
-        .package(url: "https://github.com/g-cqd/AemiJSON.git", revision: "9144b71be7714e15db293197b47edcc55ffde71b"),
+        .package(url: "https://github.com/Aemi-Studio/aemi.git", revision: "340c49040faa49313d5632003d8224d9d0084fb0"),
+        .package(url: "https://github.com/g-cqd/AemiJSON.git", revision: "53e572d875cc42ade99083641efdfac7ab865f31"),
         .package(
             url: "https://github.com/g-cqd/AemiProtobuf.git",
-            revision: "a472d8c967c0fb6b5cab2e12b011c7a0ca3d9248"
+            revision: "6bfa87dce789dce29692ac894ed7bb9ef146965a"
         ),
-        .package(url: "https://github.com/g-cqd/analyzerkit.git", revision: "2e54cc659fab831ff3294c00b6e013fca15d45d8"),
+        .package(url: "https://github.com/g-cqd/analyzerkit.git", revision: "4b090013d19f9e86e48096081670cec744a4d9dc"),
     ],
     targets: [
         .target(
