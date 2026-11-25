@@ -432,14 +432,24 @@ private final class Sites: SyntaxVisitor {
         enter(normalized(node.extendedType.trimmedDescription), node)
     }
     override func visitPost(_ node: ExtensionDeclSyntax) { context.anchors.pop() }
+    private func adjustBuilderDepth(_ node: some SyntaxProtocol, by delta: Int) {
+        switch BuilderContext.classify(node) {
+        case .optionalViewBuilder:
+            builderDepth += delta
+            viewBuilderDepth += delta
+        case .genericBuilder:
+            builderDepth += delta
+        case .none:
+            break
+        }
+    }
+
     override func visit(_ node: FunctionDeclSyntax) -> SyntaxVisitorContinueKind {
-        if BuilderContext.isBuilder(node) { builderDepth += 1 }
-        if BuilderContext.isOptionalSupportingViewBuilder(node) { viewBuilderDepth += 1 }
+        adjustBuilderDepth(node, by: 1)
         return enter(signature(node.name.text, node.signature.parameterClause.parameters), node, body: true)
     }
     override func visitPost(_ node: FunctionDeclSyntax) {
-        if BuilderContext.isBuilder(node) { builderDepth -= 1 }
-        if BuilderContext.isOptionalSupportingViewBuilder(node) { viewBuilderDepth -= 1 }
+        adjustBuilderDepth(node, by: -1)
         context.anchors.pop()
     }
     override func visit(_ node: InitializerDeclSyntax) -> SyntaxVisitorContinueKind {
@@ -460,13 +470,11 @@ private final class Sites: SyntaxVisitor {
     override func visitPost(_ node: SubscriptDeclSyntax) { context.anchors.pop() }
     override func visit(_ node: VariableDeclSyntax) -> SyntaxVisitorContinueKind {
         let names = node.bindings.map { normalized($0.pattern.trimmedDescription) }.joined(separator: ",")
-        if BuilderContext.isBuilder(node) { builderDepth += 1 }
-        if BuilderContext.isOptionalSupportingViewBuilder(node) { viewBuilderDepth += 1 }
+        adjustBuilderDepth(node, by: 1)
         return enter(names, node, body: true)
     }
     override func visitPost(_ node: VariableDeclSyntax) {
-        if BuilderContext.isBuilder(node) { builderDepth -= 1 }
-        if BuilderContext.isOptionalSupportingViewBuilder(node) { viewBuilderDepth -= 1 }
+        adjustBuilderDepth(node, by: -1)
         context.anchors.pop()
     }
     override func visit(_ node: AccessorDeclSyntax) -> SyntaxVisitorContinueKind {
@@ -697,35 +705,42 @@ enum BuilderContext {
         "some Commands", "some SwiftUI.Commands",
     ]
 
-    static func isBuilder(_ node: some SyntaxProtocol) -> Bool {
-        if let variable = node.as(VariableDeclSyntax.self) {
-            return hasBuilderAttribute(variable.attributes)
-                || variable.bindings.contains {
-                    $0.pattern.trimmedDescription == "body"
-                        && $0.typeAnnotation?.type.trimmedDescription.hasPrefix("some ") == true
-                }
-        }
-        if let function = node.as(FunctionDeclSyntax.self) {
-            return hasBuilderAttribute(function.attributes)
-                || function.signature.returnClause?.type.trimmedDescription.hasPrefix("some ") == true
-        }
-        return false
+    enum Kind {
+        case none
+        case genericBuilder
+        case optionalViewBuilder
     }
 
-    /// True only for SwiftUI builders whose `buildOptional` accepts `if !m { element }` statements.
-    static func isOptionalSupportingViewBuilder(_ node: some SyntaxProtocol) -> Bool {
+    static func classify(_ node: some SyntaxProtocol) -> Kind {
         if let variable = node.as(VariableDeclSyntax.self) {
-            return hasOptionalViewBuilderAttribute(variable.attributes)
-                || variable.bindings.contains {
+            if matches(variable.attributes, in: optionalViewBuilders)
+                || variable.bindings.contains(where: {
                     $0.pattern.trimmedDescription == "body"
                         && $0.typeAnnotation.map { viewBodyTypes.contains(normalized($0.type.trimmedDescription)) }
                             == true
-                }
+                })
+            {
+                return .optionalViewBuilder
+            }
+            if hasBuilderAttribute(variable.attributes)
+                || variable.bindings.contains(where: {
+                    $0.pattern.trimmedDescription == "body"
+                        && $0.typeAnnotation?.type.trimmedDescription.hasPrefix("some ") == true
+                })
+            {
+                return .genericBuilder
+            }
+            return .none
         }
         if let function = node.as(FunctionDeclSyntax.self) {
-            return hasOptionalViewBuilderAttribute(function.attributes)
+            if matches(function.attributes, in: optionalViewBuilders) { return .optionalViewBuilder }
+            if hasBuilderAttribute(function.attributes)
+                || function.signature.returnClause?.type.trimmedDescription.hasPrefix("some ") == true
+            {
+                return .genericBuilder
+            }
         }
-        return false
+        return .none
     }
 
     /// True for a leaf view statement inside a multi-statement builder block (skipping containers with trailing
@@ -785,10 +800,10 @@ enum BuilderContext {
         }
     }
 
-    private static func hasOptionalViewBuilderAttribute(_ attributes: AttributeListSyntax) -> Bool {
+    private static func matches(_ attributes: AttributeListSyntax, in names: Set<String>) -> Bool {
         attributes.contains {
             guard let name = $0.as(AttributeSyntax.self)?.attributeName.trimmedDescription else { return false }
-            return optionalViewBuilders.contains(name)
+            return names.contains(name)
         }
     }
 }
