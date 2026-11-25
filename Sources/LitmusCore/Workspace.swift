@@ -14,24 +14,22 @@ public enum WorkspaceStrategy: Sendable, Equatable {
     case inPlace
 }
 
-/// An exclusive advisory lock on a file (`flock`), held until released or the process ends: two runs never share a
-/// persistent or in-place workspace.
+/// An exclusive advisory lock on a file (`AemiIO.FileLock`), held until released or the process ends: two runs never
+/// share a persistent or in-place workspace. Explicitly calls `LOCK_UN` before `close` via `FileLock.release()`.
 final class WorkspaceLock: Sendable {
-    private let file: PosixFile
+    private let lock: FileLock
 
     init(path: String) throws {
         do {
-            file = try PosixFile(path: path, mode: .readWrite(create: true))
+            lock = try FileLock(path: path, mode: .exclusiveNonBlocking)
+        } catch  where error.errno == EWOULDBLOCK || error.errno == EAGAIN {
+            throw LitmusFailure("another Litmus run holds \(path); one run per workspace")
         } catch {
             throw LitmusFailure("cannot open the workspace lock \(path): \(error)")
         }
-        guard flock(file.fileDescriptor, LOCK_EX | LOCK_NB) == 0 else {
-            file.close()
-            throw LitmusFailure("another Litmus run holds \(path); one run per workspace")
-        }
     }
 
-    func release() { file.close() }
+    func release() { lock.release() }
 }
 
 /// A workspace ready to build in, and how the run ends with it.
