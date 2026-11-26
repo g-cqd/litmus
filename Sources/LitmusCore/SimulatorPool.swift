@@ -254,17 +254,9 @@ public final class SimulatorPool<Executor: ProcessExecutor>: Sendable {
     /// (one made just before the id was written). Nothing else is ever touched.
     static func remove(_ ownership: Ownership, executor: Executor, directory: String) async -> [String] {
         var targets = Set(ownership.udids)
-        if let listing = try? await simctl(executor, ["list", "-j", "devices"], directory: directory, timeout: 60),
-            listing.exitStatus == 0,
-            let object = try? JSONSerialization.jsonObject(with: Data(listing.stdout)) as? [String: Any],
-            let groups = object["devices"] as? [String: [[String: Any]]]
-        {
-            let owned = Set(ownership.names)
-            for entry in groups.values.joined() {
-                if let name = entry["name"] as? String, owned.contains(name), let udid = entry["udid"] as? String {
-                    targets.insert(udid)
-                }
-            }
+        let owned = Set(ownership.names)
+        for device in await listedDevices(executor, directory: directory) ?? [] where owned.contains(device.name) {
+            targets.insert(device.udid)
         }
         var failures: [String] = []
         for udid in targets.sorted() {
@@ -276,6 +268,19 @@ public final class SimulatorPool<Executor: ProcessExecutor>: Sendable {
     }
 
     // MARK: simctl
+
+    /// Every device `simctl` lists, by name and id; nil when the listing fails.
+    static func listedDevices(_ executor: Executor, directory: String) async -> [(name: String, udid: String)]? {
+        guard let listing = try? await simctl(executor, ["list", "-j", "devices"], directory: directory, timeout: 60),
+            listing.exitStatus == 0,
+            let object = try? JSONSerialization.jsonObject(with: Data(listing.stdout)) as? [String: Any],
+            let groups = object["devices"] as? [String: [[String: Any]]]
+        else { return nil }
+        return groups.values.joined().compactMap { entry in
+            guard let name = entry["name"] as? String, let udid = entry["udid"] as? String else { return nil }
+            return (name, udid)
+        }
+    }
 
     static func simctl(_ executor: Executor, _ arguments: [String], directory: String, timeout: Int) async throws
         -> ProcessOutput

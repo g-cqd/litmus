@@ -23,26 +23,11 @@ public enum Maintenance {
     ) async -> Cleaned {
         var cleaned = Cleaned()
         let live = SimulatorPool<Executor>.liveNames(registry: registry)
-        guard
-            let listing = try? await SimulatorPool<Executor>.simctl(
-                executor,
-                ["list", "-j", "devices"],
-                directory: directory,
-                timeout: 60
-            ),
-            listing.exitStatus == 0,
-            let object = try? JSONSerialization.jsonObject(with: Data(listing.stdout)) as? [String: Any],
-            let groups = object["devices"] as? [String: [[String: Any]]]
-        else {
+        guard let devices = await SimulatorPool<Executor>.listedDevices(executor, directory: directory) else {
             cleaned.failures.append("simctl list failed: simulators not cleaned")
             return cleaned
         }
-        let orphans = groups.values.joined().compactMap { entry -> (name: String, udid: String)? in
-            guard let name = entry["name"] as? String, let udid = entry["udid"] as? String,
-                isPoolDeviceName(name), !live.contains(name)
-            else { return nil }
-            return (name, udid)
-        }
+        let orphans = devices.filter { isPoolDeviceName($0.name) && !live.contains($0.name) }
         cleaned.simulators = orphans.map(\.name).sorted()
         guard !dryRun else { return cleaned }
         cleaned.failures += await SimulatorPool<Executor>.recoverStale(
