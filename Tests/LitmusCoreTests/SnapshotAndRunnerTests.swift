@@ -807,6 +807,23 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(verified.mutations.count == sites.count && verified.acceptance?.verifying == true)
 }
 
+@Test func `the agent report lists each survivor with its code, a verify command and the summary`() async throws {
+    let (result, base) = try await run(FakeExecutor(.init(active: .pass)), source: twoSites)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let document = AgentReport.make(result, root: base.path + "/input", domain: .logic)
+    #expect(document.summary.survived == 2 && document.summary.killed == 0)
+    #expect(document.gaps.count == 2)
+    let gap = try #require(document.gaps.first)
+    #expect(gap.status == "survived" && gap.diagnostic == "reached_not_detected")
+    #expect(gap.contextSnippet.contains("1: public func a(_ x: Bool) -> Int { x ? 1 : 2 }"))
+    #expect(gap.verifyCommand.contains("--only-id \(gap.id)"))
+    #expect(gap.verifyCommand.contains("--operators \(gap.operator)"))
+    #expect(gap.verifyCommand.hasSuffix(#"--output "$(mktemp -d)/run""#))
+    #expect(AgentReport.make(result, root: base.path + "/input", domain: .ui).gaps.isEmpty)
+    #expect(AgentReport.shellQuoted("platform=iOS Simulator,id=X") == "'platform=iOS Simulator,id=X'")
+    #expect(AgentReport.shellQuoted("it's") == #"'it'\''s'"#)
+}
+
 @Test func `a time budget stops starting work and reports what did not run`() async throws {
     let executor = FakeExecutor(.init(buildDelay: .milliseconds(1_200)))
     let (result, base) = try await run(executor, source: twoSites) { $0.budgetSeconds = 1 }

@@ -11,8 +11,12 @@ struct Analyze: AsyncParsableCommand {
     @Argument(help: "Current subject root.") var root: String = "."
     @OptionGroup var change: ChangeOptions
     @Option(help: "Run artifact (.json or .pb). Missing data never means clean.") var results: String
-    @Option(help: "xcode, json, sarif, markdown (job summary) or stryker (mutation-testing-report-schema 2).")
+    @Option(
+        help:
+            "xcode, json, sarif, markdown (job summary), stryker (mutation-testing-report-schema 2) or agent (one self-contained record per gap, for coding agents)."
+    )
     var format: String = "xcode"
+    @Option(help: "With --format agent: the gaps of logic, ui or all mutants.") var domain: String = "all"
     @Option(help: "Print paths relative to this root (must be the current subject root in this version).")
     var relativeTo: String?
     @Option(help: "Scope the report to a source file (repeatable), not test execution.") var only: [String] = []
@@ -26,8 +30,11 @@ struct Analyze: AsyncParsableCommand {
     @Option(help: "new-survivors: fail on survivors and uncovered mutants the --baseline (base branch) does not hold.")
     var gate: String?
     mutating func run() async throws {
-        guard ["xcode", "json", "sarif", "markdown", "stryker"].contains(format) else {
-            throw ValidationError("format must be xcode, json, sarif, markdown or stryker")
+        guard ["xcode", "json", "sarif", "markdown", "stryker", "agent"].contains(format) else {
+            throw ValidationError("format must be xcode, json, sarif, markdown, stryker or agent")
+        }
+        guard let agentDomain = AgentReport.Domain(rawValue: domain) else {
+            throw ValidationError("domain must be logic, ui or all")
         }
         guard gate == nil || gate == "new-survivors" else { throw ValidationError("gate must be new-survivors") }
         if gate != nil, baseline == nil {
@@ -82,6 +89,9 @@ struct Analyze: AsyncParsableCommand {
             switch format {
             case "markdown": print(MarkdownReport.render(report, artifact: artifact), terminator: "")
             case "stryker": print(try StrykerReport.render(artifact, root: root))
+            case "agent":
+                let document = AgentReport.make(artifact, root: root, domain: agentDomain)
+                print(String(decoding: try ArtifactCodec.json(document), as: UTF8.self))
             default: print(try LitmusReportFormat.render(report, format: format, root: relativeTo == nil ? nil : root))
             }
         } catch { try fail(error, code: .outputFailure) }
