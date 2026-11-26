@@ -22,7 +22,7 @@ let package = Package(
             url: "https://github.com/g-cqd/AemiProtobuf.git",
             revision: "d8985c489aa19e285214d032ef98855b6b95f30b"
         ),
-        .package(url: "https://github.com/g-cqd/analyzerkit.git", revision: "59ac36d3c267e997a24f47e62654e069bb1a7395"),
+        .package(url: "https://github.com/g-cqd/analyzerkit.git", revision: "4ab94256dfd5d42aa8190b9d5ead5989225db7f0"),
     ],
     targets: [
         .target(
