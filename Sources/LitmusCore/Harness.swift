@@ -30,6 +30,8 @@ public struct TestRunRequest: Sendable {
     /// Collect single-pass per-test reach during this run by interleaving `{"litmusReach":"<id>"}` records into the
     /// serial Swift Testing event stream via a FIFO.
     public var collectPerTestReach = false
+    /// The run's ``ActivationEnvironment`` token, which the schemas it built read their variables under.
+    public var environmentToken = ""
 }
 
 /// What a suite execution showed, before activation is considered.
@@ -131,9 +133,11 @@ func nanoseconds(since start: ContinuousClock.Instant) -> Int64 {
 /// The common environment of every subject process: the selector, the marker directory, a private `TMPDIR`, and the
 /// developer directory analyzerkit's scrubbing would drop.
 func subjectEnvironment(_ request: TestRunRequest?) -> [String: String] {
-    var environment = [ActivationEnvironment.activeID: request?.activeID ?? ""]
+    let token = request?.environmentToken ?? ""
+    var environment = [ActivationEnvironment.key(ActivationEnvironment.activeID, token: token): request?.activeID ?? ""]
     if let request {
-        environment[ActivationEnvironment.coverageDirectory] = request.coverageDirectory
+        environment[ActivationEnvironment.key(ActivationEnvironment.coverageDirectory, token: token)] =
+            request.coverageDirectory
         environment["TMPDIR"] = request.temporaryDirectory
         // Unique per test run; also written into `.xctestrun` environments, so simulator processes carry it.
         environment[processTokenVariable] = request.coverageDirectory
@@ -434,7 +438,10 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
                     events: events,
                     directory: workspace,
                     baseEnvironment: environment,
-                    traceKey: ActivationEnvironment.testTracePath,
+                    traceKey: ActivationEnvironment.key(
+                        ActivationEnvironment.testTracePath,
+                        token: request.environmentToken
+                    ),
                     deadline: remaining()
                 ) { streamPath in
                     ToolCommand(

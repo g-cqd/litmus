@@ -139,9 +139,11 @@ private final class FakeExecutor: ProcessExecutor {
         calls.withLock { $0.append(environment) }
         deadlines.withLock { $0.append(timeout) }
         reports.withLock { $0.append(URL(fileURLWithPath: command.arguments[index + 1]).lastPathComponent) }
-        let active = !(environment[ActivationEnvironment.activeID] ?? "").isEmpty
+        // Read the variables under the names the installed schemas read, as a compiled subject would.
+        let keys = schemaKeys(sources(directory))
+        let active = !(keys.active.flatMap { environment[$0] } ?? "").isEmpty
         if config.reach, !active || config.markActive,
-            let markers = environment[ActivationEnvironment.coverageDirectory]
+            let markers = keys.coverage.flatMap({ environment[$0] })
         {
             for path in sources(directory) {
                 let text = try String(contentsOfFile: path, encoding: .utf8)
@@ -219,7 +221,7 @@ private func run(
     let active = try #require(result.results.first?.mutation.id)
     // The inactive schema is the baseline and the control at once; `swift test` cannot select tests, so a
     // targeted confirmation reruns the whole suite alone.
-    #expect(executor.calls.withLock { $0.map { $0[ActivationEnvironment.activeID] ?? "" } } == ["", active, active])
+    #expect(executor.calls.withLock { $0.map(activeID(in:)) } == ["", active, active])
     #expect(executor.builds.withLock { $0 } == 1)
     #expect(result.policy?.baselineBuild == "inactive-schema")
     #expect(result.policy?.killConfirmation == .targeted)
@@ -310,7 +312,7 @@ private let twoSites = """
     let active = try #require(result.results.first?.mutation.id)
     #expect(result.results.map(\.verdict) == [.killed])
     #expect(
-        executor.calls.withLock { $0.map { $0[ActivationEnvironment.activeID] ?? "" } } == ["", "", active, active]
+        executor.calls.withLock { $0.map(activeID(in:)) } == ["", "", active, active]
     )
     #expect(executor.builds.withLock { $0 } == 2)
     #expect(result.policy?.baselineBuild == "unmutated")
@@ -671,7 +673,7 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(second.results[0].reusedFrom == first.provenance.runID && second.results[1].reusedFrom == nil)
     #expect(second.reuse?.resumed == 1)
     #expect(
-        executor.calls.withLock { $0.map { $0[ActivationEnvironment.activeID] ?? "" } }.filter { !$0.isEmpty }.count
+        executor.calls.withLock { $0.map(activeID(in:)) }.filter { !$0.isEmpty }.count
             == 2
     )
 }
@@ -1064,4 +1066,25 @@ private let fourConditions = """
     #expect(
         markdown.contains("Skipped: 2 SwiftUI view-builder leaf element(s) left alone (opt in: remove-view-element)")
     )
+}
+
+/// The variable names the schemas in `paths` read: the activation and the marker directory.
+private func schemaKeys(_ paths: [String]) -> (active: String?, coverage: String?) {
+    var active: String?
+    var coverage: String?
+    for path in paths {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+        active = active ?? text.firstMatch(of: /_env\("(LITMUS_ACTIVE_ID(?:_[0-9a-f]{8})?)"\)/).map { String($0.1) }
+        coverage =
+            coverage ?? text.firstMatch(of: /_env\("(LITMUS_COVERAGE_DIR(?:_[0-9a-f]{8})?)"\)/).map { String($0.1) }
+    }
+    return (active, coverage)
+}
+
+/// The mutant a recorded test environment activates, under whichever run token it carries.
+private func activeID(in environment: [String: String]) -> String {
+    environment.first {
+        $0.key == ActivationEnvironment.activeID || $0.key.hasPrefix(ActivationEnvironment.activeID + "_")
+    }?
+    .value ?? ""
 }

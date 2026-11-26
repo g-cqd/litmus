@@ -358,7 +358,8 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
                 events: events,
                 directory: workspace,
                 baseEnvironment: environment(request, bundle: bundle),
-                traceKey: "SIMCTL_CHILD_" + ActivationEnvironment.testTracePath,
+                traceKey: "SIMCTL_CHILD_"
+                    + ActivationEnvironment.key(ActivationEnvironment.testTracePath, token: request.environmentToken),
                 deadline: remaining()
             ) { streamPath in
                 spawnCommand(udid: udid, bundle: bundle, events: streamPath, configuration: configJSON)

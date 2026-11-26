@@ -109,6 +109,9 @@ public struct RunOptions: Sendable {
     public var workspace = WorkspaceStrategy.copy
     /// The directory holding Xcode's `DerivedData` (`--build-directory`); default: the run's or the persistent one.
     public var buildDirectory: String?
+    /// The ``ActivationEnvironment`` token of the run's schemas and test processes; a run session derives it from the
+    /// subject root when empty.
+    public var environmentToken = ""
 
     public init() {}
 

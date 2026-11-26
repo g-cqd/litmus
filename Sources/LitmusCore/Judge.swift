@@ -103,6 +103,7 @@ struct Judge: Sendable {
         )
         request.onlySwiftTesting = only
         request.collectPerTestReach = collectPerTestReach
+        request.environmentToken = options.environmentToken
         // A run alone decides a timeout: never at background priority.
         request.supervision = options.supervision(background: alone ? false : nil)
         if harness.selectsModules { request.onlyModules = only == nil ? modules : nil }

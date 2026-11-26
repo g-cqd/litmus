@@ -54,6 +54,10 @@ final class RunSession<Executor: ProcessExecutor> {
         self.runner = runner
         self.executor = executor
         self.driver = driver
+        var options = options
+        if options.environmentToken.isEmpty {
+            options.environmentToken = ActivationEnvironment.token(for: driver.root)
+        }
         self.options = options
         let now = clock.now
         started = now
@@ -909,7 +913,12 @@ final class RunSession<Executor: ProcessExecutor> {
             }
             buildIndex += 1
             let name = "schema-\(buildIndex)"
-            let installedGroup = try runner.install(group, in: snapshot, journal: prepared.restore)
+            let installedGroup = try runner.install(
+                group,
+                in: snapshot,
+                journal: prepared.restore,
+                token: options.environmentToken
+            )
             installed = installedGroup
             phase = clock.now
             counter.build()

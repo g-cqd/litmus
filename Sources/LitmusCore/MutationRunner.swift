@@ -396,7 +396,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
     }
 
     /// In place, each original is made recoverable through `journal` before its file is rewritten.
-    func install(_ group: [Mutation], in snapshot: WorkspaceSnapshot, journal: InPlaceJournal?) throws
+    func install(_ group: [Mutation], in snapshot: WorkspaceSnapshot, journal: InPlaceJournal?, token: String) throws
         -> InstalledSchema
     {
         var originals: [String: Data] = [:]
@@ -406,7 +406,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
                 let path = try snapshot.path(for: relative)
                 let bytes = try BoundedFileReader.read(path: path, cap: 2 << 20)
                 guard let source = String(bytes: bytes, encoding: .utf8) else { throw LitmusFailure("not UTF-8") }
-                let schema = try SchemaWriter.schema(source, mutations: sites)
+                let schema = try SchemaWriter.schema(source, mutations: sites, token: token)
                 originals[path] = Data(bytes)
                 if let journal {
                     try journal.rewrite(path, original: bytes, schema: Array(schema.text.utf8))

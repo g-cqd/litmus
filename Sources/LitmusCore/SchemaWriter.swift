@@ -4,6 +4,10 @@ internal import SwiftParser
 internal import SwiftSyntax
 
 /// The environment a schematised subject reads at startup; never changed while it runs.
+///
+/// Each name carries the run's token (`LITMUS_ACTIVE_ID_<token>`), so a subject whose tests start another Litmus run
+/// (Litmus on itself, a wrapper tool) never hands the outer run's selection to the inner run's schemas. An empty token
+/// keeps the bare names.
 public enum ActivationEnvironment {
     /// The mutant to activate; empty or absent activates none.
     public static let activeID = "LITMUS_ACTIVE_ID"
@@ -12,6 +16,15 @@ public enum ActivationEnvironment {
     /// Optional path to a per-test trace log where test runners and schema evaluations append ordered `T <test>` and
     /// `R <id>` lines during the baseline/control run (single-pass per-test reach).
     public static let testTracePath = "LITMUS_TEST_TRACE"
+
+    /// `base` as the run with `token` spells it: `base_token`, or `base` for an empty token.
+    public static func key(_ base: String, token: String) -> String { token.isEmpty ? base : base + "_" + token }
+
+    /// The token of a run over the subject at `root`: the first 8 hex digits of the SHA-256 of its canonical path.
+    /// Stable across runs of one subject, so a persistent build directory still compiles schemas incrementally.
+    public static func token(for root: String) -> String {
+        String(Digest.sha256(Array(SourcePath.canonical(root).utf8)).prefix(8))
+    }
 
     /// The mutant identifiers recorded in `directory`; files that are not identifiers are ignored.
     public static func reached(in directory: String) -> Set<String> {
@@ -194,7 +207,8 @@ public enum SchemaWriter {
     /// The runtime helper uses `@_silgen_name` C declarations (`getenv`, `open`, `close`, `lseek`, `write`,
     /// `os_unfair_lock_*`) instead of injecting `import Foundation`, avoiding Swift 6 access-level conflicts with
     /// `internal import Foundation` or `private import Foundation` in other files of the module.
-    public static func schema(_ source: String, mutations: [Mutation]) throws -> RenderedSchema {
+    /// - Parameter token: the run's ``ActivationEnvironment`` token; empty reads the bare variable names.
+    public static func schema(_ source: String, mutations: [Mutation], token: String = "") throws -> RenderedSchema {
         guard !mutations.isEmpty else { return RenderedSchema(text: source, lines: [:]) }
         let bytes = Array(source.utf8)
         let fingerprint = Digest.sha256(bytes)
@@ -216,7 +230,7 @@ public enum SchemaWriter {
             throw LitmusFailure("a mutant precedes the schema declarations of \(sorted[0].path)")
         }
 
-        let declarations = runtime(symbol: symbol, ids: sorted.map(\.id))
+        let declarations = runtime(symbol: symbol, ids: sorted.map(\.id), token: token)
         let prefix: [UInt8] = placement.isTopLevelCode ? Array(("\n" + declarations).utf8) : []
         var output: [UInt8] = []
         output.reserveCapacity(bytes.count + sorted.count * 96 + declarations.utf8.count)
@@ -347,7 +361,8 @@ public enum SchemaWriter {
     /// Emits the per-file runtime without adding `import Foundation`, using `@_silgen_name` C bindings for environment
     /// and marker/trace file I/O so files in modules with `internal import Foundation` or `private import Foundation`
     /// never suffer access-level import collisions.
-    private static func runtime(symbol: String, ids: [String]) -> String {
+    private static func runtime(symbol: String, ids: [String], token: String) -> String {
+        func key(_ base: String) -> String { ActivationEnvironment.key(base, token: token) }
         func helperBlock(strict: Bool) -> String {
             let atUnsafe = strict ? "@unsafe " : ""
             let kwUnsafe = strict ? "unsafe " : ""
@@ -417,9 +432,9 @@ public enum SchemaWriter {
             #else
             \(helperBlock(strict: false))
             #endif
-            nonisolated private let \(symbol): Swift.String = \(symbol)_env("\(ActivationEnvironment.activeID)") ?? ""
-            nonisolated private let \(symbol)_dir: Swift.String? = \(symbol)_env("\(ActivationEnvironment.coverageDirectory)")
-            nonisolated private let \(symbol)_trace: Swift.String? = \(symbol)_env("\(ActivationEnvironment.testTracePath)")
+            nonisolated private let \(symbol): Swift.String = \(symbol)_env("\(key(ActivationEnvironment.activeID))") ?? ""
+            nonisolated private let \(symbol)_dir: Swift.String? = \(symbol)_env("\(key(ActivationEnvironment.coverageDirectory))")
+            nonisolated private let \(symbol)_trace: Swift.String? = \(symbol)_env("\(key(ActivationEnvironment.testTracePath))")
             nonisolated private let \(symbol)_tracker = \(symbol)_Tracker()
             nonisolated private let \(symbol)_tracks: Swift.Bool = \(symbol)_dir != nil || \(symbol)_trace != nil
             @inline(__always) nonisolated private func \(symbol)_reach(_ id: Swift.String) -> Swift.Bool {
