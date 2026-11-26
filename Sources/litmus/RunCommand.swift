@@ -168,6 +168,8 @@ struct Run: AsyncParsableCommand {
         options.resume = resume
         options.reachFrom = reachFrom
         options.simulatorHarness = !noSimulatorHelper
+        options.allTestTargets = build.allTestTargets
+        options.includeUITests = build.includeUITests
         options.acceptedFile = try subject.resolvedAcceptedFile()
         options.verifyAccepted = verifyAccepted
         do { options.onlyIDs = try onlyID.map(MutationSelector.init(parsing:)) } catch {

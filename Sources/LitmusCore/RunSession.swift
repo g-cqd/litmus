@@ -283,6 +283,20 @@ final class RunSession<Executor: ProcessExecutor> {
     /// Plans the sites in the workspace and records the run's provenance and checkpoint state.
     func planAndProvenance() async throws {
         account("snapshot", since: phase)
+        if options.allTestTargets {
+            guard prepared.restore == nil, let container = driver.container else {
+                throw LitmusFailure("--all-test-targets needs --project and a copied workspace (not in-place)")
+            }
+            let scheme = try SynthesizedScheme.install(
+                workspace: snapshot.root,
+                container: container,
+                includeUITests: options.includeUITests
+            )
+            prepared.notes.append(
+                "scheme \(SynthesizedScheme.name) synthesized in the workspace for \(scheme.targets.count) test "
+                    + "target(s): \(scheme.targets.joined(separator: ", "))"
+            )
+        }
         try driver.validatePackage(workspace: snapshot.root)
         try XcodeTestConfiguration.preflight(driver: driver, workspace: snapshot.root)
         phase = clock.now

@@ -137,14 +137,28 @@ struct BuildSelectionOptions: ParsableArguments {
     @Option(help: "Xcode scheme (required for iOS packages/projects).") var scheme: String?
     @Option(help: "Explicit Xcode test plan configured by the scheme; requires --scheme.") var testPlan: String?
     @Option(help: "Xcode destination (supply an existing simulator ID for reproducibility).") var destination: String?
+    @Flag(
+        help:
+            "Instead of --scheme: test every unit-test target of --project through a scheme Litmus writes into its workspace copy."
+    )
+    var allTestTargets = false
+    @Flag(help: "With --all-test-targets: UI-test targets too.") var includeUITests = false
 
     func driver(root: String) throws -> BuildDriver {
         guard testPlan == nil || scheme != nil else { throw ValidationError("--test-plan requires --scheme") }
+        if allTestTargets {
+            guard scheme == nil, testPlan == nil, project != nil else {
+                throw ValidationError("--all-test-targets needs --project and replaces --scheme and --test-plan")
+            }
+        }
+        guard !includeUITests || allTestTargets else {
+            throw ValidationError("--include-ui-tests needs --all-test-targets")
+        }
         var driver = try BuildDriver(
             root: root,
             container: project,
             packagePath: packagePath,
-            scheme: scheme,
+            scheme: allTestTargets ? SynthesizedScheme.name : scheme,
             destination: destination
         )
         driver.testPlan = testPlan

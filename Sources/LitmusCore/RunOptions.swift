@@ -120,6 +120,10 @@ public struct RunOptions: Sendable {
     public var acceptedFile: String?
     /// Run accepted mutants too, to report those a test now detects (`--verify-accepted`).
     public var verifyAccepted = false
+    /// Test every unit-test target of the Xcode project or workspace through a synthesized scheme
+    /// (`--all-test-targets`); UI-test targets too with `includeUITests`.
+    public var allTestTargets = false
+    public var includeUITests = false
 
     public init() {}
 

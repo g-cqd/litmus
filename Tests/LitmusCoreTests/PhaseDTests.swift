@@ -375,4 +375,30 @@ struct PhaseDTests {
         #expect(outside.testDriven?.wholeFiles == ["Sources/A/A.swift"])
         #expect(outside.testDriven?.mutants == [])
     }
+
+    // MARK: - D4 Scheme synthesis
+
+    @Test func `the synthesized scheme tests every unit-test target and lives only in the workspace copy`() throws {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/ExampleApp").path
+        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-d4-\(UUID().uuidString)")
+            .path
+        defer { try? FileManager.default.removeItem(atPath: workspace) }
+        try FileManager.default.copyItem(atPath: fixture, toPath: workspace)
+        try? FileManager.default.removeItem(atPath: workspace + "/ExampleApp.xcodeproj/xcshareddata")
+        let (path, targets) = try SynthesizedScheme.install(workspace: workspace, container: "ExampleApp.xcodeproj")
+        #expect(targets == ["ExampleAppTests"])
+        #expect(path.hasSuffix("/ExampleApp.xcodeproj/xcshareddata/xcschemes/__LitmusAllUnitTests.xcscheme"))
+        let schemes = XcodeSchemeReader.schemes(in: SourcePath.canonical(workspace + "/ExampleApp.xcodeproj"))
+        #expect(schemes.map(\.name) == [SynthesizedScheme.name])
+        #expect(schemes.first?.testTargets == ["ExampleAppTests"])
+        // The scheme passes the same preflight a hand-written one does.
+        let driver = try BuildDriver(
+            root: workspace,
+            container: "ExampleApp.xcodeproj",
+            scheme: SynthesizedScheme.name,
+            destination: "platform=iOS Simulator,name=Any"
+        )
+        try XcodeTestConfiguration.preflight(driver: driver, workspace: workspace)
+    }
 }
