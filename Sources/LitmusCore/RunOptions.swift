@@ -112,6 +112,9 @@ public struct RunOptions: Sendable {
     /// The ``ActivationEnvironment`` token of the run's schemas and test processes; a run session derives it from the
     /// subject root when empty.
     public var environmentToken = ""
+    /// Run only the mutants these select (`--only-id`), always executed: their stored or resumed verdicts are not
+    /// reused, since the tests may have changed since. Empty runs the whole plan.
+    public var onlyIDs: [MutationSelector] = []
 
     public init() {}
 

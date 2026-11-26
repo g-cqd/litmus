@@ -75,6 +75,12 @@ struct Run: AsyncParsableCommand {
     var budget: Int?
     @Option(help: "Run at most this many mutants, changed lines first; the rest are reported as not run.")
     var maxMutants: Int?
+    @Option(
+        name: .customLong("only-id"),
+        help:
+            "Run only this mutant (repeatable): its id, an id prefix of 8+ hex digits, or path:line[:operator]. Always executed, never reused."
+    )
+    var onlyID: [String] = []
     @Flag(help: "Build and test the unmutated subject first, instead of using the first schema's inactive run.")
     var unmutatedBaseline = false
     @Option(
@@ -156,6 +162,9 @@ struct Run: AsyncParsableCommand {
         options.resume = resume
         options.reachFrom = reachFrom
         options.simulatorHarness = !noSimulatorHelper
+        do { options.onlyIDs = try onlyID.map(MutationSelector.init(parsing:)) } catch {
+            throw ValidationError("\(error)")
+        }
         do { options.shard = try shard.map(ShardSelection.init(parsing:)) } catch {
             throw ValidationError("\(error)")
         }

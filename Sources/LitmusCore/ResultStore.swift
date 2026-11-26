@@ -61,15 +61,24 @@ public struct ReuseContext: Sendable {
         var outside: Set<String> = []
         var byClosure: [[String]: String] = [:]
         let sorted = entries.sorted { $0.path < $1.path }
-        func digest(under directories: [String]) -> String {
-            if let known = byClosure[directories] { return known }
+        // With test-target selection, a mutant runs only the test targets covering its file: another target's test
+        // files cannot change its verdict, so editing them keeps it reusable. A file no target claims still counts.
+        let narrowsTests = mode == .closure && closureKnown && context.selectTestTargets
+        let testOwners = narrowsTests ? Self.testOwners(sorted, root: root, classification: classification) : [:]
+        /// The digest of the entries under `directories`, leaving out the test files of targets other than
+        /// `covering` (nil keeps every test file).
+        func digest(under directories: [String], covering: Set<ProjectTarget>? = nil) -> String {
+            let cacheKey =
+                directories + ["\u{0}"] + (covering.map { $0.map { "\($0.container)|\($0.name)" }.sorted() } ?? [])
+            if let known = byClosure[cacheKey] { return known }
             let prefixes = directories.map { $0.isEmpty ? "" : $0 + "/" }
             var lines: [UInt8] = []
             for entry in sorted where prefixes.contains(where: { $0.isEmpty || entry.path.hasPrefix($0) }) {
+                if let covering, let owners = testOwners[entry.path], owners.isDisjoint(with: covering) { continue }
                 lines += Array("\(entry.path)\u{0}\(entry.sha256)\n".utf8)
             }
             let value = Digest.sha256(lines)
-            byClosure[directories] = value
+            byClosure[cacheKey] = value
             return value
         }
         for path in Set(mutations.map(\.path)) {
@@ -78,7 +87,11 @@ public struct ReuseContext: Sendable {
             let closure = closureKnown ? classification?.packageClosure(containing: absolute) : nil
             if let closure, closure.allSatisfy({ $0 == root || $0.hasPrefix(root + "/") }) {
                 directories = closure.map { $0 == root ? "" : String($0.dropFirst(root.count + 1)) }
-                closures[path] = digest(under: directories ?? [])
+                let covering = classification.map { Set($0.testTargets(covering: absolute)) }
+                closures[path] = digest(
+                    under: directories ?? [],
+                    covering: narrowsTests && covering?.isEmpty == false ? covering : nil
+                )
             } else if inPlace || closure.map({ !$0.isEmpty }) == true {
                 // A local dependency outside the root (an in-place run of one package of a repository), or, in place,
                 // a closure that cannot be read: files the root's inventory does not hold could change the verdict
@@ -102,6 +115,23 @@ public struct ReuseContext: Sendable {
         self.closures = closures
         self.testFiles = testFiles
         self.outsideRoot = outside
+    }
+
+    /// The test targets owning each test file among `entries`: files only test targets compile.
+    private static func testOwners(
+        _ entries: [SnapshotEntry],
+        root: String,
+        classification: ProjectClassification?
+    ) -> [String: Set<ProjectTarget>] {
+        guard let classification else { return [:] }
+        var owners: [String: Set<ProjectTarget>] = [:]
+        for entry in entries {
+            guard case .targets(let targets) = classification.classify(root + "/" + entry.path).provenance,
+                !targets.isEmpty, targets.allSatisfy(\.isTest)
+            else { continue }
+            owners[entry.path] = Set(targets)
+        }
+        return owners
     }
 
     /// The files whose package depends on a local package outside the root: their mutants are never reused.

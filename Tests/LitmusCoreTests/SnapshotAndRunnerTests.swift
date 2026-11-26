@@ -678,6 +678,31 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     )
 }
 
+@Test func `only-id runs just the selected mutant and never reuses its earlier verdict`() async throws {
+    let base = try fixture(twoSites)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let driver = try BuildDriver(root: base.path + "/input", scheme: nil, destination: nil)
+    let first = try await MutationRunner(executor: FakeExecutor()).run(
+        driver: driver,
+        outputDirectory: base.path + "/run1",
+        options: options()
+    )
+    let target = try #require(first.results.last?.mutation)
+    var selected = options()
+    selected.resume = base.path + "/run1"
+    selected.onlyIDs = [try MutationSelector(parsing: target.id)]
+    let executor = FakeExecutor()
+    let second = try await MutationRunner(executor: executor).run(
+        driver: driver,
+        outputDirectory: base.path + "/run2",
+        options: selected
+    )
+    #expect(second.plan.mutations.map(\.id) == [target.id])
+    #expect(second.results.map(\.verdict) == [.killed])
+    #expect(second.results[0].reusedFrom == nil)
+    #expect(executor.calls.withLock { $0.map(activeID(in:)) }.contains(target.id))
+}
+
 @Test func `a time budget stops starting work and reports what did not run`() async throws {
     let executor = FakeExecutor(.init(buildDelay: .milliseconds(1_200)))
     let (result, base) = try await run(executor, source: twoSites) { $0.budgetSeconds = 1 }

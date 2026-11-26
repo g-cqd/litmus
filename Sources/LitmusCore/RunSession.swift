@@ -298,10 +298,14 @@ final class RunSession<Executor: ProcessExecutor> {
             excludeDeclarations: options.excludeDeclarations
         )
         account("plan", since: phase)
+        // `--only-id`: only the selected files are rewritten into the workspace, only their mutants run.
+        let mutations =
+            options.onlyIDs.isEmpty
+            ? clonePlan.mutations : try MutationSelector.select(clonePlan.mutations, by: options.onlyIDs)
         plan = MutationPlan(
             root: root,
             analyzedFiles: clonePlan.analyzedFiles,
-            mutations: clonePlan.mutations,
+            mutations: mutations,
             suppressed: clonePlan.suppressed,
             notes: clonePlan.notes
         )
@@ -419,7 +423,15 @@ final class RunSession<Executor: ProcessExecutor> {
             durationHints[result.mutation.id] = durationHints[result.mutation.id] ?? result.nanoseconds
         }
         var reused: (resumed: Int, stored: Int) = (0, 0)
-        for mutation in plan.mutations {
+        // Selected mutants are re-verified after a test edit: an earlier verdict would answer for the old tests.
+        let reusable = options.onlyIDs.isEmpty ? plan.mutations : []
+        if !options.onlyIDs.isEmpty {
+            artifact.notes.append(
+                "--only-id: \(plan.mutations.count) mutant(s) selected and executed; stored and resumed verdicts not "
+                    + "reused, the store entry is overwritten"
+            )
+        }
+        for mutation in reusable {
             guard let key = artifact.results.first(where: { $0.mutation.id == mutation.id })?.reuseKey else { continue }
             let resumed = previous[key]
             guard let hit = resumed ?? store?.lookup(key, mutation: mutation) else { continue }
