@@ -97,7 +97,8 @@ public struct SimulatorInventory: Sendable, Equatable {
         }
         if let id = fields["id"] {
             guard let device = devices.first(where: { $0.udid.caseInsensitiveCompare(id) == .orderedSame }) else {
-                throw LitmusFailure("no available iOS Simulator has id \(id)")
+                // An Xcode upgrade replaces runtimes and their devices: say what there is now.
+                throw LitmusFailure("no available iOS Simulator has id \(id); available: \(availableList)")
             }
             return device
         }
@@ -108,8 +109,7 @@ public struct SimulatorInventory: Sendable, Equatable {
         }
         let named = devices.filter { $0.name == name }
         guard !named.isEmpty else {
-            let known = Set(devices.map(\.name)).sorted().joined(separator: ", ")
-            throw LitmusFailure("no available iOS Simulator is named \(name); available: \(known)")
+            throw LitmusFailure("no available iOS Simulator is named \(name); available: \(availableList)")
         }
         let os = fields["OS"] ?? "latest"
         let versions = Set(named.map(\.version))
@@ -133,6 +133,17 @@ public struct SimulatorInventory: Sendable, Equatable {
             )
         }
         return device
+    }
+
+    /// The available simulators for an error message: name, iOS version and id, newest runtime first, at most 12.
+    var availableList: String {
+        guard !devices.isEmpty else { return "none (install an iOS Simulator runtime in Xcode)" }
+        let sorted = devices.sorted { lhs, rhs in
+            lhs.version != rhs.version
+                ? Self.newer(lhs.version, than: rhs.version) : lhs.name.lowercased() < rhs.name.lowercased()
+        }
+        let shown = sorted.prefix(12).map { "\($0.name) (iOS \($0.version), id=\($0.udid))" }
+        return shown.joined(separator: "; ") + (sorted.count > 12 ? "; and \(sorted.count - 12) more" : "")
     }
 
     /// Lists the simulators through `executor`.

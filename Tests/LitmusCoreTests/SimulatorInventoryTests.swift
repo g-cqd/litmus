@@ -79,3 +79,16 @@ private func inventory() throws -> SimulatorInventory { try SimulatorInventory(j
     #expect(resolved.packagePath == "Pkg" && resolved.scheme == "Lib" && resolved.testPlan == "Plan")
     #expect(resolved.xcodebuildArguments == ["-skipPackagePluginValidation"])
 }
+
+@Test func `an unknown destination names the available simulators, newest runtime first`() throws {
+    let simulators = try inventory()
+    do {
+        _ = try simulators.resolve("platform=iOS Simulator,id=DEADBEEF-0000-0000-0000-000000000000")
+        Issue.record("an unknown id resolved")
+    } catch let failure as LitmusFailure {
+        let message = String(describing: failure)
+        #expect(message.contains("available: iPhone 15 (iOS 18.10, id=55555555-5555-5555-5555-555555555555)"))
+        #expect(!message.contains("iPad Air") && !message.contains("Watch"))
+    }
+    #expect(SimulatorInventory(devices: []).availableList.hasPrefix("none"))
+}
