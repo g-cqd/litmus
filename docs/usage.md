@@ -19,19 +19,26 @@ Litmus mutates with operators in three tiers; each tier includes the ones before
 | Tier | Operators |
 | --- | --- |
 | `stable` (default) | `negate-condition`, `swap-ternary`, `replace-logical` |
-| `standard` | adds `replace-relational`, `flip-boolean`, `replace-arithmetic` |
+| `standard` | adds `replace-relational`, `flip-boolean`, `replace-arithmetic`, `replace-range`, `remove-negation`, `replace-nil-coalescing` |
 | `experimental` | adds `remove-call` |
+
+Extended operators (`remove-view-element`, `replace-stdlib-semantic`, `remove-normalization`, `replace-optional-chain`, `return-boundary`, `return-constant`, `empty-body`, `empty-closure-body`, `remove-switch-case`) are explicit opt-in via `--operators`.
 
 `--operator-tier TIER` picks a tier; `--operators ID,ID` names exactly which operators run (the two are alternatives); both work on `plan` and `run`. `litmus census` lists the candidates and which operator implements each. Litmus excludes tests, previews, generated code, debug-only regions, macro and attribute arguments, enum case declarations, and files it identifies as outside compiled targets. The plan records exclusions; inspect it when project classification is ambiguous.
 
-Use `--only-path GLOB` and `--exclude-path GLOB` to control files. A unified diff can be supplied with `--diff FILE`, or computed with `--diff-base REV`. `--diff-scope lines` is the default; `files` includes all sites in affected files.
+Use `--only-path GLOB`, `--exclude-path GLOB`, `--arid-call NAME`, and `--exclude-declaration PATTERN` to control scope. A unified diff can be supplied with `--diff FILE`, or computed with `--diff-base REV`. `--diff-scope lines` is the default; `files` includes all sites in affected files.
 
 ## Configuration
 
-A `.litmus.json` file can set shared analyzer configuration, for example:
+A `.litmus.json` file can set shared analyzer configuration and Litmus-specific scope keys, for example:
 
 ```json
-{ "exclude": ["**/Generated/**"] }
+{
+  "exclude": ["**/Generated/**"],
+  "include": ["Sources/Core/**"],
+  "aridCalls": ["Analytics.track", "Telemetry"],
+  "excludeDeclarations": ["*ForTesting", "*ForPreview"]
+}
 ```
 
 A `litmus` section in `.swift-analyzers.json` is also supported. Use `--config FILE` to select an explicit file.
@@ -43,7 +50,7 @@ Suppress an intentional mutation with a source directive:
 let value = condition ? first : second
 ```
 
-Suppressed sites remain visible in the plan.
+Suppressed sites remain visible in the plan; an unknown operator name in a directive emits a warning note in the plan and suppresses nothing.
 
 ## Score gates
 

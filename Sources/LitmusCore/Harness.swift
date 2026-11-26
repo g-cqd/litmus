@@ -27,6 +27,9 @@ public struct TestRunRequest: Sendable {
     public var repetitions: Int? = nil
     /// The most Swift Testing tests run at once in one process (`--experimental-maximum-parallelization-width`).
     public var parallelizationWidth: Int? = nil
+    /// Collect single-pass per-test reach during this run by interleaving `{"litmusReach":"<id>"}` records into the
+    /// serial Swift Testing event stream via a FIFO.
+    public var collectPerTestReach = false
 }
 
 /// What a suite execution showed, before activation is considered.
@@ -47,6 +50,22 @@ public struct TestRunResult: Sendable {
     public var failingTests: [String] = []
     /// Counts per test module, for a harness that runs modules separately; empty otherwise.
     public var moduleCounts: [String: TestCounts] = [:]
+    /// Per-test mutant reach collected during a single-pass control run (`collectPerTestReach`).
+    public var perTestReach: [String: Set<String>] = [:]
+    /// Mutants evaluated outside any test boundary during single-pass collection (`static let`, launch init).
+    public var outsideTests: Set<String> = []
+    /// Per-test execution durations in nanoseconds collected from the event stream.
+    public var testDurations: [String: Int64] = [:]
+    /// Per-test counts collected from the event stream.
+    public var perTestCounts: [String: TestCounts] = [:]
+
+    mutating func absorb(_ scan: TestEvidence.EventScan?) {
+        guard let scan else { return }
+        for (id, tests) in scan.perTestReach { perTestReach[id, default: []].formUnion(tests) }
+        outsideTests.formUnion(scan.outsideTests)
+        for (test, nanos) in scan.testDurations { testDurations[test] = max(testDurations[test] ?? 0, nanos) }
+        perTestCounts.merge(scan.perTestCounts) { _, new in new }
+    }
 }
 
 /// A Swift Testing test identifier without its trailing source location (`/File.swift:12:6`), the form `--filter` takes.
@@ -131,6 +150,90 @@ func writeLog(_ result: ProcessOutput, path: String) throws {
 
 /// The stop reason of a run stopped at its first failing Swift Testing issue.
 let failFastReason = "Swift Testing recorded a failing issue"
+/// The stop reason of an `xcodebuild` run whose simulator test host crashed and restarted mid-suite.
+let hostCrashReason = "Xcode test host crashed and restarted"
+
+/// Runs `makeCommand(streamPath)`, interposing a FIFO into `events` when `collectPerTestReach` is enabled.
+func runEventStream<Executor: ProcessExecutor>(
+    executor: Executor,
+    request: TestRunRequest,
+    stem: String,
+    events: String,
+    directory: String,
+    baseEnvironment: [String: String],
+    traceKey: String,
+    deadline: Int,
+    makeCommand: (String) -> ToolCommand
+) async throws -> (output: ProcessOutput?, stoppedOnFailure: Bool) {
+    guard request.collectPerTestReach else {
+        return try await runWatching(
+            executor,
+            makeCommand(events),
+            directory: directory,
+            environment: baseEnvironment,
+            deadline: deadline,
+            events: events,
+            failFast: request.failFast,
+            supervision: request.supervision
+        )
+    }
+    let fifo = "\(request.temporaryDirectory)/\(stem).fifo"
+    var traceEnv = baseEnvironment
+    traceEnv[traceKey] = fifo
+    let command = makeCommand(fifo)
+    return try await withEventFIFO(fifoPath: fifo, outputFile: events) {
+        try await runWatching(
+            executor,
+            command,
+            directory: directory,
+            environment: traceEnv,
+            deadline: deadline,
+            events: events,
+            failFast: request.failFast,
+            supervision: request.supervision
+        )
+    }
+}
+
+/// Runs `body` with a named FIFO at `fifoPath` whose bytes are drained into `outputFile` on a detached thread, so
+/// multiple `O_WRONLY | O_APPEND` writers in the child process (`swiftpm-testing-helper` / `SimulatorHelper` and the
+/// schema runtime's `LITMUS_TEST_TRACE`) interleave complete lines in causal order without overwriting index 0.
+func withEventFIFO<T: Sendable>(
+    fifoPath: String,
+    outputFile: String,
+    body: () async throws -> T
+) async throws -> T {
+    try? FileManager.default.removeItem(atPath: fifoPath)
+    let created = fifoPath.withCString { cPath in unsafe mkfifo(cPath, 0o600) }
+    guard created == 0 else {
+        throw LitmusFailure("mkfifo failed at \(fifoPath) (errno \(errno))")
+    }
+    defer { try? FileManager.default.removeItem(atPath: fifoPath) }
+    FileManager.default.createFile(atPath: outputFile, contents: nil)
+    let drainer = Task.detached {
+        guard let reader = FileHandle(forReadingAtPath: fifoPath),
+            let writer = FileHandle(forWritingAtPath: outputFile)
+        else { return }
+        defer {
+            try? reader.close()
+            try? writer.close()
+        }
+        while let chunk = try? reader.read(upToCount: 65_536), !chunk.isEmpty {
+            try? writer.write(contentsOf: chunk)
+        }
+    }
+    do {
+        let value = try await body()
+        await drainer.value
+        return value
+    } catch {
+        // Ensure a blocked reader on an unopened FIFO wakes up if `body` threw before spawning the child.
+        let wake = fifoPath.withCString { cPath in unsafe open(cPath, O_WRONLY | O_NONBLOCK) }
+        if wake >= 0 { close(wake) }
+        await drainer.value
+        throw error
+    }
+}
 
 /// Runs a process while watching a Swift Testing event stream; on the first failing issue the run's monitor stops it
 /// (analyzerkit's `BoundedProcess`: TERM then KILL to its group, its session cleaned up after).
@@ -287,6 +390,7 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
         var passed = 0, skipped = 0
         var evidence: [String] = []
         var failing: [String] = []
+        var scans: [TestEvidence.EventScan] = []
         func result(_ outcome: TestRunOutcome, _ counts: TestCounts?, _ reason: String) -> TestRunResult {
             var result = TestRunResult(
                 outcome: outcome,
@@ -297,6 +401,7 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
             )
             result.failingTests = failing
             result.moduleCounts = moduleCounts
+            for scan in scans { result.absorb(scan) }
             return result
         }
         var moduleCounts: [String: TestCounts] = [:]
@@ -319,31 +424,34 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
                 var filters = (request.onlySwiftTesting ?? []).flatMap { ["--filter", filterPattern(for: $0)] }
                 filters += request.skipSwiftTesting.flatMap { ["--skip", filterPattern(for: $0)] }
                 if let repetitions = request.repetitions { filters += ["--repetitions", String(repetitions)] }
-                if let width = request.parallelizationWidth {
+                if let width = request.collectPerTestReach ? 1 : request.parallelizationWidth {
                     filters += ["--experimental-maximum-parallelization-width", String(width)]
                 }
-                let command = ToolCommand(
-                    executable: toolchain.testingHelper,
-                    arguments: [
-                        "--test-bundle-path", bundle.binaryPath, "--testing-library", "swift-testing",
-                        "--event-stream-output-path", events, "--event-stream-version", "0", "--xunit-output", xunit,
-                    ] + filters
-                )
-                let (output, stopped) = try await runWatching(
-                    executor,
-                    command,
-                    directory: workspace,
-                    environment: environment,
-                    deadline: remaining(),
+                let (output, stopped) = try await runEventStream(
+                    executor: executor,
+                    request: request,
+                    stem: stem,
                     events: events,
-                    failFast: request.failFast,
-                    supervision: request.supervision
-                )
+                    directory: workspace,
+                    baseEnvironment: environment,
+                    traceKey: ActivationEnvironment.testTracePath,
+                    deadline: remaining()
+                ) { streamPath in
+                    ToolCommand(
+                        executable: toolchain.testingHelper,
+                        arguments: [
+                            "--test-bundle-path", bundle.binaryPath, "--testing-library", "swift-testing",
+                            "--event-stream-output-path", streamPath, "--event-stream-version", "0",
+                            "--xunit-output", xunit,
+                        ] + filters
+                    )
+                }
                 if let output { try writeLog(output, path: "\(logs)/\(stem).log") }
                 evidence += ["logs/\(stem).events.jsonl", "logs/\(stem).log"]
                 let scan = try? TestEvidence.swiftTestingEvents(
                     BoundedFileReader.read(path: events, cap: 64 << 20)
                 )
+                if let scan { scans.append(scan) }
                 failing += (scan?.failedTests ?? []).map(testName).sorted()
                 if stopped { return result(.failed, nil, "Swift Testing recorded a failing issue (stopped early)") }
                 guard let output else { return result(.unusable, nil, "Swift Testing produced no process result") }
@@ -573,10 +681,13 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
             )
         }
         if output.stopReason == failFastReason, let stream {
-            // Stopped at the first failed test: the bundle is incomplete, and the stream names what failed.
+            // Stopped at the first failed test or host crash: the bundle is incomplete, and the stream names why.
             let scanned = (try? BoundedFileReader.read(path: stream, cap: 64 << 20)).map(XcodeResultStream.scan)
             evidence.append("logs/\(request.name).stream.jsonl")
             discardBundle()
+            if scanned?.crashed == true {
+                return result(.crashed, nil, hostCrashReason)
+            }
             var stopped = result(.failed, nil, "an Xcode test failed (stopped early)")
             stopped.failingTests = scanned?.failedTests ?? []
             return stopped

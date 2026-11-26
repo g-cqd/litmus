@@ -33,7 +33,9 @@ struct Plan: AsyncParsableCommand {
                 packagePath: packagePath,
                 jobs: jobs,
                 scope: try await change.scope(root: subject.absoluteRoot),
-                operators: try subject.operatorSet()
+                operators: try subject.operatorSet(),
+                aridCalls: try subject.resolvedAridCalls(),
+                excludeDeclarations: try subject.resolvedExcludeDeclarations()
             )
         } catch let error as ValidationError {
             throw error

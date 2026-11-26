@@ -141,7 +141,9 @@ final class RunSession<Executor: ProcessExecutor> {
             packagePath: driver.packagePath,
             jobs: 8,
             scope: scope,
-            operators: options.operators
+            operators: options.operators,
+            aridCalls: options.aridCalls,
+            excludeDeclarations: options.excludeDeclarations
         )
         account("plan", since: phase)
         if sourcePlan.mutations.isEmpty {
@@ -288,7 +290,9 @@ final class RunSession<Executor: ProcessExecutor> {
             packagePath: driver.packagePath,
             jobs: 8,
             scope: options.scope,
-            operators: options.operators
+            operators: options.operators,
+            aridCalls: options.aridCalls,
+            excludeDeclarations: options.excludeDeclarations
         )
         account("plan", since: phase)
         plan = MutationPlan(
@@ -579,8 +583,14 @@ final class RunSession<Executor: ProcessExecutor> {
         }
         var (allowedWorkers, pool, current) = try makeJudge(for: harness)
         phase = clock.now
+        let singlePassReach = options.perTestReach && harness.selectsTests && harness.controlsSwiftTesting
         var usageBefore = ChildUsage.cpuSeconds()
-        var baseline = try await current.execute(name: "baseline", activeID: "", deadline: options.timeoutCap)
+        var baseline = try await current.execute(
+            name: "baseline",
+            activeID: "",
+            deadline: options.timeoutCap,
+            collectPerTestReach: singlePassReach
+        )
         var suiteCPU = ChildUsage.cpuSeconds() - usageBefore
         if (baseline.result.outcome != .passed || (baseline.result.counts?.passed ?? 0) == 0),
             let direct = harness as? SimulatorDirectHarness<Executor>, direct.hasAppHostedTargets
@@ -634,7 +644,8 @@ final class RunSession<Executor: ProcessExecutor> {
                 let rebaseline = try await withoutFlaky.execute(
                     name: "baseline-without-flaky",
                     activeID: "",
-                    deadline: options.timeoutCap
+                    deadline: options.timeoutCap,
+                    collectPerTestReach: singlePassReach
                 )
                 guard rebaseline.result.outcome == .passed, let counts = rebaseline.result.counts,
                     counts.passed > 0
@@ -673,7 +684,8 @@ final class RunSession<Executor: ProcessExecutor> {
                 let rebaseline = try await withoutFlaky.execute(
                     name: "baseline-without-flaky",
                     activeID: "",
-                    deadline: options.timeoutCap
+                    deadline: options.timeoutCap,
+                    collectPerTestReach: singlePassReach
                 )
                 guard rebaseline.result.outcome == .passed, let counts = rebaseline.result.counts,
                     counts.passed > 0
@@ -939,10 +951,14 @@ final class RunSession<Executor: ProcessExecutor> {
             if let known = established {
                 current = known
                 phase = clock.now
+                let singlePassReach =
+                    options.perTestReach && known.judge.harness.selectsTests
+                    && known.judge.harness.controlsSwiftTesting
                 var first = try await known.judge.execute(
                     name: "\(name)-control",
                     activeID: "",
-                    deadline: known.deadline
+                    deadline: known.deadline,
+                    collectPerTestReach: singlePassReach
                 )
                 func sound(_ execution: Judge.Execution) -> Bool {
                     execution.result.outcome == .passed && execution.result.counts == known.counts
@@ -952,7 +968,8 @@ final class RunSession<Executor: ProcessExecutor> {
                     let again = try await known.judge.execute(
                         name: "\(name)-control-retry",
                         activeID: "",
-                        deadline: known.deadline
+                        deadline: known.deadline,
+                        collectPerTestReach: singlePassReach
                     )
                     if sound(again) {
                         artifact.notes.append(
@@ -1015,46 +1032,70 @@ final class RunSession<Executor: ProcessExecutor> {
                 )
             }
             let covered = group.filter { control.reached.contains($0.id) }
-            if options.perTestReach, judge.harness.selectsTests, !current.testFunctions.isEmpty, !covered.isEmpty {
+            if options.perTestReach, judge.harness.selectsTests, !covered.isEmpty {
                 let ids = Set(covered.map(\.id))
                 var reach: [String: [String]] = artifact.perTestReach ?? [:]
                 var durations: [String: Int64] = artifact.testNanoseconds ?? [:]
-                let runs = Array(current.testFunctions.enumerated())
-                let probing = judge
-                try await forEachConcurrently(
-                    runs,
-                    limit: workerCount,
-                    { pair in
-                        try await probing.execute(
-                            name: "\(name)-reach-\(pair.offset)",
-                            activeID: "",
-                            deadline: deadline,
-                            only: [pair.element]
-                        )
+                if judge.harness.controlsSwiftTesting, !control.result.perTestCounts.isEmpty {
+                    // Single-pass per-test reach from the serial control run's interleaved FIFO event stream: 1 run
+                    // instead of O(T) runs, excluding sites reached outside any test boundary (`static let` / launch).
+                    perTestCounts.merge(control.result.perTestCounts) { _, new in new }
+                    for (test, nanos) in control.result.testDurations {
+                        durations[test] = max(durations[test] ?? 0, nanos)
                     }
-                ) { index, execution in
-                    let test = runs[index].element
-                    guard execution.result.outcome == .passed else {
-                        artifact.notes.append(
-                            "per-test reach: \(test) did not pass alone (\(execution.result.reason))"
-                        )
-                        return
+                    let outside = control.result.outsideTests
+                    for id in ids where !outside.contains(id) {
+                        if let tests = control.result.perTestReach[id], !tests.isEmpty {
+                            var merged = Set(reach[id] ?? [])
+                            merged.formUnion(tests)
+                            reach[id] = merged.sorted()
+                        }
                     }
-                    durations[test] = max(durations[test] ?? 0, execution.result.nanoseconds)
-                    if let counts = execution.result.counts { perTestCounts[test] = counts }
-                    for id in execution.reached.intersection(ids) { reach[id, default: []].append(test) }
+                } else if !current.testFunctions.isEmpty {
+                    let runs = Array(current.testFunctions.enumerated())
+                    let probing = judge
+                    try await forEachConcurrently(
+                        runs,
+                        limit: workerCount,
+                        { pair in
+                            try await probing.execute(
+                                name: "\(name)-reach-\(pair.offset)",
+                                activeID: "",
+                                deadline: deadline,
+                                only: [pair.element]
+                            )
+                        }
+                    ) { index, execution in
+                        let test = runs[index].element
+                        guard execution.result.outcome == .passed else {
+                            artifact.notes.append(
+                                "per-test reach: \(test) did not pass alone (\(execution.result.reason))"
+                            )
+                            return
+                        }
+                        durations[test] = max(durations[test] ?? 0, execution.result.nanoseconds)
+                        if let counts = execution.result.counts { perTestCounts[test] = counts }
+                        for id in execution.reached.intersection(ids) { reach[id, default: []].append(test) }
+                    }
                 }
                 artifact.perTestReach = reach.mapValues { $0.sorted() }
                 artifact.testNanoseconds = durations
                 artifact.testCounts = perTestCounts
                 // This schema's reach decides its mutants: selection and the kill check (t37, t38).
-                for site in covered { judge.reach[site.id] = Set(reach[site.id] ?? []) }
+                for site in covered {
+                    if let tests = reach[site.id], !tests.isEmpty {
+                        judge.reach[site.id] = Set(tests)
+                    }
+                }
             }
             judge.testCounts.merge(perTestCounts) { _, new in new }
             let deciding = judge
+            var unnarrowedJudge = judge
+            unnarrowedJudge.reach = [:]
             // Each first run's decision is journalled as it comes (aemi's `forEachConcurrently`): a crash of Litmus
-            // loses only the runs in flight. Reruns wait for the parallel pass and run alone, as before.
+            // loses only the runs in flight. Narrowed survivors wait for `recheckSurvivors` before being recorded.
             var reruns: [Judge.Pending] = []
+            var narrowedSurvivors: [Judge.Decision] = []
             var late: [Mutation] = []
             try await forEachConcurrently(
                 Self.longestFirst(covered, hints: durationHints),
@@ -1065,7 +1106,14 @@ final class RunSession<Executor: ProcessExecutor> {
                 }
             ) { _, step in
                 switch step {
-                case .done(let decision): try runner.record(decision, into: &artifact, sink)
+                case .done(let decision):
+                    if options.recheckSurvivors, decision.verdict == .survived,
+                        deciding.selected(decision.site) != nil
+                    {
+                        narrowedSurvivors.append(decision)
+                    } else {
+                        try runner.record(decision, into: &artifact, sink)
+                    }
                 case .rerun(let pending): reruns.append(pending)
                 case .notStarted(let site): late.append(site)
                 }
@@ -1127,7 +1175,44 @@ final class RunSession<Executor: ProcessExecutor> {
                     late.append(pending.site)
                     continue
                 }
-                try runner.record(try await judge.finish(pending), into: &artifact, sink)
+                let decision = try await judge.finish(pending)
+                if options.recheckSurvivors, decision.verdict == .survived, deciding.selected(decision.site) != nil {
+                    narrowedSurvivors.append(decision)
+                } else {
+                    try runner.record(decision, into: &artifact, sink)
+                }
+            }
+            if !narrowedSurvivors.isEmpty {
+                // Soundness check for per-test reach narrowing: re-run survivors against the full covering modules so
+                // cross-test shared state or XCTest cases can still detect the mutant.
+                var recheckReruns: [Judge.Pending] = []
+                let fullJudge = unnarrowedJudge
+                try await forEachConcurrently(
+                    narrowedSurvivors,
+                    limit: workerCount,
+                    { prior -> (Judge.Decision, Judge.Step?) in
+                        if let budgetEnd, ContinuousClock.now >= budgetEnd { return (prior, nil) }
+                        return (prior, try await fullJudge.first(prior.site))
+                    }
+                ) { _, pair in
+                    let (prior, step) = pair
+                    guard let step else {
+                        try runner.record(prior, into: &artifact, sink)
+                        return
+                    }
+                    switch step {
+                    case .done(let full): try runner.record(full, into: &artifact, sink)
+                    case .rerun(let pending): recheckReruns.append(pending)
+                    case .notStarted: try runner.record(prior, into: &artifact, sink)
+                    }
+                }
+                for pending in recheckReruns {
+                    if let budgetEnd, clock.now >= budgetEnd {
+                        late.append(pending.site)
+                        continue
+                    }
+                    try runner.record(try await unnarrowedJudge.finish(pending), into: &artifact, sink)
+                }
             }
             if !late.isEmpty {
                 try runner.untested(

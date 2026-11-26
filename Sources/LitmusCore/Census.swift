@@ -42,6 +42,13 @@ extension CensusEntry {
         case "not-removal": .removeNegation
         case "nil-coalescing-to-default": .replaceNilCoalescing
         case "void-call-removal": .removeCall
+        case "collection-method-swap": .replaceStdlibSemantic
+        case "collection-method-removal": .removeNormalization
+        case "return-default-bool", "return-default-number", "return-default-string", "return-default-nil",
+            "return-default-empty-collection":
+            .returnConstant
+        case "return-early-void": .emptyBody
+        case "switch-case-skip (to default)": .removeSwitchCase
         default: nil
         }
     }

@@ -16,10 +16,18 @@ Each operator has a rule identifier, used by `--operators`, by suppression direc
 | `replace-nil-coalescing` | standard | replace nil-coalescing (`a ?? b`) with its fallback (`b`) |
 | `remove-call` | experimental | skip a call statement whose result is unused |
 | `remove-view-element` | experimental (UI, opt-in) | skip a leaf SwiftUI view-builder element (`--operators` only; reported separately from logic score) |
+| `replace-stdlib-semantic` | experimental (opt-in) | swap standard-library semantic pairs (`min`/`max`, `allSatisfy`/`contains`, `prefix`/`dropLast`, `dropFirst`/`suffix`, `hasPrefix`/`hasSuffix`) |
+| `remove-normalization` | experimental (opt-in) | remove String normalization calls (`.lowercased()`, `.uppercased()`, `.trimmingCharacters(in:)`) |
+| `replace-optional-chain` | experimental (opt-in) | force-unwrap an optional-chained expression (`a?.b` to `a!.b`, outside assignment targets) |
+| `return-boundary` | experimental (opt-in) | shift or empty a typed return value (`(n) + 1`, `""`, `[]`) |
+| `return-constant` | experimental (opt-in) | replace a typed return value with a boundary constant (`0`, `1`, `nil`, `true`, `false`) |
+| `empty-body` | experimental (opt-in) | skip the body of a non-throwing `Void`-returning function or method |
+| `empty-closure-body` | experimental (opt-in) | skip the body of a trailing `Void` closure (excluding `withLock`, `sync`, `autoreleasepool`, `assumeIsolated`) |
+| `remove-switch-case` | experimental (opt-in) | guard a non-default `switch` case (`where !marker`) so it falls through to `default` |
 
 ## What is left alone
 
-- Every operator: tests, previews, generated code, debug-only regions, macro arguments, attribute arguments (compile-time constants), enum case declarations (raw values).
+- Every operator: tests, previews, generated code, debug-only regions, macro arguments, attribute arguments (compile-time constants), enum case declarations (raw values), declarations matching `excludeDeclarations`, and arguments of `aridCalls` / debug logging (`debugPrint`, `dump`, `NSLog`, `os_log`, `Logger.*`).
 - `replace-relational`: `===` and `!==`, and operators Litmus does not list (`&+`, `..<`).
 - `flip-boolean`: a literal in a `case` pattern, where it is matched and not evaluated.
 - `replace-arithmetic`: an operand that is a string literal (concatenation; its `-` never compiles).

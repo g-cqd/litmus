@@ -29,7 +29,11 @@ public struct RunOptions: Sendable {
     public var exclude: [String] = []
     /// When not empty, only files matching these substrings or globs are mutated.
     public var include: [String] = []
-    /// Maximum non-overlapping sites per schema build, 1...256.
+    /// Calls neither removed by `remove-call` nor mutated inside their arguments (`aridCalls` / `--arid-call`).
+    public var aridCalls: [String] = []
+    /// Declarations whose bodies are not mutated (`excludeDeclarations` / `--exclude-declaration`).
+    public var excludeDeclarations: [String] = []
+    /// Maximum sites per schema build, 1...1024 (default 256 with bounded expression nesting).
     /// The operators mutated; the stable tier unless a run asks for more.
     public var operators = MutationOperator.defaults
     /// Simulators to test on at once, for an Xcode run on an iOS Simulator: Litmus makes this many (clones of the
@@ -42,7 +46,7 @@ public struct RunOptions: Sendable {
     public var testTargets: [String] = []
     /// One line on standard error per decided mutant.
     public var progress = false
-    public var batchSize = 64
+    public var batchSize = 256
     /// Deadline of one build, in seconds.
     public var buildTimeout = 900
     /// Upper bound of the per-suite deadline, in seconds; the deadline itself derives from the baseline.
@@ -71,10 +75,12 @@ public struct RunOptions: Sendable {
     public var suiteWidth: Int?
     /// Run, for each mutant, only the test targets that can reach its file (from the manifests, without building).
     public var selectTestTargets = true
-    /// After each schema's control run, run every Swift Testing test alone, no mutant active, and record which tests
-    /// reach which mutants (`RunArtifact.perTestReach`): the data per-test selection would use. Costs one run per test
-    /// and schema build.
+    /// Record which Swift Testing tests reach which mutants (`RunArtifact.perTestReach`) in a single serial control
+    /// pass via an event-stream FIFO, narrowing each mutant's execution to its reaching tests.
     public var perTestReach = false
+    /// Re-verify mutants that survived a `perTestReach`-narrowed run against all covering test modules so shared-state
+    /// interactions across tests never produce a false survivor.
+    public var recheckSurvivors = true
     /// The change a pull-request run is limited to (`--diff`, `--diff-base`); nil mutates the whole subject.
     public var scope: ChangeScope?
     /// Stop starting schema builds and first runs after this many seconds; what did not run is reported as such.
@@ -116,7 +122,7 @@ public struct RunOptions: Sendable {
     }
 
     func validate() throws {
-        guard (1...256).contains(batchSize), (1...86_400).contains(buildTimeout), (1...86_400).contains(timeoutCap),
+        guard (1...1024).contains(batchSize), (1...86_400).contains(buildTimeout), (1...86_400).contains(timeoutCap),
             (1...100).contains(timeoutFactor), (1...86_400).contains(minimumTimeout), minimumTimeout <= timeoutCap,
             (1...256).contains(jobs), (1...16).contains(simulators), (0...1_048_576).contains(memoryLimitMiB),
             (1...100).contains(baselineRepetitions),

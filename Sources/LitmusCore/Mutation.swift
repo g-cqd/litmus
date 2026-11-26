@@ -35,11 +35,20 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
     case replaceNilCoalescing = "replace-nil-coalescing"
     case removeCall = "remove-call"
     case removeViewElement = "remove-view-element"
+    case replaceStdlibSemantic = "replace-stdlib-semantic"
+    case removeNormalization = "remove-normalization"
+    case replaceOptionalChain = "replace-optional-chain"
+    case returnBoundary = "return-boundary"
+    case returnConstant = "return-constant"
+    case emptyBody = "empty-body"
+    case emptyClosureBody = "empty-closure-body"
+    case removeSwitchCase = "remove-switch-case"
 
     /// The kind of edit it makes, which decides how its schema is written.
     public var shape: SchemaShape {
         switch self {
-        case .removeCall, .removeViewElement: .statement
+        case .removeCall, .removeViewElement, .emptyBody, .emptyClosureBody: .statement
+        case .removeSwitchCase: .clause
         default: .expression
         }
     }
@@ -50,7 +59,9 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
         case .replaceRelational, .flipBoolean, .replaceArithmetic, .replaceRange, .removeNegation,
             .replaceNilCoalescing:
             .standard
-        case .removeCall, .removeViewElement: .experimental
+        case .removeCall, .removeViewElement, .replaceStdlibSemantic, .removeNormalization, .replaceOptionalChain,
+            .returnBoundary, .returnConstant, .emptyBody, .emptyClosureBody, .removeSwitchCase:
+            .experimental
         }
     }
 
@@ -60,6 +71,19 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
         switch self {
         case .removeViewElement: .ui
         default: .logic
+        }
+    }
+
+    /// Whether this operator is included in automatic `--operator-tier` selection. Extended operators stay opt-in via
+    /// `--operators` so existing tier baselines and policies stay stable until opted in.
+    public var inDefaultTiers: Bool {
+        switch self {
+        case .negateCondition, .swapTernary, .replaceLogical, .replaceRelational, .flipBoolean, .replaceArithmetic,
+            .replaceRange, .removeNegation, .replaceNilCoalescing, .removeCall:
+            true
+        case .removeViewElement, .replaceStdlibSemantic, .removeNormalization, .replaceOptionalChain, .returnBoundary,
+            .returnConstant, .emptyBody, .emptyClosureBody, .removeSwitchCase:
+            false
         }
     }
 
@@ -77,12 +101,22 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
         case .replaceNilCoalescing: "replace nil-coalescing (a ?? b) with its fallback (b)"
         case .removeCall: "skip a call statement whose result is unused"
         case .removeViewElement: "skip a leaf SwiftUI view-builder element (explicit opt-in)"
+        case .replaceStdlibSemantic:
+            "swap standard-library semantic pairs (min/max, allSatisfy/contains, prefix/dropLast, dropFirst/suffix, hasPrefix/hasSuffix)"
+        case .removeNormalization:
+            "remove String normalization calls (.lowercased(), .uppercased(), .trimmingCharacters(in:))"
+        case .replaceOptionalChain: "unwrap an optional-chained expression (a?.b to a!.b)"
+        case .returnBoundary: "shift or empty a returned value in a typed function (n + 1, \"\", [])"
+        case .returnConstant: "replace a returned value with a boundary constant (0, 1, nil, true, false)"
+        case .emptyBody: "skip the body of a Void-returning function or method"
+        case .emptyClosureBody: "skip the body of a trailing Void closure (excluding lock/sync wrappers)"
+        case .removeSwitchCase: "guard a non-default switch case so it falls through to default"
         }
     }
 
-    /// The logic operators of `tier` and every tier before it. UI-domain operators require explicit `--operators`.
+    /// The logic operators of `tier` and every tier before it. UI and extended opt-in operators require `--operators`.
     public static func operators(upTo tier: OperatorTier) -> Set<MutationOperator> {
-        Set(allCases.filter { $0.domain == .logic && $0.tier <= tier })
+        Set(allCases.filter { $0.domain == .logic && $0.inDefaultTiers && $0.tier <= tier })
     }
 
     /// What a run mutates unless told otherwise.

@@ -24,6 +24,17 @@ public enum TestEvidence {
         /// Identifiers the stream declares as test functions (`test` records of kind `function`); empty when it
         /// declares none, and suites are then told apart by their identifiers (a function's holds `(`).
         public var functions: Set<String> = []
+        /// Per-test mutant reach collected when `{"litmusReach":"<id>"}` lines are interleaved into a serial
+        /// (`parallelizationWidth == 1`) event stream via a FIFO.
+        public var perTestReach: [String: Set<String>] = [:]
+        /// Mutants evaluated outside any active test function (launch, suite init, `static let` before a test starts,
+        /// or evaluated multiple times vs once): any mutant in `outsideTests` or evaluated only once across multiple
+        /// tests may depend on process-lifetime caching (`static let` / `lazy`).
+        public var outsideTests: Set<String> = []
+        /// Duration of each test function in nanoseconds, from `testStarted` to `testEnded` instants.
+        public var testDurations: [String: Int64] = [:]
+        /// Counts per individual test function (`passed: 1` or `skipped: 1`).
+        public var perTestCounts: [String: TestCounts] = [:]
 
         /// The counts of test functions, from the stream alone: what xUnit would say, without its XML (which the
         /// toolchain writes unescaped when a test's name holds a double quote).
@@ -45,14 +56,26 @@ public enum TestEvidence {
     public static func swiftTestingEvents(_ bytes: [UInt8]) throws -> EventScan {
         var failedTests: Set<String> = [], endedTests: Set<String> = [], skippedTests: Set<String> = []
         var functions: Set<String> = []
+        var perTestReach: [String: Set<String>] = [:]
+        var outsideTests: Set<String> = []
+        var activeFunctions: [String] = []
+        var startInstants: [String: Double] = [:]
+        var testDurations: [String: Int64] = [:]
         var failed = false, ended = false, start = 0, consumed = 0
         var index = 0
+        func isFunction(_ id: String) -> Bool { functions.isEmpty ? id.contains("(") : functions.contains(id) }
         while index < bytes.count {
             if bytes[index] == UInt8(ascii: "\n") {
                 if index > start {
                     let document = try AemiJSON.parse(Array(bytes[start..<index]))
                     let root = document.root
-                    if root.kind.string == "event" {
+                    if let reachID = root.litmusReach.string, reachID.count == 16, reachID.allSatisfy(\.isHexDigit) {
+                        if let current = activeFunctions.last {
+                            perTestReach[reachID, default: []].insert(testName(current))
+                        } else {
+                            outsideTests.insert(reachID)
+                        }
+                    } else if root.kind.string == "event" {
                         let payload = root.payload
                         switch payload.kind.string {
                         case "issueRecorded":
@@ -63,8 +86,26 @@ public enum TestEvidence {
                                 if let test = payload.testID.string { failedTests.insert(test) }
                             }
                         case "runEnded": ended = true
-                        case "testEnded": if let test = payload.testID.string { endedTests.insert(test) }
-                        case "testSkipped": if let test = payload.testID.string { skippedTests.insert(test) }
+                        case "testStarted":
+                            if let test = payload.testID.string, isFunction(test) {
+                                activeFunctions.append(test)
+                                if let instant = payload.instant.absolute.double { startInstants[test] = instant }
+                            }
+                        case "testEnded":
+                            if let test = payload.testID.string {
+                                endedTests.insert(test)
+                                activeFunctions.removeAll { $0 == test }
+                                if let endInstant = payload.instant.absolute.double, let begun = startInstants[test] {
+                                    let nanos = Int64(max(0, endInstant - begun) * 1_000_000_000)
+                                    let short = testName(test)
+                                    testDurations[short] = max(testDurations[short] ?? 0, nanos)
+                                }
+                            }
+                        case "testSkipped":
+                            if let test = payload.testID.string {
+                                skippedTests.insert(test)
+                                activeFunctions.removeAll { $0 == test }
+                            }
                         default: break
                         }
                     } else if root.kind.string == "test", root.payload.kind.string == "function",
@@ -78,10 +119,29 @@ public enum TestEvidence {
             }
             index += 1
         }
+        var perTestCounts: [String: TestCounts] = [:]
+        for id in endedTests where isFunction(id) {
+            let short = testName(id)
+            let prev = perTestCounts[short] ?? TestCounts(passed: 0, failed: 0, skipped: 0)
+            if failedTests.contains(id) {
+                perTestCounts[short] = TestCounts(passed: prev.passed, failed: prev.failed + 1, skipped: prev.skipped)
+            } else {
+                perTestCounts[short] = TestCounts(passed: prev.passed + 1, failed: prev.failed, skipped: prev.skipped)
+            }
+        }
+        for id in skippedTests where isFunction(id) {
+            let short = testName(id)
+            let prev = perTestCounts[short] ?? TestCounts(passed: 0, failed: 0, skipped: 0)
+            perTestCounts[short] = TestCounts(passed: prev.passed, failed: prev.failed, skipped: prev.skipped + 1)
+        }
         var scan = EventScan(failedTests: failedTests, failed: failed, ended: ended, consumed: consumed)
         scan.endedTests = endedTests
         scan.skippedTests = skippedTests
         scan.functions = functions
+        scan.perTestReach = perTestReach
+        scan.outsideTests = outsideTests
+        scan.testDurations = testDurations
+        scan.perTestCounts = perTestCounts
         return scan
     }
 

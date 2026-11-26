@@ -111,7 +111,9 @@ let simulatorHelperSource = #"""
         }
 
         static func open(_ path: String) -> Lines {
-            FileManager.default.createFile(atPath: path, contents: nil)
+            if !FileManager.default.fileExists(atPath: path) {
+                FileManager.default.createFile(atPath: path, contents: nil)
+            }
             guard let handle = FileHandle(forWritingAtPath: path) else { fail("cannot open \(path)", 66) }
             return Lines(handle)
         }

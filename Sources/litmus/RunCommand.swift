@@ -13,7 +13,7 @@ struct Run: AsyncParsableCommand {
     @OptionGroup var build: BuildSelectionOptions
     @Option(help: "New run directory OUTSIDE the source tree; contains checkpoints, evidence and build artifacts.")
     var output: String
-    @Option(help: "Maximum non-overlapping sites per schema, 1...256.") var batchSize: Int = 64
+    @Option(help: "Maximum sites per schema build, 1...1024.") var batchSize: Int = 256
     @Option(help: "Build deadline in seconds, 1...86400.") var buildTimeout: Int = 900
     @Option(help: "Upper bound of the per-suite deadline in seconds; the deadline derives from the baseline.")
     var timeout: Int = 300
@@ -67,8 +67,10 @@ struct Run: AsyncParsableCommand {
     var suiteWidth: Int?
     @Flag(help: "Run every test module for every mutant, not only the test targets that can reach its file.")
     var noTestTargetSelection = false
-    @Flag(help: "Record which Swift Testing tests reach which mutants, running each test alone per schema (slow).")
+    @Flag(help: "Record which Swift Testing tests reach which mutants in a single serial control pass.")
     var perTestReach = false
+    @Flag(help: "Skip re-verifying per-test-reach narrowed survivors against all covering test modules.")
+    var noRecheckSurvivors = false
     @Option(help: "Seconds after which no schema build or first run starts; what did not run is reported, exit 0.")
     var budget: Int?
     @Option(help: "Run at most this many mutants, changed lines first; the rest are reported as not run.")
@@ -144,6 +146,7 @@ struct Run: AsyncParsableCommand {
         options.suiteWidth = suiteWidth
         options.selectTestTargets = !noTestTargetSelection
         options.perTestReach = perTestReach
+        options.recheckSurvivors = !noRecheckSurvivors
         options.budgetSeconds = budget
         options.maxMutants = maxMutants
         options.inactiveSchemaBaseline = !unmutatedBaseline
@@ -196,6 +199,8 @@ struct Run: AsyncParsableCommand {
         }
         options.exclude = try subject.excludes()
         options.include = try subject.includes()
+        options.aridCalls = try subject.resolvedAridCalls()
+        options.excludeDeclarations = try subject.resolvedExcludeDeclarations()
         options.operators = try subject.operatorSet()
         options.simulators = simulators
         options.progress = progress

@@ -49,7 +49,9 @@ public enum MutationPlanner {
     public static func discover(
         in source: String,
         path: String,
-        operators: Set<MutationOperator> = MutationOperator.defaults
+        operators: Set<MutationOperator> = MutationOperator.defaults,
+        aridCalls: [String] = [],
+        excludeDeclarations: [String] = []
     ) throws -> Discovery {
         let parsed = Parser.parse(source: source)
         guard !parsed.hasError, !SyntaxDepth.exceeds(parsed, limit: 256) else {
@@ -61,7 +63,9 @@ public enum MutationPlanner {
             fingerprint: Digest.sha256(Array(source.utf8)),
             converter: SourceLocationConverter(fileName: path, tree: tree),
             anchors: Anchors(fileText: tree.description),
-            operators: operators
+            operators: operators,
+            aridCalls: aridCalls,
+            excludeDeclarations: excludeDeclarations
         )
         let visitor = Sites(context)
         visitor.walk(tree)
@@ -72,9 +76,17 @@ public enum MutationPlanner {
     public static func mutations(
         in source: String,
         path: String,
-        operators: Set<MutationOperator> = MutationOperator.defaults
+        operators: Set<MutationOperator> = MutationOperator.defaults,
+        aridCalls: [String] = [],
+        excludeDeclarations: [String] = []
     ) throws -> [Mutation] {
-        try discover(in: source, path: path, operators: operators).sites
+        try discover(
+            in: source,
+            path: path,
+            operators: operators,
+            aridCalls: aridCalls,
+            excludeDeclarations: excludeDeclarations
+        ).sites
     }
 
     static func ordered(_ sites: [Mutation]) -> [Mutation] {
@@ -94,7 +106,9 @@ public enum MutationPlanner {
         packagePath: String? = nil,
         jobs: Int = 4,
         scope: ChangeScope? = nil,
-        operators: Set<MutationOperator> = MutationOperator.defaults
+        operators: Set<MutationOperator> = MutationOperator.defaults,
+        aridCalls: [String] = [],
+        excludeDeclarations: [String] = []
     ) async throws -> MutationPlan {
         let root = SourcePath.canonical(root)
         guard FileManager.default.fileExists(atPath: root) else { throw LitmusFailure("root does not exist: \(root)") }
@@ -107,7 +121,9 @@ public enum MutationPlanner {
                 packagePath: packagePath,
                 jobs: jobs,
                 scope: scope,
-                operators: operators
+                operators: operators,
+                aridCalls: aridCalls,
+                excludeDeclarations: excludeDeclarations
             )
         }
         let discovery = SourceDiscovery.discover(under: root, isExcluded: filter.excludes)
@@ -126,7 +142,14 @@ public enum MutationPlanner {
         let files = try await mapConcurrently(discovered, limit: min(max(jobs, 1), 16)) { path in
             try Task.checkCancellation()
             return await LargeStack.run {
-                planFile(path: path, root: root, classification: classification, operators: operators)
+                planFile(
+                    path: path,
+                    root: root,
+                    classification: classification,
+                    operators: operators,
+                    aridCalls: aridCalls,
+                    excludeDeclarations: excludeDeclarations
+                )
             }
         }
         let issues =
@@ -155,7 +178,9 @@ public enum MutationPlanner {
         packagePath: String?,
         jobs: Int,
         scope: ChangeScope,
-        operators: Set<MutationOperator>
+        operators: Set<MutationOperator>,
+        aridCalls: [String],
+        excludeDeclarations: [String]
     ) async throws -> MutationPlan {
         let wanted = include.isEmpty ? nil : PathFilter(include, root: root)
         var files: [String] = []
@@ -183,7 +208,14 @@ public enum MutationPlanner {
         let planned = try await mapConcurrently(files, limit: min(max(jobs, 1), 16)) { path in
             try Task.checkCancellation()
             return await LargeStack.run {
-                planFile(path: path, root: root, classification: classification, operators: operators)
+                planFile(
+                    path: path,
+                    root: root,
+                    classification: classification,
+                    operators: operators,
+                    aridCalls: aridCalls,
+                    excludeDeclarations: excludeDeclarations
+                )
             }
         }
         var ranked: [(priority: Int, mutation: Mutation)] = []
@@ -255,7 +287,9 @@ public enum MutationPlanner {
         path: String,
         root: String,
         classification: ProjectClassification,
-        operators: Set<MutationOperator>
+        operators: Set<MutationOperator>,
+        aridCalls: [String] = [],
+        excludeDeclarations: [String] = []
     ) -> MutationPlan {
         let relative = String(path.dropFirst(root.count + 1))
         func excludedFile(_ reason: String) -> MutationPlan {
@@ -270,15 +304,35 @@ public enum MutationPlanner {
             let converter = SourceLocationConverter(fileName: path, tree: tree)
             let spans = CodeRegionScanner.scan(tree, converter: converter)
             let grammar = DirectiveGrammar(namespaces: ["lm:", "litmus:"])
+            var unknownDirectives: [PlanNote] = []
             let directives: [Directive<MutationOperator>] = grammar.scan(tree: tree, converter: converter) {
                 comment,
                 line in
-                grammar.parse(comment: comment, line: line, rule: MutationOperator.init(rawValue:))
+                let parsed = grammar.parse(comment: comment, line: line, rule: MutationOperator.init(rawValue:))
+                if parsed == nil,
+                    let bad = Self.unknownDirectiveRule(in: comment, namespaces: ["lm:", "litmus:"])
+                {
+                    unknownDirectives.append(
+                        PlanNote(
+                            path: relative,
+                            reason: "line \(line): unknown operator '\(bad)' in directive; directive ignored"
+                        )
+                    )
+                }
+                return parsed
             }
             let table = SuppressionTable(directives: directives)
-            let found = try discover(in: source, path: relative, operators: operators)
+            let found = try discover(
+                in: source,
+                path: relative,
+                operators: operators,
+                aridCalls: aridCalls,
+                excludeDeclarations: excludeDeclarations
+            )
             var active: [Mutation] = [], suppressed: [Mutation] = []
-            var notes = found.excluded.map { PlanNote(path: relative, reason: "\($0.site.id): \($0.reason)") }
+            var notes =
+                unknownDirectives
+                + found.excluded.map { PlanNote(path: relative, reason: "\($0.site.id): \($0.reason)") }
             for mutation in found.sites {
                 if spans.contains(where: { $0.startLine <= mutation.line && mutation.line <= $0.endLine }) {
                     notes.append(
@@ -308,6 +362,26 @@ public enum MutationPlanner {
             )
         }
     }
+
+    /// Detects a `@lm:accept... <rule>` or `@litmus:accept... <rule>` comment whose `<rule>` is not a known
+    /// `MutationOperator`, so typos are reported in `PlanNote`s instead of silently failing to suppress.
+    private static func unknownDirectiveRule(in comment: String, namespaces: [String]) -> String? {
+        for ns in namespaces {
+            guard let range = comment.range(of: "@" + ns) else { continue }
+            let after = comment[range.upperBound...]
+            let beforeReason = after.components(separatedBy: "--").first ?? String(after)
+            let tokens = beforeReason.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "," })
+            guard let action = tokens.first,
+                ["accept", "accept:next", "accept:line", "accept:start", "accept:end"].contains(String(action))
+            else { continue }
+            for token in tokens.dropFirst() {
+                let name = String(token).trimmingCharacters(in: CharacterSet(charactersIn: "*/"))
+                guard !name.isEmpty, name != "all" else { continue }
+                if MutationOperator(rawValue: name) == nil { return name }
+            }
+        }
+        return nil
+    }
 }
 
 private struct SiteContext {
@@ -316,6 +390,8 @@ private struct SiteContext {
     let converter: SourceLocationConverter
     let anchors: Anchors
     let operators: Set<MutationOperator>
+    let aridCalls: [String]
+    let excludeDeclarations: [String]
 }
 
 /// The enclosing declarations of the walk, and how many identical sites each has had: what anchors a mutant's
@@ -378,6 +454,11 @@ private final class Sites: SyntaxVisitor {
     /// Depth of attribute arguments and enum case declarations being walked: the operators added in 0.4 leave them
     /// alone (a compile-time constant there cannot read a runtime schema), the stable ones keep 0.3's behaviour.
     var constantDepth = 0
+    /// Depth of arid calls (`aridCalls` + built-in logging/assertions) being walked: expression operators inside their
+    /// arguments are suppressed, following Google's arid-node rule.
+    var aridCallDepth = 0
+    /// Stack of enclosing functions' declared return types (`nil` for Void/untyped, or normalized type string).
+    var returnTypes: [String?] = []
 
     init(_ context: SiteContext) {
         self.context = context
@@ -385,7 +466,11 @@ private final class Sites: SyntaxVisitor {
     }
 
     private func add(_ expression: some SyntaxProtocol, operatorID: MutationOperator, replacement: String) {
-        guard context.operators.contains(operatorID), constantDepth == 0 || operatorID.tier == .stable else { return }
+        guard context.operators.contains(operatorID),
+            constantDepth == 0 || operatorID.tier == .stable,
+            aridCallDepth == 0,
+            !isExcludedByDeclaration()
+        else { return }
         let start = expression.positionAfterSkippingLeadingTrivia.utf8Offset
         let end = expression.endPositionBeforeTrailingTrivia.utf8Offset
         let original = expression.trimmedDescription
@@ -417,6 +502,20 @@ private final class Sites: SyntaxVisitor {
         )
     }
 
+    private func isExcludedByDeclaration() -> Bool {
+        guard !context.excludeDeclarations.isEmpty else { return false }
+        for decl in context.anchors.stack {
+            let base = decl.name.split(separator: "(").first.map(String.init) ?? decl.name
+            for pattern in context.excludeDeclarations
+            where CallRemoval.matchesWildcard(base, pattern: pattern)
+                || CallRemoval.matchesWildcard(decl.name, pattern: pattern)
+            {
+                return true
+            }
+        }
+        return false
+    }
+
     // Declarations, for anchored identities: pushed on the way in, popped on the way out.
     override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind { enter(node.name.text, node) }
     override func visitPost(_ node: StructDeclSyntax) { context.anchors.pop() }
@@ -446,10 +545,30 @@ private final class Sites: SyntaxVisitor {
 
     override func visit(_ node: FunctionDeclSyntax) -> SyntaxVisitorContinueKind {
         adjustBuilderDepth(node, by: 1)
-        return enter(signature(node.name.text, node.signature.parameterClause.parameters), node, body: true)
+        let returnType = node.signature.returnClause.map { normalized($0.type.trimmedDescription) }
+        returnTypes.append(returnType)
+        _ = enter(signature(node.name.text, node.signature.parameterClause.parameters), node, body: true)
+        if builderDepth == 0, let body = node.body {
+            if node.signature.effectSpecifiers?.throwsClause == nil,
+                !CallRemoval.returnsValue(node.signature.returnClause),
+                !body.statements.isEmpty,
+                !CallRemoval.isAllArid(body.statements, aridCalls: context.aridCalls)
+            {
+                add(body.statements, operatorID: .emptyBody, replacement: "()")
+            } else if let returnType,
+                body.statements.count == 1,
+                let onlyItem = body.statements.first,
+                let expr = onlyItem.item.as(ExprSyntax.self)
+            {
+                // Implicit single-expression return (`func flag(_ x: Int) -> Bool { x > 0 }`).
+                addReturnMutations(expr: expr, returnType: returnType)
+            }
+        }
+        return .visitChildren
     }
     override func visitPost(_ node: FunctionDeclSyntax) {
         adjustBuilderDepth(node, by: -1)
+        _ = returnTypes.popLast()
         context.anchors.pop()
     }
     override func visit(_ node: InitializerDeclSyntax) -> SyntaxVisitorContinueKind {
@@ -611,24 +730,27 @@ private final class Sites: SyntaxVisitor {
     }
 
     override func visit(_ node: CodeBlockItemSyntax) -> SyntaxVisitorContinueKind {
-        guard let expression = node.item.as(ExprSyntax.self) else { return .visitChildren }
-        var inner = expression
-        while true {
-            if let wrapped = inner.as(TryExprSyntax.self) {
-                inner = wrapped.expression
-            } else if let wrapped = inner.as(AwaitExprSyntax.self) {
-                inner = wrapped.expression
-            } else {
-                break
-            }
-        }
-        guard let call = inner.as(FunctionCallExprSyntax.self) else { return .visitChildren }
+        guard let expression = node.item.as(ExprSyntax.self),
+            let call = CallRemoval.unwrapTryAwait(expression).as(FunctionCallExprSyntax.self)
+        else { return .visitChildren }
         if builderDepth == 0 {
-            guard context.operators.contains(.removeCall),
-                !CallRemoval.isLogging(call.calledExpression.trimmedDescription),
+            let callee = call.calledExpression.trimmedDescription
+            if !CallRemoval.isArid(callee, aridCalls: context.aridCalls),
                 !CallRemoval.isImplicitReturn(node)
-            else { return .visitChildren }
-            add(expression, operatorID: .removeCall, replacement: "()")
+            {
+                if context.operators.contains(.removeCall) {
+                    add(expression, operatorID: .removeCall, replacement: "()")
+                }
+                if context.operators.contains(.emptyClosureBody),
+                    let closure = call.trailingClosure,
+                    call.additionalTrailingClosures.isEmpty,
+                    !closure.statements.isEmpty,
+                    !CallRemoval.isLockOrSyncWrapper(callee),
+                    !CallRemoval.isAllArid(closure.statements, aridCalls: context.aridCalls)
+                {
+                    add(closure.statements, operatorID: .emptyClosureBody, replacement: "()")
+                }
+            }
         } else if viewBuilderDepth > 0, BuilderContext.isLeafViewElement(call, in: node) {
             if context.operators.contains(.removeViewElement) {
                 add(expression, operatorID: .removeViewElement, replacement: "()")
@@ -637,6 +759,197 @@ private final class Sites: SyntaxVisitor {
             }
         }
         return .visitChildren
+    }
+
+    override func visit(_ node: FunctionCallExprSyntax) -> SyntaxVisitorContinueKind {
+        let callee = node.calledExpression.trimmedDescription
+        if CallRemoval.isAridExpressionScope(callee, aridCalls: context.aridCalls) {
+            aridCallDepth += 1
+            return .visitChildren
+        }
+        // Standard-library semantic pairs (`min`/`max`, `allSatisfy`/`contains`, `prefix`/`dropLast`,
+        // `dropFirst`/`suffix`, `hasPrefix`/`hasSuffix`).
+        if context.operators.contains(.replaceStdlibSemantic) {
+            if let member = node.calledExpression.as(MemberAccessExprSyntax.self),
+                let swapped = Self.stdlibMemberPairs[member.declName.baseName.text]
+            {
+                add(
+                    node,
+                    operatorID: .replaceStdlibSemantic,
+                    replacement: swappingToken(member.declName.baseName, in: node, for: swapped)
+                )
+            } else if let decl = node.calledExpression.as(DeclReferenceExprSyntax.self),
+                node.arguments.count == 2,
+                let swapped = Self.stdlibFreePairs[decl.baseName.text]
+            {
+                add(
+                    node,
+                    operatorID: .replaceStdlibSemantic,
+                    replacement: swappingToken(decl.baseName, in: node, for: swapped)
+                )
+            }
+        }
+        // String normalization removal (`.lowercased()`, `.uppercased()`, `.trimmingCharacters(in: ...)`).
+        if context.operators.contains(.removeNormalization),
+            let member = node.calledExpression.as(MemberAccessExprSyntax.self),
+            let base = member.base,
+            !base.is(OptionalChainingExprSyntax.self)
+        {
+            let name = member.declName.baseName.text
+            let zeroArgNorm = (name == "lowercased" || name == "uppercased") && node.arguments.isEmpty
+            let trimNorm = name == "trimmingCharacters" && node.arguments.count == 1
+            if (zeroArgNorm || trimNorm) && node.trailingClosure == nil {
+                add(node, operatorID: .removeNormalization, replacement: base.trimmedDescription)
+            }
+        }
+        return .visitChildren
+    }
+
+    override func visitPost(_ node: FunctionCallExprSyntax) {
+        if CallRemoval.isAridExpressionScope(node.calledExpression.trimmedDescription, aridCalls: context.aridCalls) {
+            aridCallDepth -= 1
+        }
+    }
+
+    override func visit(_ node: OptionalChainingExprSyntax) -> SyntaxVisitorContinueKind {
+        if context.operators.contains(.replaceOptionalChain),
+            !Self.isLeftSideOfAssignment(node)
+        {
+            let target = Self.enclosingOptionalChainTarget(node)
+            if target.id != Syntax(node).id {
+                add(
+                    target,
+                    operatorID: .replaceOptionalChain,
+                    replacement: swappingToken(node.questionMark, in: target, for: "!")
+                )
+            }
+        }
+        return .visitChildren
+    }
+
+    override func visit(_ node: ReturnStmtSyntax) -> SyntaxVisitorContinueKind {
+        guard let expr = node.expression,
+            let returnType = returnTypes.last ?? nil
+        else { return .visitChildren }
+        addReturnMutations(expr: expr, returnType: returnType)
+        return .visitChildren
+    }
+
+    private func addReturnMutations(expr: ExprSyntax, returnType: String) {
+        let trimmed = expr.trimmedDescription
+        if context.operators.contains(.returnBoundary) {
+            if Self.numericReturnTypes.contains(returnType) {
+                add(expr, operatorID: .returnBoundary, replacement: "(\(trimmed)) + 1")
+            } else if returnType == "String" || returnType == "Swift.String", trimmed != "\"\"" {
+                add(expr, operatorID: .returnBoundary, replacement: "\"\"")
+            } else if returnType.hasPrefix("[") && returnType.hasSuffix("]") && !returnType.contains(":"),
+                trimmed != "[]"
+            {
+                add(expr, operatorID: .returnBoundary, replacement: "[]")
+            }
+        }
+        if context.operators.contains(.returnConstant) {
+            if returnType == "Bool" || returnType == "Swift.Bool" {
+                if trimmed != "true" && trimmed != "false" {
+                    add(expr, operatorID: .returnConstant, replacement: "true")
+                    add(expr, operatorID: .returnConstant, replacement: "false")
+                }
+            } else if returnType.hasSuffix("?"), trimmed != "nil" {
+                add(expr, operatorID: .returnConstant, replacement: "nil")
+            } else if Self.numericReturnTypes.contains(returnType) {
+                add(expr, operatorID: .returnConstant, replacement: trimmed == "0" ? "1" : "0")
+            }
+        }
+    }
+
+    override func visit(_ node: SwitchExprSyntax) -> SyntaxVisitorContinueKind {
+        guard context.operators.contains(.removeSwitchCase) else { return .visitChildren }
+        var nonDefaultCases: [SwitchCaseSyntax] = []
+        var hasDefault = false
+        for element in node.cases {
+            guard case .switchCase(let switchCase) = element else { continue }
+            if case .default = switchCase.label {
+                hasDefault = true
+            } else if case .case(let label) = switchCase.label, !switchCase.statements.isEmpty {
+                let fallsThrough =
+                    switchCase.statements.count == 1
+                    && switchCase.statements.first?.item.is(FallThroughStmtSyntax.self) == true
+                let hasBindings = label.caseItems.contains {
+                    $0.pattern.trimmedDescription.contains("let ")
+                        || $0.pattern.trimmedDescription.contains("var ")
+                }
+                if !fallsThrough && !hasBindings {
+                    nonDefaultCases.append(switchCase)
+                }
+            }
+        }
+        guard hasDefault else { return .visitChildren }
+        for switchCase in nonDefaultCases {
+            guard case .case(let label) = switchCase.label else { continue }
+            var items: [String] = []
+            for item in label.caseItems {
+                let pattern = item.pattern.trimmedDescription
+                if let whereClause = item.whereClause {
+                    let cond = whereClause.condition.trimmedDescription
+                    items.append("\(pattern) where (\(cond)) && \(SchemaWriter.clauseGuardPlaceholder)")
+                } else {
+                    items.append("\(pattern) where \(SchemaWriter.clauseGuardPlaceholder)")
+                }
+            }
+            let replacement = "case " + items.joined(separator: ", ") + ":"
+            add(label, operatorID: .removeSwitchCase, replacement: replacement)
+        }
+        return .visitChildren
+    }
+
+    private static let stdlibMemberPairs: [String: String] = [
+        "min": "max", "max": "min",
+        "allSatisfy": "contains", "contains": "allSatisfy",
+        "prefix": "dropLast", "dropLast": "prefix",
+        "dropFirst": "suffix", "suffix": "dropFirst",
+        "hasPrefix": "hasSuffix", "hasSuffix": "hasPrefix",
+    ]
+    private static let stdlibFreePairs: [String: String] = ["min": "max", "max": "min"]
+    private static let numericReturnTypes: Set<String> = [
+        "Int", "UInt", "Int64", "Int32", "Int16", "Int8", "UInt64", "UInt32", "UInt16", "UInt8",
+        "Double", "Float", "CGFloat", "TimeInterval",
+    ]
+
+    private func swappingToken(_ token: TokenSyntax, in node: some SyntaxProtocol, for replacement: String) -> String {
+        let text = Array(node.trimmedDescription.utf8)
+        let base = node.positionAfterSkippingLeadingTrivia.utf8Offset
+        let start = token.positionAfterSkippingLeadingTrivia.utf8Offset - base
+        let end = token.endPositionBeforeTrailingTrivia.utf8Offset - base
+        guard start >= 0, end <= text.count, start < end else { return node.trimmedDescription }
+        return String(decoding: text[..<start] + Array(replacement.utf8) + text[end...], as: UTF8.self)
+    }
+
+    /// Climbs the postfix member/call/subscript chain whose value becomes optional because of `node` (`box?.count` or
+    /// `box?.items[0].name`), so `(m ? (box!.count) : (box?.count))` is a valid standalone expression.
+    private static func enclosingOptionalChainTarget(_ node: OptionalChainingExprSyntax) -> Syntax {
+        var current = Syntax(node)
+        while let parent = current.parent {
+            if let member = parent.as(MemberAccessExprSyntax.self), member.base?.id == current.id {
+                current = parent
+            } else if let call = parent.as(FunctionCallExprSyntax.self), call.calledExpression.id == current.id {
+                current = parent
+            } else if let sub = parent.as(SubscriptCallExprSyntax.self), sub.calledExpression.id == current.id {
+                current = parent
+            } else if let opt = parent.as(OptionalChainingExprSyntax.self), opt.expression.id == current.id {
+                current = parent
+            } else {
+                break
+            }
+        }
+        return current
+    }
+
+    private static func isLeftSideOfAssignment(_ node: OptionalChainingExprSyntax) -> Bool {
+        let target = enclosingOptionalChainTarget(node)
+        guard let infix = target.parent?.as(InfixOperatorExprSyntax.self) else { return false }
+        let op = infix.operator.trimmedDescription
+        let isAssign = op == "=" || compoundAssignment[op] != nil
+        return isAssign && infix.leftOperand.id == target.id
     }
     override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind {
         constantDepth += 1
@@ -837,7 +1150,7 @@ enum BuilderContext {
     }
 }
 
-/// Which call statements `remove-call` leaves alone.
+/// Which call statements `remove-call` leaves alone, and which calls are arid.
 enum CallRemoval {
     private static let names: Set<String> = [
         "print", "debugPrint", "dump", "NSLog", "os_log", "assert", "assertionFailure", "precondition",
@@ -846,6 +1159,12 @@ enum CallRemoval {
     private static let loggerMethods: Set<String> = [
         "debug", "info", "notice", "error", "warning", "fault", "trace", "critical", "log",
     ]
+    private static let lockOrSyncNames: Set<String> = [
+        "sync", "withLock", "withUnsafeBytes", "withUnsafeMutableBytes", "withUnsafeBufferPointer",
+        "withUnsafeMutableBufferPointer", "withCheckedContinuation", "withCheckedThrowingContinuation",
+        "withUnsafeContinuation", "withUnsafeThrowingContinuation", "withExtendedLifetime", "autoreleasepool",
+        "assumeIsolated",
+    ]
 
     /// Logging, assertions, and initializer chaining: removing them proves nothing or cannot compile.
     static func isLogging(_ callee: String) -> Bool {
@@ -853,6 +1172,91 @@ enum CallRemoval {
         let last = callee.split(separator: ".").last.map(String.init) ?? callee
         if names.contains(callee) || names.contains(last) { return true }
         return callee.contains(".") && loggerMethods.contains(last)
+    }
+
+    /// True if expression mutations inside the call's arguments should also be suppressed (`debugPrint`, `dump`,
+    /// `NSLog`, `os_log`, `Logger.*`, and user-configured `aridCalls`). Plain `print(...)` stays mutable inside its
+    /// arguments because CLI programs produce observable output through `print`.
+    static func isAridExpressionScope(_ callee: String, aridCalls: [String]) -> Bool {
+        let last = callee.split(separator: ".").last.map(String.init) ?? callee
+        let debugNames: Set<String> = ["debugPrint", "dump", "NSLog", "os_log"]
+        if debugNames.contains(callee) || debugNames.contains(last) { return true }
+        if callee.contains(".") && loggerMethods.contains(last) { return true }
+        return matchesUserArid(callee, last: last, aridCalls: aridCalls)
+    }
+
+    /// True if `callee` matches the built-in logging/assertion list or any user-configured `aridCalls` entry.
+    static func isArid(_ callee: String, aridCalls: [String]) -> Bool {
+        if isLogging(callee) { return true }
+        let last = callee.split(separator: ".").last.map(String.init) ?? callee
+        return matchesUserArid(callee, last: last, aridCalls: aridCalls)
+    }
+
+    private static func matchesUserArid(_ callee: String, last: String, aridCalls: [String]) -> Bool {
+        guard !aridCalls.isEmpty else { return false }
+        for pattern in aridCalls where !pattern.isEmpty {
+            if matchesWildcard(callee, pattern: pattern)
+                || matchesWildcard(last, pattern: pattern)
+                || callee.hasPrefix(pattern + ".")
+                || callee.hasPrefix(pattern + "(")
+            {
+                return true
+            }
+        }
+        return false
+    }
+
+    static func unwrapTryAwait(_ expression: ExprSyntax) -> ExprSyntax {
+        var current = expression
+        while true {
+            if let wrapped = current.as(TryExprSyntax.self) {
+                current = wrapped.expression
+            } else if let wrapped = current.as(AwaitExprSyntax.self) {
+                current = wrapped.expression
+            } else {
+                return current
+            }
+        }
+    }
+
+    /// True if every statement in `statements` is an arid call statement.
+    static func isAllArid(_ statements: CodeBlockItemListSyntax, aridCalls: [String]) -> Bool {
+        guard !statements.isEmpty else { return true }
+        for item in statements {
+            guard let expr = item.item.as(ExprSyntax.self),
+                let call = unwrapTryAwait(expr).as(FunctionCallExprSyntax.self),
+                isArid(call.calledExpression.trimmedDescription, aridCalls: aridCalls)
+            else { return false }
+        }
+        return true
+    }
+
+    /// True for synchronous wrapper calls (`withLock`, `DispatchQueue.sync`, `autoreleasepool`, `assumeIsolated`, ...)
+    /// whose trailing closure should not be emptied as an asynchronous callback.
+    static func isLockOrSyncWrapper(_ callee: String) -> Bool {
+        let last = callee.split(separator: ".").last.map(String.init) ?? callee
+        return lockOrSyncNames.contains(callee) || lockOrSyncNames.contains(last)
+    }
+
+    /// Simple `*` wildcard matcher over whole names.
+    static func matchesWildcard(_ text: String, pattern: String) -> Bool {
+        guard pattern.contains("*") else { return text == pattern }
+        let parts = pattern.split(separator: "*", omittingEmptySubsequences: false).map(String.init)
+        if parts.allSatisfy(\.isEmpty) { return true }
+        var remainder = text[...]
+        for (index, part) in parts.enumerated() {
+            if part.isEmpty { continue }
+            if index == 0 {
+                guard remainder.hasPrefix(part) else { return false }
+                remainder = remainder.dropFirst(part.count)
+            } else if index == parts.count - 1 {
+                return remainder.hasSuffix(part)
+            } else {
+                guard let range = remainder.range(of: part) else { return false }
+                remainder = remainder[range.upperBound...]
+            }
+        }
+        return parts.last?.isEmpty == true || remainder.isEmpty
     }
 
     /// The call is the only statement of a body whose value it may be returned as: a closure, a getter, or a function
@@ -903,7 +1307,7 @@ enum CallRemoval {
         return isImplicitReturn(item)
     }
 
-    private static func returnsValue(_ clause: ReturnClauseSyntax?) -> Bool {
+    static func returnsValue(_ clause: ReturnClauseSyntax?) -> Bool {
         guard let type = clause?.type.trimmedDescription else { return false }
         return !["Void", "()", "Swift.Void"].contains(type)
     }

@@ -15,13 +15,23 @@ struct SubjectOptions: ParsableArguments {
     @Option(name: .customLong("only-path"), help: "Mutate only files matching a substring/glob (repeatable).")
     var inclusions: [String] = []
     @Option(
+        name: .customLong("arid-call"),
+        help: "Call name/prefix neither removed by remove-call nor mutated inside its arguments (repeatable)."
+    )
+    var aridCalls: [String] = []
+    @Option(
+        name: .customLong("exclude-declaration"),
+        help: "Declaration name or *-pattern whose body is not mutated, e.g. *ForTesting (repeatable)."
+    )
+    var excludeDeclarations: [String] = []
+    @Option(
         help:
-            "Operators to mutate, comma-separated rule ids (default: the stable tier). Known: negate-condition, swap-ternary, replace-logical, replace-relational, flip-boolean, replace-arithmetic, replace-range, remove-negation, replace-nil-coalescing, remove-call, remove-view-element."
+            "Operators to mutate, comma-separated rule ids (default: the stable tier). Known: negate-condition, swap-ternary, replace-logical, replace-relational, flip-boolean, replace-arithmetic, replace-range, remove-negation, replace-nil-coalescing, remove-call, remove-view-element, replace-stdlib-semantic, remove-normalization, replace-optional-chain, return-boundary, return-constant, empty-body, empty-closure-body, remove-switch-case."
     )
     var operators: String?
     @Option(
         help:
-            "Operator tier to mutate: stable (default), standard (adds comparisons, booleans, arithmetic, ranges, negation, nil-coalescing) or experimental (adds call removal). UI operators (remove-view-element) require --operators."
+            "Operator tier to mutate: stable (default), standard (adds comparisons, booleans, arithmetic, ranges, negation, nil-coalescing) or experimental (adds call removal). UI and extended operators require --operators."
     )
     var operatorTier: String?
     /// The operators this run or plan mutates; `--operators` names them exactly, a tier includes every tier before it.
@@ -43,15 +53,16 @@ struct SubjectOptions: ParsableArguments {
         } catch { try fail(error, code: .usage) }
     }
     var absoluteRoot: String { URL(fileURLWithPath: root).standardizedFileURL.resolvingSymlinksInPath().path }
-    func excludes() throws -> [String] {
-        do { return try LitmusConfiguration.load(root: absoluteRoot, explicit: config).exclude + exclusions } catch {
+    private func loadedConfig() throws -> LitmusConfiguration {
+        do { return try LitmusConfiguration.load(root: absoluteRoot, explicit: config) } catch {
             try fail(error, code: .badConfiguration)
         }
     }
-    func includes() throws -> [String] {
-        do { return try LitmusConfiguration.load(root: absoluteRoot, explicit: config).include + inclusions } catch {
-            try fail(error, code: .badConfiguration)
-        }
+    func excludes() throws -> [String] { try loadedConfig().exclude + exclusions }
+    func includes() throws -> [String] { try loadedConfig().include + inclusions }
+    func resolvedAridCalls() throws -> [String] { try loadedConfig().aridCalls + aridCalls }
+    func resolvedExcludeDeclarations() throws -> [String] {
+        try loadedConfig().excludeDeclarations + excludeDeclarations
     }
 }
 

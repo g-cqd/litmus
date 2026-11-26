@@ -41,21 +41,24 @@ import Testing
     #expect(throws: (any Error).self) { try MutationPlanner.mutations(in: "func broken( {", path: "F.swift") }
 }
 
-@Test func `overlapping expressions are placed in different schema batches`() throws {
+@Test func `nested expressions share one schema batch up to maxNestingDepth and spill beyond it`() throws {
     let sites = try MutationPlanner.mutations(
-        in: "func f(a: Bool,b: Bool,c: Bool)->Bool { a && (b || c) }",
+        in: "func f(a: Bool, b: Bool, c: Bool) -> Bool { a && (b || c) }",
         path: "F.swift"
     )
     let batches = SchemaWriter.batches(sites)
-    #expect(batches.count == 2)
+    #expect(batches.count == 1)
     #expect(batches.flatMap { $0 }.count == sites.count)
-    for batch in batches {
-        for left in batch {
-            for right in batch where left.id != right.id {
-                #expect(left.path != right.path || left.end <= right.start || right.end <= left.start)
-            }
-        }
-    }
+    let rendered = try SchemaWriter.render(
+        "func f(a: Bool, b: Bool, c: Bool) -> Bool { a && (b || c) }",
+        mutations: sites
+    )
+    #expect(rendered.contains("(b) && (c)"))
+    #expect(rendered.contains("(a) || ((b || c))"))
+
+    // With maxNestingDepth: 1, nested expressions spill into separate batches as before.
+    let unnested = SchemaWriter.batches(sites, maxNestingDepth: 1)
+    #expect(unnested.count == 2)
 }
 
 @Test func `schema uses immutable startup selection and refuses stale input`() throws {
@@ -84,14 +87,15 @@ import Testing
     #expect(found.excluded.first?.reason.contains("macro") == true)
 }
 
-@Test func `every mutant gets an inlinable-safe once-initialised activation`() throws {
+@Test func `every mutant gets an inlinable-safe activation without injecting import Foundation`() throws {
     let source = "public func f(_ a: Bool, limit: Int = (true ? 1 : 2)) -> Bool { a }"
     let sites = try MutationPlanner.mutations(in: source, path: "Sources/F.swift")
     let site = try #require(sites.first)
     let schema = try SchemaWriter.schema(source, mutations: [site])
-    #expect(schema.text.contains("@usableFromInline nonisolated internal let __litmus_"))
-    #expect(schema.text.contains("_\(site.id): Swift.Bool = "))
+    #expect(schema.text.contains("@usableFromInline nonisolated internal var __litmus_"))
+    #expect(schema.text.contains("_on_\(site.id): Swift.Bool = "))
     #expect(schema.text.contains("LITMUS_COVERAGE_DIR"))
+    #expect(!schema.text.contains("import Foundation"))
     #expect(schema.lines[site.id] == 2...2)
 }
 
@@ -99,7 +103,7 @@ import Testing
     let source = "import Foundation\nlet x = CommandLine.arguments.count > 1\nprint(x ? 1 : 2)\n"
     let sites = try MutationPlanner.mutations(in: source, path: "Sources/Tool/main.swift")
     let schema = try SchemaWriter.schema(source, mutations: sites)
-    let declaration = try #require(schema.text.range(of: "nonisolated internal let"))
+    let declaration = try #require(schema.text.range(of: "@usableFromInline nonisolated internal var"))
     let use = try #require(schema.text.range(of: "print("))
     #expect(declaration.lowerBound < use.lowerBound)
     #expect(schema.text.components(separatedBy: "import Foundation").count == 2)

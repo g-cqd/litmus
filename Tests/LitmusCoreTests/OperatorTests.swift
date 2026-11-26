@@ -23,10 +23,15 @@ private func sites(_ source: String, _ operators: Set<MutationOperator> = everyt
     #expect(!MutationOperator.operators(upTo: .standard).contains(.removeCall))
     #expect(
         MutationOperator.operators(upTo: .experimental)
-            == Set(MutationOperator.allCases.filter { $0.domain == .logic })
+            == Set(MutationOperator.allCases.filter { $0.domain == .logic && $0.inDefaultTiers })
     )
     #expect(!MutationOperator.operators(upTo: .experimental).contains(.removeViewElement))
+    #expect(!MutationOperator.operators(upTo: .experimental).contains(.replaceStdlibSemantic))
     #expect(try MutationOperator.parse("flip-boolean, remove-call") == [.flipBoolean, .removeCall])
+    #expect(
+        try MutationOperator.parse("replace-stdlib-semantic, remove-switch-case")
+            == [.replaceStdlibSemantic, .removeSwitchCase]
+    )
     #expect(throws: LitmusFailure.self) { try MutationOperator.parse("nope") }
     #expect(throws: LitmusFailure.self) { try MutationOperator.parse(" , ") }
 }

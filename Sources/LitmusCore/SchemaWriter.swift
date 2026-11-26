@@ -9,11 +9,95 @@ public enum ActivationEnvironment {
     public static let activeID = "LITMUS_ACTIVE_ID"
     /// A directory where the first evaluation of each mutant's site creates an empty file named after the mutant.
     public static let coverageDirectory = "LITMUS_COVERAGE_DIR"
+    /// Optional path to a per-test trace log where test runners and schema evaluations append ordered `T <test>` and
+    /// `R <id>` lines during the baseline/control run (single-pass per-test reach).
+    public static let testTracePath = "LITMUS_TEST_TRACE"
 
     /// The mutant identifiers recorded in `directory`; files that are not identifiers are ignored.
     public static func reached(in directory: String) -> Set<String> {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory) else { return [] }
         return Set(names.filter { $0.count == 16 && $0.allSatisfy(\.isHexDigit) })
+    }
+
+    /// Parses a per-test trace file containing interleaved Swift Testing / XCTest start/end stderr lines (or
+    /// `T <testName>` / `E <testName>` lines) and `__litmus_reach <mutantID>` (or `R <mutantID>`) reach lines.
+    /// Any reach line recorded while a test is active is attributed to that test; records outside any test boundary
+    /// are placed in `outside`.
+    public static func parseTestTrace(
+        _ bytes: [UInt8],
+        knownTests: [String] = []
+    ) -> (byMutant: [String: Set<String>], outside: Set<String>) {
+        var byMutant: [String: Set<String>] = [:]
+        var outside: Set<String> = []
+        var currentTest: String?
+        let text = String(decoding: bytes, as: UTF8.self)
+        for raw in text.split(whereSeparator: \.isNewline) {
+            let line = raw.replacingOccurrences(of: "XCTestOutputBarrier", with: "")
+                .replacingOccurrences(of: "\u{200B}", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("__litmus_reach ") || line.hasPrefix("R ") {
+                let prefixLen = line.hasPrefix("__litmus_reach ") ? 15 : 2
+                let id = String(line.dropFirst(prefixLen)).trimmingCharacters(in: .whitespaces)
+                guard id.count == 16, id.allSatisfy(\.isHexDigit) else { continue }
+                if let currentTest {
+                    byMutant[id, default: []].insert(currentTest)
+                } else {
+                    outside.insert(id)
+                }
+                continue
+            }
+            if line.hasPrefix("T ") {
+                let name = String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                currentTest = name.isEmpty ? nil : name
+                continue
+            }
+            if line.hasPrefix("E ") {
+                currentTest = nil
+                continue
+            }
+            // XCTest: Test Case '-[Module.Class method]' started. / passed / failed
+            if let start = line.range(of: "Test Case '-["),
+                let end = line.range(of: "]' ", range: start.upperBound..<line.endIndex)
+            {
+                let spec = line[start.upperBound..<end.lowerBound]
+                let state = line[end.upperBound...]
+                if state.hasPrefix("started") {
+                    currentTest = String(spec)
+                } else if state.hasPrefix("passed") || state.hasPrefix("failed") || state.hasPrefix("skipped") {
+                    currentTest = nil
+                }
+                continue
+            }
+            // Swift Testing: "◇ Test <name> started." / "✔ Test <name> passed after …"
+            var trimmed = Substring(line)
+            while let first = trimmed.unicodeScalars.first, !first.isASCII || first == " " {
+                trimmed = trimmed.dropFirst()
+            }
+            if trimmed.hasPrefix("Test ") {
+                let rest = trimmed.dropFirst(5)
+                if rest.hasSuffix(" started.") {
+                    let rawName = String(rest.dropLast(" started.".count))
+                    currentTest = matchKnownTest(rawName, in: knownTests) ?? rawName
+                } else if rest.contains(" passed after ") || rest.contains(" failed after ")
+                    || rest.contains(" skipped")
+                {
+                    currentTest = nil
+                }
+            }
+        }
+        return (byMutant, outside)
+    }
+
+    private static func matchKnownTest(_ printed: String, in knownTests: [String]) -> String? {
+        guard !knownTests.isEmpty else { return nil }
+        let unquoted =
+            printed.count >= 2 && printed.hasPrefix("\"") && printed.hasSuffix("\"")
+            ? String(printed.dropFirst().dropLast()) : printed
+        if let exact = knownTests.first(where: { $0 == printed || $0 == unquoted }) { return exact }
+        return knownTests.first {
+            $0.hasSuffix("." + printed) || $0.hasSuffix("/" + printed)
+                || $0.hasSuffix(".`\(unquoted)`()") || $0.hasSuffix("/`\(unquoted)`()")
+        }
     }
 }
 
@@ -24,21 +108,29 @@ public struct RenderedSchema: Sendable, Equatable {
     public let lines: [String: ClosedRange<Int>]
 }
 
-/// Builds conflict-free expression schemas. Edits are non-overlapping, preventing exponential nested duplication.
+/// Builds conflict-free expression, statement and clause schemas. Nested sites are rendered inside-out (`RegionForest`)
+/// up to `maxNestingDepth` per expression so non-overlapping and boundedly nested sites share one build.
 public enum SchemaWriter {
-    /// Greedy deterministic batching, bounded by `limit` sites per compiled schema; each site appears once. Sites on the
-    /// same range (`if a && b`: its negation and its operator swap) share a batch, chained in one replacement; sites
-    /// that nest go to different batches.
+    /// Maximum nesting depth of switches inside a single expression before spilling deeper sites into a subsequent
+    /// schema batch, keeping type-checker work linear.
+    public static let defaultMaxNestingDepth = 12
+
+    /// Greedy deterministic batching, bounded by `limit` sites per compiled schema and `maxNestingDepth` nested switch
+    /// levels per expression; each site appears once.
     /// - Complexity: O(*n* · *b* · *k*) for *n* sites, *b* batches, *k* sites per batch.
-    public static func batches(_ mutations: [Mutation], limit: Int = 64) -> [[Mutation]] {
+    public static func batches(
+        _ mutations: [Mutation],
+        limit: Int = 256,
+        maxNestingDepth: Int = defaultMaxNestingDepth
+    ) -> [[Mutation]] {
         var result: [[Mutation]] = []
-        for mutation in mutations.sorted(by: { ($0.path, $0.start, $0.id) < ($1.path, $1.start, $1.id) }) {
+        let sorted = mutations.sorted {
+            ($0.path, $0.start, -$0.end, $0.id) < ($1.path, $1.start, -$1.end, $1.id)
+        }
+        for mutation in sorted {
             if let index = result.firstIndex(where: { batch in
                 batch.count < max(1, limit)
-                    && !batch.contains { other in
-                        other.path == mutation.path && other.start < mutation.end && mutation.start < other.end
-                            && (other.start, other.end) != (mutation.start, mutation.end)
-                    }
+                    && canPlace(mutation, in: batch, maxNestingDepth: max(1, maxNestingDepth))
             }) {
                 result[index].append(mutation)
             } else {
@@ -48,37 +140,71 @@ public enum SchemaWriter {
         return result
     }
 
+    private static func canPlace(_ candidate: Mutation, in batch: [Mutation], maxNestingDepth: Int) -> Bool {
+        var ancestors = 0
+        for other in batch where other.path == candidate.path {
+            let sameRange = (other.start, other.end) == (candidate.start, candidate.end)
+            if sameRange {
+                // Only pure expression replacements may chain on the exact same byte range.
+                if candidate.operatorID.shape != .expression || other.operatorID.shape != .expression {
+                    return false
+                }
+                continue
+            }
+            let disjoint = other.end <= candidate.start || candidate.end <= other.start
+            if disjoint { continue }
+            // A clause site (`case .x:` gaining `where !m`) must not nest with another site inside its pattern.
+            if candidate.operatorID.shape == .clause || other.operatorID.shape == .clause {
+                return false
+            }
+            let otherContainsCandidate = other.start <= candidate.start && candidate.end <= other.end
+            let candidateContainsOther = candidate.start <= other.start && other.end <= candidate.end
+            // Partial overlap (neither range contains the other) cannot form a tree.
+            guard otherContainsCandidate || candidateContainsOther else { return false }
+            if otherContainsCandidate { ancestors += 1 }
+        }
+        guard ancestors < maxNestingDepth else { return false }
+        // Verify that adding `candidate` does not push any existing descendant in `batch` past `maxNestingDepth`.
+        for other in batch
+        where other.path == candidate.path
+            && candidate.start <= other.start && other.end <= candidate.end
+            && (other.start, other.end) != (candidate.start, candidate.end)
+        {
+            let depth = batch.count {
+                $0.path == other.path && $0.start <= other.start && other.end <= $0.end
+                    && ($0.start, $0.end) != (other.start, other.end)
+            }
+            if depth + 1 >= maxNestingDepth { return false }
+        }
+        return true
+    }
+
     /// Renders one file's batch. See ``render(_:mutations:)``.
     public static func render(_ source: String, mutations: [Mutation]) throws -> String {
         try schema(source, mutations: mutations).text
     }
 
-    /// Verifies source identity, byte ranges, unique IDs and overlap before performing any edit, then guards every
-    /// site with its own once-initialised activation constant.
+    /// Verifies source identity, byte ranges, unique IDs and tree containment before performing any edit, splices
+    /// nested switches from the inside out, and statically re-parses the resulting file with `SwiftParser` so no
+    /// syntactically invalid schema ever reaches a build.
     ///
-    /// Each mutant gets `@usableFromInline nonisolated internal let __litmus_<file>_<id>: Bool`, so a site may sit in a
-    /// public default argument or an `@inlinable` body, under default actor isolation and strict memory safety. Its
-    /// initialiser runs once per process: it records the activation in ``ActivationEnvironment/coverageDirectory`` and
-    /// compares the startup selector, so the hot path is one Boolean load. In a file with top-level code (`main.swift`)
-    /// the declarations precede the code, which initialises globals in order.
+    /// The runtime helper uses `@_silgen_name` C declarations (`getenv`, `open`, `close`, `lseek`, `write`,
+    /// `os_unfair_lock_*`) instead of injecting `import Foundation`, avoiding Swift 6 access-level conflicts with
+    /// `internal import Foundation` or `private import Foundation` in other files of the module.
     public static func schema(_ source: String, mutations: [Mutation]) throws -> RenderedSchema {
         guard !mutations.isEmpty else { return RenderedSchema(text: source, lines: [:]) }
         let bytes = Array(source.utf8)
         let fingerprint = Digest.sha256(bytes)
-        let sorted = mutations.sorted { ($0.start, $0.end, $0.id) < ($1.start, $1.end, $1.id) }
+        let sorted = mutations.sorted { ($0.start, -$0.end, $0.id) < ($1.start, -$1.end, $1.id) }
         guard Set(sorted.map(\.id)).count == sorted.count else { throw LitmusFailure("duplicate mutant IDs") }
-        var previousEnd = 0
-        var previousStart = -1
         for site in sorted {
-            let sameRange = site.start == previousStart && site.end == previousEnd
             guard site.sourceFingerprint == fingerprint,
-                sameRange || site.start >= previousEnd, site.end > site.start, site.end <= bytes.count,
+                site.start >= 0, site.end > site.start, site.end <= bytes.count,
                 String(decoding: bytes[site.start..<site.end], as: UTF8.self) == site.original,
                 site.id.count == 16, site.id.allSatisfy(\.isHexDigit)
             else { throw LitmusFailure("stale source or overlapping/invalid range for mutant \(site.id)") }
-            previousStart = site.start
-            previousEnd = site.end
         }
+        let forest = try RegionForest(mutations: sorted)
         let symbol = "__litmus_" + fingerprint.prefix(16)
         guard !source.contains(symbol) else { throw LitmusFailure("generated symbol collides with source") }
         let tree = Parser.parse(source: source)
@@ -87,11 +213,7 @@ public enum SchemaWriter {
             throw LitmusFailure("a mutant precedes the schema declarations of \(sorted[0].path)")
         }
 
-        let declarations = runtime(
-            symbol: symbol,
-            ids: sorted.map(\.id),
-            importsFoundation: placement.importsFoundation
-        )
+        let declarations = runtime(symbol: symbol, ids: sorted.map(\.id))
         let prefix: [UInt8] = placement.isTopLevelCode ? Array(("\n" + declarations).utf8) : []
         var output: [UInt8] = []
         output.reserveCapacity(bytes.count + sorted.count * 96 + declarations.utf8.count)
@@ -99,42 +221,23 @@ public enum SchemaWriter {
         // shebang has to stay the first line.
         if !source.hasPrefix("#!") { output.append(contentsOf: Array("// swiftlint:disable all\n".utf8)) }
         var ranges: [String: Range<Int>] = [:]
-        var cursor = 0
-        func copy(upTo offset: Int) {
-            output.append(contentsOf: bytes[cursor..<offset])
-            cursor = offset
-        }
-        copy(upTo: placement.offset)
+        output.append(contentsOf: bytes[0..<placement.offset])
         output.append(contentsOf: prefix)
-        var groups: [[Mutation]] = []
-        for site in sorted {
-            if let last = groups.last?.last, (last.start, last.end) == (site.start, site.end) {
-                groups[groups.count - 1].append(site)
-            } else {
-                groups.append([site])
-            }
-        }
-        for group in groups {
-            let first = group[0]
-            copy(upTo: first.start)
-            var replacement: String
-            if first.operatorID.shape == .statement {
-                // A statement is skipped, not replaced: `if !m { original }`. It never shares a range with another site.
-                guard group.count == 1 else { throw LitmusFailure("a statement site shares its range: \(first.id)") }
-                replacement = "if !\(symbol)_\(first.id) { \(first.original) }"
-            } else {
-                // `(m1 ? (r1) : m2 ? (r2) : (original))`: at most one activation holds in a process.
-                replacement = "("
-                for site in group { replacement += "\(symbol)_\(site.id) ? (\(site.replacement)) : " }
-                replacement += "(\(first.original)))"
-            }
-            let start = output.count
-            output.append(contentsOf: replacement.utf8)
-            for site in group { ranges[site.id] = start..<output.count }
-            cursor = first.end
-        }
-        copy(upTo: bytes.count)
+        renderNodes(
+            range: placement.offset..<bytes.count,
+            children: forest.roots,
+            bytes: bytes,
+            symbol: symbol,
+            into: &output,
+            ranges: &ranges
+        )
         if !placement.isTopLevelCode { output.append(contentsOf: ("\n" + declarations).utf8) }
+        let renderedText = String(decoding: output, as: UTF8.self)
+        // Static verification: every rendered schema must parse without syntax errors before a build is started.
+        let reparsed = Parser.parse(source: renderedText)
+        guard !reparsed.hasError else {
+            throw LitmusFailure("rendered schema for \(sorted[0].path) failed static syntax verification")
+        }
         let index = LineIndex(output)
         var lines: [String: ClosedRange<Int>] = [:]
         for (id, range) in ranges {
@@ -143,46 +246,249 @@ public enum SchemaWriter {
             else { throw LitmusFailure("cannot index the schema of \(sorted[0].path)") }
             lines[id] = first...last
         }
-        return RenderedSchema(text: String(decoding: output, as: UTF8.self), lines: lines)
+        return RenderedSchema(text: renderedText, lines: lines)
     }
 
-    private static func runtime(symbol: String, ids: [String], importsFoundation: Bool) -> String {
-        var text = "// litmus: generated mutation schema; this copy is never written back to the source tree\n"
-        if !importsFoundation { text += "import Foundation\n" }
-        text += """
-            nonisolated private let \(symbol): Swift.String = \
-            Foundation.ProcessInfo.processInfo.environment["\(ActivationEnvironment.activeID)"] ?? ""
-            nonisolated private let \(symbol)_dir: Swift.String? = \
-            Foundation.ProcessInfo.processInfo.environment["\(ActivationEnvironment.coverageDirectory)"]
-            nonisolated private func \(symbol)_reach(_ id: Swift.String) -> Swift.Bool {
-                if let directory = \(symbol)_dir {
-                    _ = Foundation.FileManager.default.createFile(atPath: directory + "/" + id, contents: nil)
+    private static func renderNodes(
+        range: Range<Int>,
+        children: [RegionNode],
+        bytes: [UInt8],
+        symbol: String,
+        into output: inout [UInt8],
+        ranges: inout [String: Range<Int>]
+    ) {
+        var cursor = range.lowerBound
+        for child in children {
+            output.append(contentsOf: bytes[cursor..<child.range.lowerBound])
+            renderSwitch(child, bytes: bytes, symbol: symbol, into: &output, ranges: &ranges)
+            cursor = child.range.upperBound
+        }
+        output.append(contentsOf: bytes[cursor..<range.upperBound])
+    }
+
+    private static func renderSwitch(
+        _ node: RegionNode,
+        bytes: [UInt8],
+        symbol: String,
+        into output: inout [UInt8],
+        ranges: inout [String: Range<Int>]
+    ) {
+        let first = node.mutations[0]
+        let start = output.count
+        switch first.operatorID.shape {
+        case .statement:
+            // A statement (or body) is skipped when its mutant is active: `if !m { original-with-inner-switches }`.
+            output.append(contentsOf: "if !\(symbol)_\(first.id) { ".utf8)
+            renderNodes(
+                range: node.range,
+                children: node.children,
+                bytes: bytes,
+                symbol: symbol,
+                into: &output,
+                ranges: &ranges
+            )
+            output.append(contentsOf: " }".utf8)
+            ranges[first.id] = start..<output.count
+        case .clause:
+            // A switch-case clause replacement already carries `\(Self.clauseGuardPlaceholder)` where `!\(symbol)_<id>`
+            // goes.
+            let expanded = first.replacement.replacingOccurrences(
+                of: Self.clauseGuardPlaceholder,
+                with: "!\(symbol)_\(first.id)"
+            )
+            output.append(contentsOf: expanded.utf8)
+            ranges[first.id] = start..<output.count
+        case .expression:
+            // `(m1 ? (r1) : m2 ? (r2) : (original-with-inner-switches))`: at most one activation holds in a process.
+            output.append(contentsOf: "(".utf8)
+            for site in node.mutations {
+                output.append(contentsOf: "\(symbol)_\(site.id) ? (".utf8)
+                let branchStart = output.count
+                output.append(contentsOf: site.replacement.utf8)
+                let branchEnd = output.count
+                output.append(contentsOf: ") : ".utf8)
+                ranges[site.id] = min(start, branchStart)..<max(branchEnd, output.count)
+            }
+            output.append(contentsOf: "(".utf8)
+            renderNodes(
+                range: node.range,
+                children: node.children,
+                bytes: bytes,
+                symbol: symbol,
+                into: &output,
+                ranges: &ranges
+            )
+            output.append(contentsOf: "))".utf8)
+            let end = output.count
+            for site in node.mutations { ranges[site.id] = start..<end }
+        }
+    }
+
+    /// Placeholder token inside `remove-switch-case` replacements that `renderSwitch` expands to `!<symbol>_<id>`.
+    public static let clauseGuardPlaceholder = "__LITMUS_CLAUSE_GUARD__"
+
+    /// Emits the per-file runtime without adding `import Foundation`, using `@_silgen_name` C bindings for environment
+    /// and marker/trace file I/O so files in modules with `internal import Foundation` or `private import Foundation`
+    /// never suffer access-level import collisions.
+    private static func runtime(symbol: String, ids: [String]) -> String {
+        func helperBlock(strict: Bool) -> String {
+            let atUnsafe = strict ? "@unsafe " : ""
+            let kwUnsafe = strict ? "unsafe " : ""
+            return """
+                \(atUnsafe)@_silgen_name("getenv") nonisolated private func \(symbol)_getenv(_ name: Swift.UnsafePointer<Swift.CChar>) -> Swift.UnsafeMutablePointer<Swift.CChar>?
+                \(atUnsafe)@_silgen_name("open") nonisolated private func \(symbol)_open(_ path: Swift.UnsafePointer<Swift.CChar>, _ oflag: Swift.Int32, _ mode: Swift.UInt32) -> Swift.Int32
+                @_silgen_name("close") nonisolated private func \(symbol)_close(_ fd: Swift.Int32) -> Swift.Int32
+                \(atUnsafe)@_silgen_name("write") nonisolated private func \(symbol)_write(_ fd: Swift.Int32, _ buf: Swift.UnsafeRawPointer, _ nbyte: Swift.Int) -> Swift.Int
+                \(atUnsafe)@_silgen_name("os_unfair_lock_lock") nonisolated private func \(symbol)_lock(_ lock: Swift.UnsafeMutablePointer<Swift.UInt32>)
+                \(atUnsafe)@_silgen_name("os_unfair_lock_unlock") nonisolated private func \(symbol)_unlock(_ lock: Swift.UnsafeMutablePointer<Swift.UInt32>)
+                nonisolated private func \(symbol)_env(_ key: Swift.StaticString) -> Swift.String? {
+                    key.withUTF8Buffer { buffer in
+                        \(kwUnsafe)buffer.baseAddress.flatMap { base in
+                            \(kwUnsafe)\(symbol)_getenv(Swift.UnsafeRawPointer(base).assumingMemoryBound(to: Swift.CChar.self))
+                                .map { \(kwUnsafe)Swift.String(cString: $0) }
+                        }
+                    }
                 }
-                return \(symbol) == id
+                nonisolated private final class \(symbol)_Tracker: @unchecked Swift.Sendable {
+                    private var rawLock: Swift.UInt32 = 0
+                    private var touched = Swift.Set<Swift.String>()
+                    private var traceFD: Swift.Int32 = -1
+                    init() {
+                        if let path = \(symbol)_trace, !path.isEmpty {
+                            var bytes = Swift.Array(path.utf8)
+                            bytes.append(0)
+                            traceFD = bytes.withUnsafeBufferPointer { buffer in
+                                guard let base = buffer.baseAddress else { return -1 }
+                                return \(kwUnsafe)\(symbol)_open(
+                                    Swift.UnsafeRawPointer(base).assumingMemoryBound(to: Swift.CChar.self),
+                                    0x0009,
+                                    0o644
+                                )
+                            }
+                        }
+                    }
+                    func record(_ id: Swift.String, directory: Swift.String?) {
+                        Swift.withUnsafeMutablePointer(to: &rawLock) { ptr in \(kwUnsafe)\(symbol)_lock(ptr) }
+                        defer { Swift.withUnsafeMutablePointer(to: &rawLock) { ptr in \(kwUnsafe)\(symbol)_unlock(ptr) } }
+                        if let directory, touched.insert(id).inserted {
+                            var bytes = Swift.Array((directory + "/" + id).utf8)
+                            bytes.append(0)
+                            bytes.withUnsafeBufferPointer { buffer in
+                                guard let base = buffer.baseAddress else { return }
+                                let fd = \(kwUnsafe)\(symbol)_open(
+                                    Swift.UnsafeRawPointer(base).assumingMemoryBound(to: Swift.CChar.self),
+                                    0x0201,
+                                    0o644
+                                )
+                                if fd >= 0 { _ = \(symbol)_close(fd) }
+                            }
+                        }
+                        if traceFD >= 0 {
+                            let line = Swift.Array(("{\\"litmusReach\\":\\"" + id + "\\"}\\n").utf8)
+                            line.withUnsafeBytes { raw in
+                                if let ptr = raw.baseAddress { _ = \(kwUnsafe)\(symbol)_write(traceFD, ptr, raw.count) }
+                            }
+                        }
+                    }
+                }
+                """
+        }
+        var text = """
+            // litmus: generated mutation schema; this copy is never written back to the source tree
+            #if hasFeature(StrictMemorySafety)
+            \(helperBlock(strict: true))
+            #else
+            \(helperBlock(strict: false))
+            #endif
+            nonisolated private let \(symbol): Swift.String = \(symbol)_env("\(ActivationEnvironment.activeID)") ?? ""
+            nonisolated private let \(symbol)_dir: Swift.String? = \(symbol)_env("\(ActivationEnvironment.coverageDirectory)")
+            nonisolated private let \(symbol)_trace: Swift.String? = \(symbol)_env("\(ActivationEnvironment.testTracePath)")
+            nonisolated private let \(symbol)_tracker = \(symbol)_Tracker()
+            nonisolated private let \(symbol)_tracks: Swift.Bool = \(symbol)_dir != nil || \(symbol)_trace != nil
+            @inline(__always) nonisolated private func \(symbol)_reach(_ id: Swift.String) -> Swift.Bool {
+                \(symbol)_tracker.record(id, directory: \(symbol)_dir)
+                return true
             }
 
             """
         for id in ids {
-            text +=
-                "@usableFromInline nonisolated internal let \(symbol)_\(id): Swift.Bool = \(symbol)_reach(\"\(id)\")\n"
+            text += """
+                nonisolated private let \(symbol)_on_\(id): Swift.Bool = \(symbol) == "\(id)"
+                @usableFromInline nonisolated internal var \(symbol)_\(id): Swift.Bool {
+                    if \(symbol)_tracks { _ = \(symbol)_reach("\(id)") }
+                    return \(symbol)_on_\(id)
+                }
+
+                """
         }
         return text
     }
 
-    /// Where the declarations go, and whether the file already imports Foundation unconditionally.
+    /// Mutants on the same byte range merged into one node, arranged as a containment forest.
+    private final class RegionNode {
+        let range: Range<Int>
+        var mutations: [Mutation]
+        var children: [RegionNode] = []
+
+        init(range: Range<Int>, mutations: [Mutation]) {
+            self.range = range
+            self.mutations = mutations
+        }
+    }
+
+    private struct RegionForest {
+        var roots: [RegionNode] = []
+
+        init(mutations: [Mutation]) throws {
+            var groups: [Range<Int>: [Mutation]] = [:]
+            for site in mutations { groups[site.start..<site.end, default: []].append(site) }
+            let sortedRanges = groups.keys.sorted {
+                ($0.lowerBound, -$0.upperBound) < ($1.lowerBound, -$1.upperBound)
+            }
+            var nodes: [RegionNode] = []
+            for range in sortedRanges {
+                let items = (groups[range] ?? []).sorted { $0.id < $1.id }
+                if items.count > 1, items.contains(where: { $0.operatorID.shape != .expression }) {
+                    throw LitmusFailure("a statement site shares its range: \(items[0].id)")
+                }
+                nodes.append(RegionNode(range: range, mutations: items))
+            }
+            var stack: [RegionNode] = []
+            for node in nodes {
+                while let top = stack.last,
+                    !(top.range.lowerBound <= node.range.lowerBound && node.range.upperBound <= top.range.upperBound)
+                {
+                    guard node.range.lowerBound >= top.range.upperBound else {
+                        throw LitmusFailure(
+                            "stale source or overlapping/invalid range for mutant \(node.mutations[0].id)"
+                        )
+                    }
+                    stack.removeLast()
+                }
+                if let parent = stack.last {
+                    if parent.mutations[0].operatorID.shape == .clause {
+                        throw LitmusFailure("a clause site cannot contain inner mutants: \(parent.mutations[0].id)")
+                    }
+                    parent.children.append(node)
+                } else {
+                    roots.append(node)
+                }
+                stack.append(node)
+            }
+        }
+    }
+
+    /// Where the declarations go.
     private struct Placement {
         let offset: Int
         let isTopLevelCode: Bool
-        let importsFoundation: Bool
 
         init(tree: SourceFileSyntax, path: String) {
-            var importsFoundation = false
             var afterImports = 0
             var sawCode = false
             var topLevelCode = path == "main.swift" || path.hasSuffix("/main.swift")
             for item in tree.statements {
-                if let decl = item.item.as(ImportDeclSyntax.self) {
-                    if decl.path.count == 1, decl.path.first?.name.text == "Foundation" { importsFoundation = true }
+                if item.item.is(ImportDeclSyntax.self) {
                     if !sawCode { afterImports = item.endPosition.utf8Offset }
                     continue
                 }
@@ -193,7 +499,6 @@ public enum SchemaWriter {
                 }
             }
             self.isTopLevelCode = topLevelCode
-            self.importsFoundation = importsFoundation
             // A file without imports starts its declarations after a shebang line, if any.
             let text = tree.description.utf8
             if afterImports == 0, text.starts(with: "#!".utf8), let newline = text.firstIndex(of: UInt8(ascii: "\n")) {

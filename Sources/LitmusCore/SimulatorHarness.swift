@@ -229,7 +229,8 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
         if let only = request.onlySwiftTesting { object["filter"] = only.map(filterPattern(for:)) }
         if !request.skipSwiftTesting.isEmpty { object["skip"] = request.skipSwiftTesting.map(filterPattern(for:)) }
         if let repetitions = request.repetitions { object["repetitions"] = repetitions }
-        if let width = request.parallelizationWidth { object["experimentalMaximumParallelizationWidth"] = width }
+        let width = request.collectPerTestReach ? 1 : request.parallelizationWidth
+        if let width { object["experimentalMaximumParallelizationWidth"] = width }
         // XCTest cases run with the whole suite only, as the direct harness runs them.
         object["xctest"] = request.onlySwiftTesting == nil
         let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8)
@@ -314,6 +315,7 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
         var evidence: [String] = []
         var failing: [String] = []
         var moduleCounts: [String: TestCounts] = [:]
+        var scans: [TestEvidence.EventScan] = []
         func result(_ outcome: TestRunOutcome, _ counts: TestCounts?, _ reason: String) -> TestRunResult {
             var result = TestRunResult(
                 outcome: outcome,
@@ -324,6 +326,7 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
             )
             result.failingTests = failing
             result.moduleCounts = moduleCounts
+            for scan in scans { result.absorb(scan) }
             return result
         }
         for bundle in bundles {
@@ -333,25 +336,23 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
             if let modules = request.onlyModules, !modules.contains(bundle.module) { continue }
             let stem = "\(request.name)-\(bundle.module)-simulator"
             let events = "\(logs)/\(stem).events.jsonl"
-            let command = spawnCommand(
-                udid: udid,
-                bundle: bundle,
+            let configJSON = Self.configuration(request)
+            let (output, stopped) = try await runEventStream(
+                executor: executor,
+                request: request,
+                stem: stem,
                 events: events,
-                configuration: Self.configuration(request)
-            )
-            let (output, stopped) = try await runWatching(
-                executor,
-                command,
                 directory: workspace,
-                environment: environment(request, bundle: bundle),
-                deadline: remaining(),
-                events: events,
-                failFast: request.failFast,
-                supervision: request.supervision
-            )
+                baseEnvironment: environment(request, bundle: bundle),
+                traceKey: "SIMCTL_CHILD_" + ActivationEnvironment.testTracePath,
+                deadline: remaining()
+            ) { streamPath in
+                spawnCommand(udid: udid, bundle: bundle, events: streamPath, configuration: configJSON)
+            }
             if let output { try writeLog(output, path: "\(logs)/\(stem).log") }
             evidence += ["logs/\(stem).events.jsonl", "logs/\(stem).log"]
             let scan = try? TestEvidence.swiftTestingEvents(BoundedFileReader.read(path: events, cap: 64 << 20))
+            if let scan { scans.append(scan) }
             failing += (scan?.failedTests ?? []).map(testName).sorted()
             let xctest = Self.xctestCounts(events + ".xctest")
             if FileManager.default.fileExists(atPath: events + ".xctest") {

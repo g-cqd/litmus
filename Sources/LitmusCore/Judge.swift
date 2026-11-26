@@ -78,7 +78,8 @@ struct Judge: Sendable {
         only: [String]? = nil,
         modules: Set<String>? = nil,
         repetitions: Int? = nil,
-        alone: Bool = false
+        alone: Bool = false,
+        collectPerTestReach: Bool = false
     ) async throws -> Execution {
         let slot = try await pool.acquire()
         defer { pool.checkin(slot) }
@@ -101,6 +102,7 @@ struct Judge: Sendable {
             failFast: failFast
         )
         request.onlySwiftTesting = only
+        request.collectPerTestReach = collectPerTestReach
         // A run alone decides a timeout: never at background priority.
         request.supervision = options.supervision(background: alone ? false : nil)
         if harness.selectsModules { request.onlyModules = only == nil ? modules : nil }
