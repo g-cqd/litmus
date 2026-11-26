@@ -824,6 +824,22 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(AgentReport.shellQuoted("it's") == #"'it'\''s'"#)
 }
 
+@Test func `clean removes a finished run's workspace and build products and keeps its evidence`() async throws {
+    let (result, base) = try await run(FakeExecutor()) { $0.keepWorkspace = true }
+    defer { try? FileManager.default.removeItem(at: base) }
+    #expect(result.complete)
+    let run = base.path + "/run"
+    #expect(FileManager.default.fileExists(atPath: run + "/workspace"))
+    let preview = Maintenance.cleanRuns([run, base.path + "/input"], dryRun: true)
+    #expect(preview.directories.contains(run + "/workspace") && preview.freedBytes > 0)
+    #expect(preview.failures.count == 1)
+    #expect(FileManager.default.fileExists(atPath: run + "/workspace"))
+    let cleaned = Maintenance.cleanRuns([run], dryRun: false)
+    #expect(cleaned.failures.isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: run + "/workspace"))
+    #expect(FileManager.default.fileExists(atPath: run + "/run.json"))
+}
+
 @Test func `a time budget stops starting work and reports what did not run`() async throws {
     let executor = FakeExecutor(.init(buildDelay: .milliseconds(1_200)))
     let (result, base) = try await run(executor, source: twoSites) { $0.budgetSeconds = 1 }

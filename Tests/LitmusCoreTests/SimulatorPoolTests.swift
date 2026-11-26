@@ -220,3 +220,35 @@ private func scratch() throws -> String {
     _ = try await mine.withDevice { _ in ((), true) }
     #expect(restarted.withLock { $0.count } == 1, "the user's own simulator is never restarted")
 }
+
+@Test func `clean deletes orphaned pool simulators, keeps live pools' and the user's own`() async throws {
+    let simctl = FakeSimctl(), root = try scratch()
+    defer { try? FileManager.default.removeItem(atPath: root) }
+    let model = template(simctl, state: "Shutdown")
+    let pool = try await SimulatorPool.create(
+        executor: simctl,
+        template: model,
+        count: 1,
+        directory: root,
+        registry: root + "/registry"
+    )
+    _ = simctl.seed("litmus-0123abcd-worker-1")
+    _ = simctl.seed("litmus-is-not-mine")
+    let preview = await Maintenance.cleanSimulators(
+        executor: simctl,
+        registry: root + "/registry",
+        directory: root,
+        dryRun: true
+    )
+    #expect(preview.simulators == ["litmus-0123abcd-worker-1"])
+    #expect(simctl.devices.count == 4)
+    let cleaned = await Maintenance.cleanSimulators(
+        executor: simctl,
+        registry: root + "/registry",
+        directory: root,
+        dryRun: false
+    )
+    #expect(cleaned.failures.isEmpty)
+    #expect(Set(simctl.devices.map(\.name)) == Set(["iPhone 16", "litmus-is-not-mine"] + pool.devices.map(\.name)))
+    _ = await pool.teardown()
+}
