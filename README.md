@@ -51,7 +51,18 @@ litmus run . --trust-project --diff-base origin/main --budget 600 \
   --output /tmp/litmus-pr --report json
 ```
 
-Only mutation sites on changed lines are selected by default. `--diff-scope files` selects all sites in changed files. A run with no selected mutations skips building and testing.
+Only mutation sites on changed lines are selected by default. `--diff-scope files` selects all sites in changed files. `--include-test-changes` also selects the production code a change's test edits can affect, so deleting or weakening a test is checked too. A run with no selected mutations skips building and testing.
+
+## Closing gaps with a coding agent
+
+```sh
+litmus analyze . --results /tmp/litmus-run/run.json --format agent --domain logic   # every gap, self-contained
+litmus run . --trust-project --only-id <id> --output "$(mktemp -d)/run"             # re-verify one mutant
+litmus accept <id> --from /tmp/litmus-run --reason "<proof of equivalence>"         # out-of-source acceptance
+litmus agent-guide --install                                                        # the workflow, as an agent skill
+```
+
+See [usage](docs/usage.md#mutation-scope) for selectors, acceptance files and stale acceptances.
 
 Use `--minimum-score PERCENT` to fail below a mutation score, `--operator-tier standard` for comparison, boolean and arithmetic mutations, and the [GitHub Action](docs/ci.md#github-action) to run it on a runner. Use `--result-store DIR` to reuse eligible verdicts and `--baseline FILE --gate new-survivors` to report new survivors. A budget limits new work; it does not establish that every selected mutation was tested. See [CI and incremental runs](docs/ci.md).
 
@@ -76,7 +87,7 @@ The mutation score is detected mutations divided by detected plus undetected mut
 - [Execution model and limitations](docs/execution.md)
 - [Testing and performance](docs/testing.md)
 - [Security](SECURITY.md)
-- [Release notes](release-notes/v0.4.1.md)
+- [Release notes](release-notes/v0.4.14.md)
 
 ## License
 

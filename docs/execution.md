@@ -26,7 +26,11 @@ For Xcode runs, Litmus stops a mutant's tests at the first failure shown by Xcod
 
 A failing inactive control is retried once; if it fails again its batch is split by halves, within a budget, until the mutant that breaks it is alone and only that one is an infrastructure error. The notes say which batches were split.
 
-Per-target selection limits execution to test modules that can reach a file. `--no-test-target-selection` disables that optimization. `--per-test-reach` records reach at individual test granularity, requiring additional test runs.
+Per-target selection limits execution to test modules that can reach a file. `--no-test-target-selection` disables that optimization. Per-test reach (on by default; `--no-per-test-reach`) records which Swift Testing tests reach each mutant during the serial control run, through one event stream shared with the schema's reach records, at no extra run; a bundle without Swift Testing tests runs whole. Closure reuse keys leave out the test files of targets that do not cover a mutant's file when test-target selection is on, so editing one module's tests keeps another module's verdicts.
+
+Schemas and test processes name their variables with a run token (`LITMUS_ACTIVE_ID_<8 hex>`, derived from the subject root), so a subject whose tests start another Litmus run, Litmus on itself included, never hands the outer selection to the inner run.
+
+`litmus clean` deletes the simulators of pools whose run is gone and any device named like a pool's that no live pool owns; `--run DIR` removes a finished run's workspace copy, build products and worker directories and keeps its evidence; `--dry-run` only reports. A `--destination` naming no available simulator fails before the workspace is copied, with the available simulators listed.
 
 ## Evidence and limitations
 

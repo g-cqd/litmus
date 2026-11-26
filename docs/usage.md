@@ -11,6 +11,9 @@ Run `litmus --help` or `litmus <command> --help` for the full option reference.
 - `census`: count syntax locations for candidate mutation operators without building or testing. Candidate counts do not imply that those operators are supported by `run`.
 - `merge`: combine compatible shards.
 - `restore`: restore original files after an interrupted in-place run.
+- `accept` / `unaccept`: record or remove a reviewed equivalent mutant in `.litmus-accepted.json`.
+- `agent-guide`: print, or install with `--install`, the workflow a coding agent follows to close mutation gaps.
+- `clean`: delete orphaned pool simulators, and with `--run DIR` a finished run's workspace and build products.
 
 ## Mutation scope
 
@@ -28,6 +31,10 @@ Extended operators (`remove-view-element`, `replace-stdlib-semantic`, `remove-no
 
 Use `--only-path GLOB`, `--exclude-path GLOB`, `--arid-call NAME`, and `--exclude-declaration PATTERN` to control scope. A unified diff can be supplied with `--diff FILE`, or computed with `--diff-base REV`. `--diff-scope lines` is the default; `files` includes all sites in affected files.
 
+A diff that changes only tests plans no mutant unless `--include-test-changes` is given. With it, each changed test file brings in the production code it can affect: with `--reach-from NIGHTLY` (a run with per-test reach), when every changed line lies inside a Swift Testing test that run knew, only the mutants those tests reached; otherwise, and for deleted test files, every site of the production files the file's test targets cover. The plan's scope records what came in. With `--gate new-survivors` and the base branch's baseline, a mutant a weakened test no longer kills fails the gate.
+
+`run --only-id SELECTOR` (repeatable) runs only the selected mutants: a 16-digit id, an unambiguous id prefix of at least 8 digits, or `path:line[:operator]` (the path matches whole trailing components). Only their files are rewritten, and they are always executed: an earlier verdict from `--resume` or the result store is not reused, since the tests may have changed. With a persistent workspace (`--workspace persistent:DIR`) this re-verifies one mutant after a test edit with an incremental build.
+
 ## Configuration
 
 A `.litmus.json` file can set shared analyzer configuration and Litmus-specific scope keys, for example:
@@ -37,7 +44,8 @@ A `.litmus.json` file can set shared analyzer configuration and Litmus-specific 
   "exclude": ["**/Generated/**"],
   "include": ["Sources/Core/**"],
   "aridCalls": ["Analytics.track", "Telemetry"],
-  "excludeDeclarations": ["*ForTesting", "*ForPreview"]
+  "excludeDeclarations": ["*ForTesting", "*ForPreview"],
+  "acceptedFile": ".litmus-accepted.json"
 }
 ```
 
@@ -52,6 +60,14 @@ let value = condition ? first : second
 
 Suppressed sites remain visible in the plan; an unknown operator name in a directive emits a warning note in the plan and suppresses nothing.
 
+To accept an equivalent mutant without a comment in production code, record it with its proof:
+
+```sh
+litmus accept <id> --from RUN_DIR --reason "a == b gives a - b == 0, the else value, so > and >= agree"
+```
+
+The entry goes to `.litmus-accepted.json` (or `acceptedFile`, or `--accepted-file`) with the mutant's path, declaration, operator, original and replacement. The reason needs at least 10 non-space characters, and a mutant the run detected is refused without `--force`. Planning suppresses accepted mutants like a directive; an entry follows its mutant across edits elsewhere (by id, then by its anchor). An entry of a planned file that matches no mutant is reported as `stale-missing`. `run --verify-accepted` runs accepted mutants anyway and reports those a test now detects as `stale-killed`. `litmus unaccept <id>` removes an entry.
+
 ## Score gates
 
 `--minimum-score PERCENT` fails a `run` or `analyze` whose mutation score is lower. `--maximum-score-drop POINTS --baseline-run RUN` fails when the score fell by more than that from an earlier run (`.json` or `.pb`). A drop is judged only between runs that measured the same thing: whole-subject runs of the same operators over the same files, with no change scope, shard, or budget stop; otherwise the gate says why it cannot compare and fails. A run with an unresolved mutant has no score and fails. These gates are independent of `--strict` and `--gate new-survivors`.
@@ -60,13 +76,15 @@ Suppressed sites remain visible in the plan; an unknown operator name in a direc
 
 `--jobs`, `--batch-size`, `--suite-width`, `--timeout`, and `--timeout-factor` control concurrency, batching, and deadlines. `--memory-limit` bounds monitored process memory. `--baseline-repetitions` controls flaky-test probing. `--kill-confirmation targeted|full|none` controls verification of detected mutations.
 
+`--per-test-reach` is on by default (`--no-per-test-reach` turns it off): the serial control run records which Swift Testing tests reach each mutant, each mutant then runs only those tests, and a narrowed survivor is rechecked against every covering test module, so an XCTest-only kill is never lost.
+
 `--progress` (the default when standard error is a terminal; `--no-progress` turns it off) prints one line per decided mutant. When `--resume` or a nightly run recorded how long each mutant took, the slowest start first. `--test-target NAME` (repeatable) runs only those test targets for every mutant, with the baseline still running them all.
 
 `--background` lowers build and first-pass priority. It can substantially increase wall time and may trigger a project's own compiler timing limits. `--xcodebuild-argument ARG` passes an additional argument to Xcode; repeat it for each argument and value.
 
 ## Reports
 
-`analyze --format` supports `xcode`, `json`, `sarif`, `markdown`, and `stryker`. `run --report` renders a report directly after execution. `--only` and `--only-from` filter reported findings rather than execution scope.
+`analyze --format` supports `xcode`, `json`, `sarif`, `markdown`, `stryker`, and `agent`. `agent` is one JSON document for a coding agent: a summary (scores, verdict counts, stale acceptances) and every survivor (`reached_not_detected`) and uncovered mutant (`not_reached`) with its code, a numbered context excerpt, the tests that reached it, the test targets covering its file, and a `litmus run --only-id` command that re-verifies it; `--domain logic|ui|all` filters them. `litmus agent-guide --install [--target agents|claude|agents-md]` writes the matching workflow to `.agents/skills/litmus/SKILL.md`, `.claude/skills/litmus/SKILL.md`, or a marked section of `AGENTS.md`. `run --report` renders a report directly after execution. `--only` and `--only-from` filter reported findings rather than execution scope.
 
 Run artifacts contain input identities, execution policy, test counts, mutation results, and resource costs. Analysis revalidates input content. Changed inputs produce degraded evidence instead of a passing historical report.
 
@@ -93,7 +111,9 @@ litmus run /path/to/repository --package-path Modules/Library \
 
 Litmus copies the root, executes builds and tests from the package directory, and mutates only that package. Paths in evidence remain relative to the root. `plan --package-path` supports the same discovery scope. Sibling packages are retained as build inputs, not mutation targets. `--only-path` filters still apply within the selected package. `--package-path` must name a package inside the root and cannot be combined with `--project`.
 
-`--test-plan NAME` explicitly selects a plan referenced by the scheme. Litmus does not silently replace test plans or add targets: doing so could change which tests the project intends to run. `-only-testing` can filter existing test targets but cannot repair an empty test configuration.
+`--test-plan NAME` explicitly selects a plan referenced by the scheme. Litmus does not silently replace test plans or add targets: doing so could change which tests the project intends to run. To test every unit-test target instead, pass `--all-test-targets` (with `--project`, instead of `--scheme`): Litmus writes a `__LitmusAllUnitTests` scheme into its own workspace copy (never the subject's tree; refused in place) with every unit-test target of the project, or of every project under the workspace, and `--include-ui-tests` adds UI-test targets.
+
+`--skip-failing-targets` (implied by `--all-test-targets`) excludes a test target that fails unmutated instead of stopping the run: the baseline is rerun without it, it is skipped in every later run, and the mutants only it covers are reported as not run, outside the score, with a note naming the target. `-only-testing` can filter existing test targets but cannot repair an empty test configuration.
 
 A package whose manifest has `.package(path:)` dependencies outside the root is refused before any copy, with the command to run from their common parent.
 

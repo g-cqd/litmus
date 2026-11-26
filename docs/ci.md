@@ -11,6 +11,8 @@ litmus run . --trust-project --diff-base origin/main --budget 600 \
 
 For a merge commit, `HEAD^1` can identify its target parent if the checkout includes that parent. Choose the base explicitly for other checkout strategies.
 
+Add `--include-test-changes` so a pull request that only edits tests plans the code those tests decide, and `--reach-from NIGHTLY/run.json` (a nightly run, which records per-test reach by default) to narrow that to the mutants the changed tests reached. Accepted mutants (`.litmus-accepted.json`) are left out of every run; a nightly `--verify-accepted` run reports stale acceptances.
+
 ## Score gates in CI
 
 ```sh
@@ -78,3 +80,7 @@ Keep baselines separated by project and update them only from trusted runs. A ba
 `--budget SECONDS` stops starting new work after the budget, rather than killing work already running. `--max-mutants N` limits mutations tested. Both report untested mutations explicitly.
 
 `--shard k/n` assigns whole-module units to workers. Combine compatible shard results with `litmus merge`; incompatible runs are rejected.
+
+## Housekeeping
+
+`litmus clean` deletes simulators left by pools of killed runs; `litmus clean --run DIR` removes a finished run's workspace copy and build products while keeping its evidence. Both accept `--dry-run`.
