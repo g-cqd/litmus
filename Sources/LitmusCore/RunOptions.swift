@@ -77,7 +77,8 @@ public struct RunOptions: Sendable {
     public var selectTestTargets = true
     /// Record which Swift Testing tests reach which mutants (`RunArtifact.perTestReach`) in a single serial control
     /// pass via an event-stream FIFO, narrowing each mutant's execution to its reaching tests.
-    public var perTestReach = false
+    /// On by default: the pass costs no extra run, and narrowed survivors are rechecked against every covering module.
+    public var perTestReach = true
     /// Re-verify mutants that survived a `perTestReach`-narrowed run against all covering test modules so shared-state
     /// interactions across tests never produce a false survivor.
     public var recheckSurvivors = true

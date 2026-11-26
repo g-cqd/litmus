@@ -208,4 +208,59 @@ struct PhaseDTests {
         let all = try reuseKey(entries(), selectTestTargets: false, root: root)
         #expect(try reuseKey(entries(bTests: "2"), selectTestTargets: false, root: root) != all)
     }
+
+    // MARK: - D1.1 Per-test reach by default
+
+    @Test func `per-test reach is on by default and an XCTest-only kill is never lost to narrowing`() async throws {
+        #expect(RunOptions().perTestReach)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-d11-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let pkg = root.appendingPathComponent("Pkg")
+        let files = [
+            "Package.swift": """
+            // swift-tools-version: 6.2
+            import PackageDescription
+            let package = Package(
+                name: "Pkg",
+                platforms: [.macOS(.v15)],
+                targets: [.target(name: "Pkg"), .testTarget(name: "PkgTests", dependencies: ["Pkg"])]
+            )
+            """,
+            "Sources/Pkg/Limit.swift": "public func over(_ x: Int) -> Bool { x > 5 }\n",
+            // Swift Testing reaches the mutant without telling > from >=; only the XCTest boundary case does.
+            "Tests/PkgTests/ReachTests.swift": """
+            import Testing
+            import Pkg
+            @Test func farAbove() { #expect(over(10)) }
+            """,
+            "Tests/PkgTests/BoundaryTests.swift": """
+            import XCTest
+            import Pkg
+            final class BoundaryTests: XCTestCase {
+                func testBoundary() { XCTAssertFalse(over(5)) }
+            }
+            """,
+        ]
+        for (path, text) in files {
+            let url = pkg.appendingPathComponent(path)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data(text.utf8).write(to: url)
+        }
+        var options = RunOptions()
+        options.operators = [.replaceRelational]
+        options.baselineRepetitions = 1
+        options.jobs = 2
+        let artifact = try await MutationRunner(executor: BoundedExecutor()).run(
+            driver: try BuildDriver(root: pkg.path, scheme: nil, destination: nil),
+            outputDirectory: root.appendingPathComponent("run").path,
+            options: options
+        )
+        #expect(artifact.isSuccessfulExecution)
+        let boundary = try #require(artifact.results.first { $0.mutation.replacement == "x >= 5" })
+        #expect(artifact.perTestReach?[boundary.mutation.id]?.contains { $0.contains("farAbove") } == true)
+        #expect(boundary.verdict == .killed)
+    }
 }

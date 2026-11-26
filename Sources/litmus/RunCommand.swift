@@ -67,8 +67,12 @@ struct Run: AsyncParsableCommand {
     var suiteWidth: Int?
     @Flag(help: "Run every test module for every mutant, not only the test targets that can reach its file.")
     var noTestTargetSelection = false
-    @Flag(help: "Record which Swift Testing tests reach which mutants in a single serial control pass.")
-    var perTestReach = false
+    @Flag(
+        inversion: .prefixedNo,
+        help:
+            "Narrow each mutant to the Swift Testing tests that reached it in the serial control pass (default: on; survivors are rechecked against every covering module)."
+    )
+    var perTestReach = true
     @Flag(help: "Skip re-verifying per-test-reach narrowed survivors against all covering test modules.")
     var noRecheckSurvivors = false
     @Option(help: "Seconds after which no schema build or first run starts; what did not run is reported, exit 0.")
