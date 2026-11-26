@@ -75,7 +75,7 @@ enum Sharding {
         )
         selected.scope = plan.scope.map { scope in
             let ids = Set(selected.mutations.map(\.id))
-            return PlanScope(
+            var narrowed = PlanScope(
                 source: scope.source,
                 digest: scope.digest,
                 breadth: scope.breadth,
@@ -84,6 +84,8 @@ enum Sharding {
                 swiftFiles: scope.swiftFiles,
                 onChangedLines: scope.onChangedLines.filter(ids.contains)
             )
+            narrowed.testDriven = scope.testDriven
+            return narrowed
         }
         selected.skipped = plan.skipped
         selected.acceptance = plan.acceptance

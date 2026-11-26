@@ -83,8 +83,26 @@ struct ChangeOptions: ParsableArguments {
     var diffStrip: Int?
     @Option(help: "lines: sites on changed lines; files: every site of changed files, changed lines first.")
     var diffScope: String = "lines"
+    @Flag(
+        help:
+            "Also mutate the production code the change's test edits can affect: the mutants changed tests reached (with --reach-from), else the files their test targets cover."
+    )
+    var includeTestChanges = false
 
-    func scope(root: String) async throws -> ChangeScope? {
+    /// The change, with its test edits resolved through `reach`'s per-test reach when `--include-test-changes`.
+    func scope(root: String, reach: String? = nil) async throws -> ChangeScope? {
+        guard let scope = try await diffScope(root: root) else {
+            guard !includeTestChanges else {
+                throw ValidationError("--include-test-changes needs --diff or --diff-base")
+            }
+            return nil
+        }
+        guard includeTestChanges else { return scope }
+        let artifact = try reach.map { try ArtifactCodec.read(RunArtifact.self, path: $0) }
+        return scope.includingTestChanges(root: root, reach: artifact)
+    }
+
+    private func diffScope(root: String) async throws -> ChangeScope? {
         guard diff == nil || diffBase == nil else { throw ValidationError("--diff and --diff-base are exclusive") }
         guard let breadth = ChangeScope.Breadth(rawValue: diffScope) else {
             throw ValidationError("diff-scope must be lines or files")

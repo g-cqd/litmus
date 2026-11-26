@@ -22,6 +22,8 @@ public struct ChangeScope: Sendable {
     public let source: String
     /// SHA-256 of the diff's bytes.
     public let digest: String
+    /// The production code the change's test edits can affect (`--include-test-changes`); nil leaves test edits out.
+    public var testDriven: TestDrivenScope? = nil
 
     public init(changed: ChangedLines, breadth: Breadth, source: String, digest: String) {
         self.changed = changed
@@ -111,11 +113,24 @@ public struct ChangeScope: Sendable {
     /// The relative paths of the changed Swift files.
     public var swiftFiles: Set<String> { Set(changed.files.keys.filter { $0.hasSuffix(".swift") }) }
 
-    /// 0 for a site on a changed line, 1 for another site of a changed file when the breadth is `files`; nil when out
-    /// of scope.
+    /// The files a plan reads: the changed Swift files and those the test edits reach.
+    public var plannedFiles: Set<String> {
+        swiftFiles.union(testDriven?.wholeFiles ?? []).union(testDriven?.mutantFiles ?? [])
+    }
+
+    /// The test changes resolved against the subject at `root`, through `reach`'s per-test reach where it can.
+    public func includingTestChanges(root: String, reach: RunArtifact?) -> Self {
+        TestChangeScope.resolve(self, root: root, reach: reach)
+    }
+
+    /// 0 for a site on a changed line, 1 for another site of a changed file when the breadth is `files`, or for a site
+    /// the test edits reach; nil when out of scope.
     public func priority(of mutation: Mutation) -> Int? {
         if changed.contains(mutation.path, lines: mutation.line...mutation.endLine) { return 0 }
-        return breadth == .files && changed.touches(mutation.path) ? 1 : nil
+        if breadth == .files && changed.touches(mutation.path) { return 1 }
+        guard let testDriven else { return nil }
+        if testDriven.wholeFiles.contains(mutation.path) || testDriven.mutants.contains(mutation.id) { return 1 }
+        return nil
     }
 }
 
@@ -131,4 +146,6 @@ public struct PlanScope: Codable, Sendable, Equatable {
     public let swiftFiles: Int
     /// The planned mutants on changed lines, which run first; the others are in changed files (breadth `files`).
     public let onChangedLines: [String]
+    /// What the change's test edits brought in (`--include-test-changes`).
+    public var testDriven: TestDrivenScope? = nil
 }

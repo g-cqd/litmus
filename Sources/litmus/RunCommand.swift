@@ -223,7 +223,9 @@ struct Run: AsyncParsableCommand {
         options.progress = progress
         options.testTargets = testTarget
         options.keepResultBundles = keepResultBundles
-        do { options.scope = try await change.scope(root: subject.absoluteRoot) } catch let error as ValidationError {
+        do { options.scope = try await change.scope(root: subject.absoluteRoot, reach: reachFrom) } catch let error
+            as ValidationError
+        {
             throw error
         } catch { try fail(error, code: .usage) }
         return (driver, options)

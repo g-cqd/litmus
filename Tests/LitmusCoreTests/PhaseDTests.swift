@@ -1,4 +1,5 @@
 import Foundation
+import ProjectModel
 import SourceCorpus
 import Testing
 
@@ -262,5 +263,116 @@ struct PhaseDTests {
         let boundary = try #require(artifact.results.first { $0.mutation.replacement == "x >= 5" })
         #expect(artifact.perTestReach?[boundary.mutation.id]?.contains { $0.contains("farAbove") } == true)
         #expect(boundary.verdict == .killed)
+    }
+
+    // MARK: - D3 Test-change diff intelligence
+
+    /// A package with libraries A and B and their test targets; returns the canonical root.
+    private func twoTargetPackage() throws -> String {
+        let root = SourcePath.canonical(
+            FileManager.default.temporaryDirectory.appendingPathComponent("litmus-d3-\(UUID().uuidString)").path
+        )
+        let files = [
+            "Package.swift": """
+            // swift-tools-version: 6.0
+            import PackageDescription
+            let package = Package(
+                name: "P",
+                targets: [
+                    .target(name: "A"), .target(name: "B"),
+                    .testTarget(name: "ATests", dependencies: ["A"]),
+                    .testTarget(name: "BTests", dependencies: ["B"]),
+                ]
+            )
+            """,
+            "Sources/A/A.swift": "public func a(_ x: Bool) -> Int { x ? 1 : 2 }\n",
+            "Sources/B/B.swift": "public func b(_ y: Bool) -> Int { y ? 3 : 4 }\n",
+            "Tests/ATests/ATests.swift": """
+            import Testing
+            import A
+            struct ATests {
+                @Test func first() {
+                    #expect(a(true) == 1)
+                }
+                @Test func second() {
+                    #expect(a(false) == 2)
+                }
+            }
+            // a trailing comment
+            """,
+            "Tests/BTests/BTests.swift": "import Testing\nimport B\n@Test func onlyB() { #expect(b(true) == 3) }\n",
+        ]
+        for (path, text) in files {
+            let url = URL(fileURLWithPath: root + "/" + path)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data(text.utf8).write(to: url)
+        }
+        return root
+    }
+
+    private func scope(_ files: [String: [ClosedRange<Int>]], deleted: Set<String> = []) -> ChangeScope {
+        ChangeScope(changed: ChangedLines(files: files, deleted: deleted), breadth: .lines, source: "test", digest: "d")
+    }
+
+    @Test func `a test-only change plans nothing without the flag, and its target's code with it`() async throws {
+        let root = try twoTargetPackage()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let change = scope(["Tests/ATests/ATests.swift": [5...5]])
+        let plain = try await MutationPlanner.plan(root: root, scope: change)
+        #expect(plain.mutations.isEmpty)
+        let widened = change.includingTestChanges(root: root, reach: nil)
+        #expect(widened.testDriven?.wholeFiles == ["Sources/A/A.swift"])
+        let plan = try await MutationPlanner.plan(root: root, scope: widened)
+        #expect(!plan.mutations.isEmpty)
+        #expect(plan.mutations.allSatisfy { $0.path == "Sources/A/A.swift" })
+        #expect(plan.scope?.testDriven?.testFiles == ["Tests/ATests/ATests.swift"])
+        // A deleted test file widens to what its target covers too.
+        let deletion = scope([:], deleted: ["Tests/BTests/BTests.swift"]).includingTestChanges(root: root, reach: nil)
+        #expect(deletion.testDriven?.wholeFiles == ["Sources/B/B.swift"])
+    }
+
+    @Test func `with per-test reach, an edit inside one test plans only the mutants that test reached`() async throws {
+        let root = try twoTargetPackage()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let sites = try MutationPlanner.mutations(
+            in: "public func a(_ x: Bool) -> Int { x ? 1 : 2 }\n",
+            path: "Sources/A/A.swift",
+            operators: Set(MutationOperator.allCases)
+        )
+        let reached = try #require(sites.first)
+        let other = try #require(sites.last)
+        #expect(reached.id != other.id)
+        var artifact = RunArtifact(
+            provenance: RunProvenance(
+                toolVersion: "t",
+                snapshotSHA256: "s",
+                inputs: [],
+                driver: try BuildDriver(root: root, scheme: nil, destination: nil),
+                toolchain: "t",
+                startedAt: "now",
+                executionPolicy: "p"
+            ),
+            plan: MutationPlan(root: root, analyzedFiles: 1, mutations: sites)
+        )
+        artifact.perTestReach = [reached.id: ["ATests.ATests/first()"], other.id: ["ATests.ATests/second()"]]
+
+        let inFirst = scope(["Tests/ATests/ATests.swift": [5...5]]).includingTestChanges(root: root, reach: artifact)
+        #expect(inFirst.testDriven?.mutants == [reached.id])
+        #expect(inFirst.testDriven?.wholeFiles == [])
+        #expect(inFirst.testDriven?.reachedTests == ["ATests.ATests/first()"])
+        let plan = try await MutationPlanner.plan(
+            root: root,
+            scope: inFirst,
+            operators: Set(MutationOperator.allCases)
+        )
+        #expect(plan.mutations.map(\.id) == [reached.id])
+
+        // A line outside every test (the comment) cannot be resolved by reach: the target's files come in whole.
+        let outside = scope(["Tests/ATests/ATests.swift": [11...11]]).includingTestChanges(root: root, reach: artifact)
+        #expect(outside.testDriven?.wholeFiles == ["Sources/A/A.swift"])
+        #expect(outside.testDriven?.mutants == [])
     }
 }

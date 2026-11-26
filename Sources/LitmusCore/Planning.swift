@@ -186,7 +186,7 @@ public enum MutationPlanner {
         let wanted = include.isEmpty ? nil : PathFilter(include, root: root)
         var files: [String] = []
         var notes: [PlanNote] = []
-        for relative in scope.swiftFiles.sorted() {
+        for relative in scope.plannedFiles.sorted() {
             let path = root + "/" + relative
             if packagePath.map({ !relative.hasPrefix($0 + "/") }) == true || filter.excludes(path)
                 || wanted.map({ !$0.excludes(path) }) == true
@@ -228,6 +228,16 @@ public enum MutationPlanner {
                 $1.priority, $1.mutation.path, $1.mutation.start, $1.mutation.id
             )
         }
+        if let testDriven = scope.testDriven {
+            notes.append(
+                PlanNote(
+                    path: testDriven.testFiles.joined(separator: ", "),
+                    reason: "test change: \(testDriven.wholeFiles.count) production file(s) by covering test target, "
+                        + "\(testDriven.mutants.count) mutant(s) by per-test reach of "
+                        + "\(testDriven.reachedTests.count) changed test(s)"
+                )
+            )
+        }
         var plan = MutationPlan(
             root: root,
             analyzedFiles: planned.count,
@@ -245,6 +255,7 @@ public enum MutationPlanner {
             swiftFiles: scope.swiftFiles.count,
             onChangedLines: ranked.filter { $0.priority == 0 }.map(\.mutation.id)
         )
+        plan.scope?.testDriven = scope.testDriven
         return plan
     }
 
