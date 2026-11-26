@@ -31,7 +31,7 @@ struct PhaseABCTests {
             func onlyArid() {
                 print("only logging")
             }
-            func flag(_ x: Int) -> Bool { x > 0 }
+            func flag(_ x: Int) -> Bool { isReady(x) }
             func lookup(_ x: Int) -> String? { x > 0 ? "ok" : nil }
             func labels(_ x: Int) -> [String] { x > 0 ? ["a"] : ["b"] }
             """
@@ -42,11 +42,19 @@ struct PhaseABCTests {
         let found = try MutationPlanner.mutations(in: source, path: "Sources/S.swift", operators: ops)
         let byOp = Dictionary(grouping: found, by: \.operatorID)
 
-        // replace-stdlib-semantic: min -> max, contains -> allSatisfy, hasPrefix -> hasSuffix
+        // replace-stdlib-semantic: min -> max, contains { } -> allSatisfy { }, hasPrefix -> hasSuffix;
+        // element-form `(0...10).contains(x)` is left alone so it never fails to compile as `allSatisfy(x)`.
         let stdlib = Set((byOp[.replaceStdlibSemantic] ?? []).map(\.replacement))
         #expect(stdlib.contains("max(items.count, 10)"))
         #expect(stdlib.contains("items.allSatisfy { $0 > 0 }"))
         #expect(stdlib.contains(#"clean.hasSuffix("a")"#))
+        #expect(
+            try MutationPlanner.mutations(
+                in: "func c(_ x: Int) -> Bool { (0...10).contains(x) }",
+                path: "Sources/R.swift",
+                operators: [.replaceStdlibSemantic]
+            ).isEmpty
+        )
 
         // remove-normalization: name.lowercased() -> name, and (...).trimmingCharacters(...) -> name.lowercased()
         let norm = Set((byOp[.removeNormalization] ?? []).map(\.replacement))
@@ -149,6 +157,56 @@ struct PhaseABCTests {
         // Unknown directive operator produces a PlanNote warning and does NOT suppress `a > b`.
         #expect(plan.notes.contains { $0.reason.contains("unknown operator 'negate-conditon'") })
         #expect(plan.mutations.contains { $0.original == "a > b" && $0.operatorID == .negateCondition })
+    }
+
+    @Test func `guaranteed constant-folded integer overflows and duplicate literal/relational returns are skipped`()
+        throws
+    {
+        let overflow =
+            "func f(_ p: Int) -> Bool { p <= Int.max / 2 && p >= Int.min + 1 && (Int.max - 1) > 0 }"
+        let arith = try MutationPlanner.mutations(
+            in: overflow,
+            path: "Sources/O.swift",
+            operators: [.replaceArithmetic]
+        )
+        #expect(arith.isEmpty)
+
+        let returns = """
+            func zero() -> Int { return 0 }
+            func cmp(_ a: Int, _ b: Int) -> Bool { a <= b }
+            """
+        let retSites = try MutationPlanner.mutations(
+            in: returns,
+            path: "Sources/Ret.swift",
+            operators: [.returnBoundary, .returnConstant]
+        )
+        #expect(retSites.map(\.operatorID) == [.returnConstant])
+        #expect(retSites.map(\.replacement) == ["1"])
+    }
+
+    @Test func `CompilerDiagnostics pinpoints the single offending mutant by column on nested single-line schemas`()
+        throws
+    {
+        let source =
+            "func f(_ points: Int, _ cap: Int) -> Int {\n    guard points <= cap / 2 else { return 0 }\n    return points\n}\n"
+        let sites = try MutationPlanner.mutations(
+            in: source,
+            path: "Sources/L.swift",
+            operators: [.negateCondition, .replaceRelational, .replaceArithmetic]
+        )
+        #expect(sites.count >= 4)
+        let schema = try SchemaWriter.schema(source, mutations: sites)
+        let innerSite = try #require(sites.first { $0.replacement == "cap * 2" })
+        let sub = try #require(schema.text.range(of: "cap * 2"))
+        let prefix = schema.text[..<sub.lowerBound]
+        let line = prefix.filter { $0 == "\n" }.count + 1
+        let lineStart = prefix.lastIndex(of: "\n").map { schema.text.index(after: $0) } ?? schema.text.startIndex
+        let col = schema.text[lineStart..<sub.lowerBound].utf8.count + 4
+        let path = "/snap/Sources/L.swift"
+        let msg = "\(path):\(line):\(col): error: synthetic error on inner expression\n"
+        let out = ProcessOutput(exitStatus: 1, stdout: Array(msg.utf8), stderr: [], truncated: false, timedOut: false)
+        let suspects = CompilerDiagnostics(out, snapshotRoot: "/snap").suspects(in: [path: schema])
+        #expect(suspects == [innerSite.id])
     }
 
     @Test func `XcodeResultStream stops immediately on simulator host crash messages`() {

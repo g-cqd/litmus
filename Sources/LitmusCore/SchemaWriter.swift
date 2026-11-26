@@ -106,6 +106,9 @@ public struct RenderedSchema: Sendable, Equatable {
     public let text: String
     /// 1-based line range of each mutant's replacement in `text`, to attribute compiler diagnostics.
     public let lines: [String: ClosedRange<Int>]
+    /// Exact UTF-8 byte range of each mutant's own replacement branch in `text`, so column-bearing compiler errors on
+    /// nested single-line schemas pinpoint the single offending mutant without bisecting its siblings/ancestors.
+    public var branchBytes: [String: Range<Int>] = [:]
 }
 
 /// Builds conflict-free expression, statement and clause schemas. Nested sites are rendered inside-out (`RegionForest`)
@@ -221,6 +224,7 @@ public enum SchemaWriter {
         // shebang has to stay the first line.
         if !source.hasPrefix("#!") { output.append(contentsOf: Array("// swiftlint:disable all\n".utf8)) }
         var ranges: [String: Range<Int>] = [:]
+        var branchBytes: [String: Range<Int>] = [:]
         output.append(contentsOf: bytes[0..<placement.offset])
         output.append(contentsOf: prefix)
         renderNodes(
@@ -229,7 +233,8 @@ public enum SchemaWriter {
             bytes: bytes,
             symbol: symbol,
             into: &output,
-            ranges: &ranges
+            ranges: &ranges,
+            branchBytes: &branchBytes
         )
         if !placement.isTopLevelCode { output.append(contentsOf: ("\n" + declarations).utf8) }
         let renderedText = String(decoding: output, as: UTF8.self)
@@ -246,7 +251,7 @@ public enum SchemaWriter {
             else { throw LitmusFailure("cannot index the schema of \(sorted[0].path)") }
             lines[id] = first...last
         }
-        return RenderedSchema(text: renderedText, lines: lines)
+        return RenderedSchema(text: renderedText, lines: lines, branchBytes: branchBytes)
     }
 
     private static func renderNodes(
@@ -255,12 +260,20 @@ public enum SchemaWriter {
         bytes: [UInt8],
         symbol: String,
         into output: inout [UInt8],
-        ranges: inout [String: Range<Int>]
+        ranges: inout [String: Range<Int>],
+        branchBytes: inout [String: Range<Int>]
     ) {
         var cursor = range.lowerBound
         for child in children {
             output.append(contentsOf: bytes[cursor..<child.range.lowerBound])
-            renderSwitch(child, bytes: bytes, symbol: symbol, into: &output, ranges: &ranges)
+            renderSwitch(
+                child,
+                bytes: bytes,
+                symbol: symbol,
+                into: &output,
+                ranges: &ranges,
+                branchBytes: &branchBytes
+            )
             cursor = child.range.upperBound
         }
         output.append(contentsOf: bytes[cursor..<range.upperBound])
@@ -271,7 +284,8 @@ public enum SchemaWriter {
         bytes: [UInt8],
         symbol: String,
         into output: inout [UInt8],
-        ranges: inout [String: Range<Int>]
+        ranges: inout [String: Range<Int>],
+        branchBytes: inout [String: Range<Int>]
     ) {
         let first = node.mutations[0]
         let start = output.count
@@ -285,10 +299,12 @@ public enum SchemaWriter {
                 bytes: bytes,
                 symbol: symbol,
                 into: &output,
-                ranges: &ranges
+                ranges: &ranges,
+                branchBytes: &branchBytes
             )
             output.append(contentsOf: " }".utf8)
             ranges[first.id] = start..<output.count
+            branchBytes[first.id] = start..<output.count
         case .clause:
             // A switch-case clause replacement already carries `\(Self.clauseGuardPlaceholder)` where `!\(symbol)_<id>`
             // goes.
@@ -298,16 +314,16 @@ public enum SchemaWriter {
             )
             output.append(contentsOf: expanded.utf8)
             ranges[first.id] = start..<output.count
+            branchBytes[first.id] = start..<output.count
         case .expression:
             // `(m1 ? (r1) : m2 ? (r2) : (original-with-inner-switches))`: at most one activation holds in a process.
             output.append(contentsOf: "(".utf8)
             for site in node.mutations {
+                let armStart = output.count
                 output.append(contentsOf: "\(symbol)_\(site.id) ? (".utf8)
-                let branchStart = output.count
                 output.append(contentsOf: site.replacement.utf8)
-                let branchEnd = output.count
                 output.append(contentsOf: ") : ".utf8)
-                ranges[site.id] = min(start, branchStart)..<max(branchEnd, output.count)
+                branchBytes[site.id] = armStart..<output.count
             }
             output.append(contentsOf: "(".utf8)
             renderNodes(
@@ -316,7 +332,8 @@ public enum SchemaWriter {
                 bytes: bytes,
                 symbol: symbol,
                 into: &output,
-                ranges: &ranges
+                ranges: &ranges,
+                branchBytes: &branchBytes
             )
             output.append(contentsOf: "))".utf8)
             let end = output.count

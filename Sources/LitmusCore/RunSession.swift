@@ -106,7 +106,6 @@ final class RunSession<Executor: ProcessExecutor> {
         try await selectWork()
         do {
             guard !toRun.isEmpty else { return try finish() }
-            startSimulatorPool()
             try await runBatches()
             await teardownSimulators()
             return try finish()
@@ -191,16 +190,16 @@ final class RunSession<Executor: ProcessExecutor> {
             "destination \(destination) resolved to \(device.name), iOS \(device.version), \(device.udid)"
     }
 
-    /// Starts making extra simulators (or booting a shut-down destination simulator) while the first schema builds,
-    /// so tests never pay a cold-simulator penalty on every `xcodebuild` launch.
-    func startSimulatorPool() {
+    /// Starts making extra simulators (`--simulators`) when `XcodeHarness` needs them, or boots a shut-down
+    /// destination simulator before `SimulatorDirectHarness` probes it.
+    func startSimulatorPool(extraSimulators: Bool) {
         guard let device = resolvedDevice else { return }
-        if options.simulators > 1 {
+        if extraSimulators, options.simulators > 1, poolTask == nil {
             let (executor, output, count) = (executor, output, options.simulators)
             poolTask = Task {
                 try await SimulatorPool.create(executor: executor, template: device, count: count, directory: output)
             }
-        } else if device.isShutdown {
+        } else if !extraSimulators, device.isShutdown, bootTask == nil {
             let (executor, directory, udid) = (executor, root, device.udid)
             bootTask = Task {
                 try? await SimulatorPool.boot(executor, udid: udid, directory: directory, timeout: 300)
@@ -549,17 +548,44 @@ final class RunSession<Executor: ProcessExecutor> {
     /// flaky tests, deadlines, and the judge every mutant is decided by.
     func establish() async throws -> Established {
         phase = clock.now
+        startSimulatorPool(extraSimulators: false)
+        if let bootTask {
+            await bootTask.value
+            self.bootTask = nil
+        }
         var harnessNotes: [String] = []
-        let fleet = await simulatorFleet(notes: &harnessNotes)
         var harness = try await runner.makeHarness(
             driver: driver,
             options: options,
             workspace: snapshot.root,
             artifacts: artifacts,
             logs: logs,
-            fleet: fleet,
+            fleet: nil,
             notes: &harnessNotes
         )
+        if harness is XcodeHarness<Executor>, options.simulators > 1 {
+            startSimulatorPool(extraSimulators: true)
+            let fleet = await simulatorFleet(notes: &harnessNotes)
+            harness = XcodeHarness(
+                executor: executor,
+                driver: driver,
+                workspace: snapshot.root,
+                artifacts: artifacts,
+                logs: logs,
+                fleet: fleet,
+                keepResultBundles: options.keepResultBundles
+            )
+        } else if options.simulators > 1 {
+            if resolvedDevice != nil {
+                harnessNotes.append(
+                    "--simulators \(options.simulators) pool skipped: simulator-direct runs concurrent workers on the booted destination simulator without extra simulator boots"
+                )
+            } else {
+                harnessNotes.append(
+                    "--simulators \(options.simulators) ignored: the run is not on an iOS Simulator destination"
+                )
+            }
+        }
         artifact.notes += harnessNotes
         account("discovery", since: phase)
         func makeJudge(for harness: any TestHarness) throws -> (
@@ -600,6 +626,10 @@ final class RunSession<Executor: ProcessExecutor> {
             artifact.notes.append(
                 "simulator helper could not pass the app-hosted baseline (\(baseline.result.reason)); falling back to xcodebuild"
             )
+            var fallbackNotes: [String] = []
+            if options.simulators > 1 { startSimulatorPool(extraSimulators: true) }
+            let fleet = await simulatorFleet(notes: &fallbackNotes)
+            artifact.notes += fallbackNotes
             harness = XcodeHarness(
                 executor: executor,
                 driver: driver,

@@ -26,6 +26,7 @@ struct CompilerDiagnostics {
     struct Error {
         let path: String
         let line: Int
+        let column: Int?
         let message: String
     }
     let errors: [Error]
@@ -37,9 +38,10 @@ struct CompilerDiagnostics {
             guard let marker = line.range(of: ": error: ") else { continue }
             let location = line[..<marker.lowerBound].split(separator: ":")
             guard location.count >= 3, let number = Int(location[location.count - 2]) else { continue }
+            let column = Int(location[location.count - 1])
             let path = SourcePath.canonical(location.dropLast(2).joined(separator: ":"))
             guard path.hasPrefix(snapshotRoot + "/") else { continue }
-            errors.append(Error(path: path, line: number, message: String(line[marker.upperBound...])))
+            errors.append(Error(path: path, line: number, column: column, message: String(line[marker.upperBound...])))
         }
         self.errors = errors
     }
@@ -85,11 +87,36 @@ struct CompilerDiagnostics {
         return String(decoding: output, as: UTF8.self)
     }
 
-    /// The mutants whose replacement covers a line an error points at.
+    /// The mutants whose replacement covers an error's `(line, column)` byte offset (pinpointing the narrowest nested
+    /// replacement branch when `column` is present), falling back to line-range matching otherwise.
     func suspects(in rendered: [String: RenderedSchema]) -> [String] {
         var ids: Set<String> = []
+        var lineStartsCache: [String: [Int]] = [:]
+        func byteOffset(in path: String, text: String, line: Int, column: Int) -> Int? {
+            let starts: [Int]
+            if let cached = lineStartsCache[path] {
+                starts = cached
+            } else {
+                var built = [0]
+                let utf8 = Array(text.utf8)
+                for idx in utf8.indices where utf8[idx] == 0x0A { built.append(idx + 1) }
+                lineStartsCache[path] = built
+                starts = built
+            }
+            guard line >= 1, line <= starts.count, column >= 1 else { return nil }
+            return starts[line - 1] + (column - 1)
+        }
         for error in errors {
             guard let schema = rendered[error.path] else { continue }
+            if let column = error.column,
+                let offset = byteOffset(in: error.path, text: schema.text, line: error.line, column: column),
+                let exact = schema.branchBytes
+                    .filter({ $0.value.contains(offset) })
+                    .min(by: { ($0.value.count, $0.key) < ($1.value.count, $1.key) })
+            {
+                ids.insert(exact.key)
+                continue
+            }
             for (id, lines) in schema.lines where lines.contains(error.line) { ids.insert(id) }
         }
         return ids.sorted()

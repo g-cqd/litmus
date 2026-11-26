@@ -269,41 +269,55 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
         return ToolCommand(executable: helper.simctl, arguments: spawn)
     }
 
-    /// Whether the helper can run the first bundle at all (entry point found, bundle loaded): a run that matches no
-    /// test. Anything else means `xcodebuild`.
+    /// Whether the helper can run the first bundle on every device in `fleet`: a run that matches no test warms each
+    /// freshly booted simulator so the real baseline never hits a first-boot SIGTERM. Anything else means `xcodebuild`.
     func probe() async throws -> Bool {
         guard let bundle = bundles.first else { return false }
-        return try await fleet.withDevice { device in (try await self.probe(bundle, on: device.udid), false) }
+        var seen: Set<String> = []
+        for _ in 0..<max(1, fleet.count) {
+            let udid = await fleet.nextDevice().udid
+            guard seen.insert(udid).inserted else { continue }
+            if !(try await probe(bundle, on: udid)) { return false }
+        }
+        return true
     }
 
     private func probe(_ bundle: Bundle, on udid: String) async throws -> Bool {
-        let events = logs + "/simulator-probe.events.jsonl"
-        let output = try await executor.execute(
-            spawnCommand(
-                udid: udid,
-                bundle: bundle,
-                events: events,
-                configuration: #"{"filter":["^litmus-probe-matches-nothing$"],"xctest":false}"#
-            ),
-            directory: workspace,
-            environment: environment(nil, bundle: bundle),
-            timeout: 120
-        )
-        try writeLog(output, path: logs + "/simulator-probe.log")
-        let scan = try? TestEvidence.swiftTestingEvents(BoundedFileReader.read(path: events, cap: 1 << 20))
-        return output.exitStatus == 0 && scan?.ended == true
+        for attempt in 1...2 {
+            let suffix = fleet.count > 1 ? "-\(udid.prefix(8))" : ""
+            let events = logs + "/simulator-probe\(suffix).events.jsonl"
+            let output = try await executor.execute(
+                spawnCommand(
+                    udid: udid,
+                    bundle: bundle,
+                    events: events,
+                    configuration: #"{"filter":["^litmus-probe-matches-nothing$"],"xctest":false}"#
+                ),
+                directory: workspace,
+                environment: environment(nil, bundle: bundle),
+                timeout: 120
+            )
+            try writeLog(output, path: logs + "/simulator-probe\(suffix).log")
+            let scan = try? TestEvidence.swiftTestingEvents(BoundedFileReader.read(path: events, cap: 1 << 20))
+            if output.exitStatus == 0 && scan?.ended == true { return true }
+            if attempt == 1 { try? await Task.sleep(for: .seconds(1)) }
+        }
+        return false
     }
 
     public func run(_ request: TestRunRequest) async throws -> TestRunResult {
         if workers > fleet.count {
             // Multiple `simctl spawn` processes run concurrently on the booted simulator(s) with isolated TMPDIR and
-            // coverage directories; do not take an exclusive device lease.
+            // coverage directories; do not take an exclusive device lease or reboot a shared simulator when one child
+            // process traps on an integer overflow.
             return try await run(request, on: await fleet.nextDevice().udid)
         }
         return try await fleet.withDevice { device in
             let result = try await self.run(request, on: device.udid)
-            // A crashed or timed-out run may leave the simulator in a state the next run should not inherit.
-            return (result, result.outcome == .crashed || result.outcome == .timedOut)
+            // Under `simctl spawn` (`simulator-direct`), an active mutant that traps (SIGTRAP on integer overflow or
+            // force-unwrap) exits only its own helper process without wedging SpringBoard; only a timed-out helper
+            // warrants rebooting an owned simulator.
+            return (result, result.outcome == .timedOut)
         }
     }
 

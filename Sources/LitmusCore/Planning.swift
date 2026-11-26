@@ -647,9 +647,11 @@ private final class Sites: SyntaxVisitor {
                 add(node, operatorID: .replaceRelational, replacement: swapping(op, in: node, for: replacement))
             }
         } else if let replacement = Self.arithmetic[symbol],
-            !Self.isStringLiteral(node.leftOperand), !Self.isStringLiteral(node.rightOperand)
+            !Self.isStringLiteral(node.leftOperand), !Self.isStringLiteral(node.rightOperand),
+            !Self.isGuaranteedConstantOverflow(symbol: symbol, left: node.leftOperand, right: node.rightOperand)
         {
-            // `"a" + b` is concatenation: its `-` never compiles, so it would only cost a build to find out.
+            // `"a" + b` is concatenation and `Int.max * 2` is a constant-folded overflow: neither compiles, so
+            // skipping them avoids paying a failed schema build just to classify an impossible edit.
             add(node, operatorID: .replaceArithmetic, replacement: swapping(op, in: node, for: replacement))
         } else if let replacement = Self.compoundAssignment[symbol],
             !(symbol == "+=" && Self.isCollectionOrStringLiteral(node.rightOperand))
@@ -693,6 +695,40 @@ private final class Sites: SyntaxVisitor {
 
     private static func isCollectionOrStringLiteral(_ expression: ExprSyntax) -> Bool {
         expression.is(StringLiteralExprSyntax.self) || expression.is(ArrayExprSyntax.self)
+    }
+
+    /// True when mutating `left <symbol> right` (`/` or `%` -> `*`, `-` -> `+`, `+` -> `-`) produces an expression on
+    /// `.max` or `.min` with a literal operand that Swift's constant folder rejects at compile time as an integer
+    /// overflow (for example `Int.max / 2` -> `Int.max * 2`).
+    private static func isGuaranteedConstantOverflow(symbol: String, left: ExprSyntax, right: ExprSyntax) -> Bool {
+        func boundKind(_ expr: ExprSyntax) -> String? {
+            guard let member = expr.as(MemberAccessExprSyntax.self) else { return nil }
+            let name = member.declName.baseName.text
+            guard name == "max" || name == "min" else { return nil }
+            let base = member.base?.trimmedDescription ?? ""
+            return base.isEmpty || numericReturnTypes.contains(base) ? name : nil
+        }
+        func positiveIntLiteral(_ expr: ExprSyntax, atLeast minimum: Int) -> Bool {
+            guard let lit = expr.as(IntegerLiteralExprSyntax.self),
+                let val = Int(lit.literal.text.replacingOccurrences(of: "_", with: ""))
+            else { return false }
+            return val >= minimum
+        }
+        switch symbol {
+        case "/", "%":
+            // Replacing `/` or `%` with `*`: `Int.max * k` or `k * Int.max` (k >= 2), and `Int.min * k` (k >= 2).
+            if boundKind(left) != nil && positiveIntLiteral(right, atLeast: 2) { return true }
+            if boundKind(right) != nil && positiveIntLiteral(left, atLeast: 2) { return true }
+            return false
+        case "-":
+            // Replacing `-` with `+`: `Int.max + k` (k >= 1).
+            return boundKind(left) == "max" && positiveIntLiteral(right, atLeast: 1)
+        case "+":
+            // Replacing `+` with `-`: `Int.min - k` (k >= 1).
+            return boundKind(left) == "min" && positiveIntLiteral(right, atLeast: 1)
+        default:
+            return false
+        }
     }
 
     private static func isNeverCall(_ expression: ExprSyntax) -> Bool {
@@ -771,13 +807,9 @@ private final class Sites: SyntaxVisitor {
         // `dropFirst`/`suffix`, `hasPrefix`/`hasSuffix`).
         if context.operators.contains(.replaceStdlibSemantic) {
             if let member = node.calledExpression.as(MemberAccessExprSyntax.self),
-                let swapped = Self.stdlibMemberPairs[member.declName.baseName.text]
+                let replacement = stdlibMemberSwap(member: member, call: node)
             {
-                add(
-                    node,
-                    operatorID: .replaceStdlibSemantic,
-                    replacement: swappingToken(member.declName.baseName, in: node, for: swapped)
-                )
+                add(node, operatorID: .replaceStdlibSemantic, replacement: replacement)
             } else if let decl = node.calledExpression.as(DeclReferenceExprSyntax.self),
                 node.arguments.count == 2,
                 let swapped = Self.stdlibFreePairs[decl.baseName.text]
@@ -835,10 +867,25 @@ private final class Sites: SyntaxVisitor {
         return .visitChildren
     }
 
+    private static func isNumericOrBoolLiteral(_ expr: ExprSyntax) -> Bool {
+        if expr.is(IntegerLiteralExprSyntax.self) || expr.is(FloatLiteralExprSyntax.self)
+            || expr.is(BooleanLiteralExprSyntax.self)
+        {
+            return true
+        }
+        if let prefix = expr.as(PrefixOperatorExprSyntax.self), prefix.operator.text == "-" {
+            return prefix.expression.is(IntegerLiteralExprSyntax.self)
+                || prefix.expression.is(FloatLiteralExprSyntax.self)
+        }
+        return false
+    }
+
     private func addReturnMutations(expr: ExprSyntax, returnType: String) {
         let trimmed = expr.trimmedDescription
         if context.operators.contains(.returnBoundary) {
-            if Self.numericReturnTypes.contains(returnType) {
+            // Skip plain numeric literals (`return 0` -> `(0) + 1`), which duplicate `return-constant` (`return 1`),
+            // and skip binary relational expressions (`return a <= b`), which `replace-relational` already covers.
+            if Self.numericReturnTypes.contains(returnType), !Self.isNumericOrBoolLiteral(expr) {
                 add(expr, operatorID: .returnBoundary, replacement: "(\(trimmed)) + 1")
             } else if returnType == "String" || returnType == "Swift.String", trimmed != "\"\"" {
                 add(expr, operatorID: .returnBoundary, replacement: "\"\"")
@@ -850,7 +897,11 @@ private final class Sites: SyntaxVisitor {
         }
         if context.operators.contains(.returnConstant) {
             if returnType == "Bool" || returnType == "Swift.Bool" {
-                if trimmed != "true" && trimmed != "false" {
+                let isRelational =
+                    expr.as(InfixOperatorExprSyntax.self)
+                    .flatMap { $0.operator.as(BinaryOperatorExprSyntax.self)?.operator.trimmedDescription }
+                    .map { Self.relational[$0] != nil } == true
+                if trimmed != "true" && trimmed != "false" && !isRelational {
                     add(expr, operatorID: .returnConstant, replacement: "true")
                     add(expr, operatorID: .returnConstant, replacement: "false")
                 }
@@ -904,7 +955,6 @@ private final class Sites: SyntaxVisitor {
 
     private static let stdlibMemberPairs: [String: String] = [
         "min": "max", "max": "min",
-        "allSatisfy": "contains", "contains": "allSatisfy",
         "prefix": "dropLast", "dropLast": "prefix",
         "dropFirst": "suffix", "suffix": "dropFirst",
         "hasPrefix": "hasSuffix", "hasSuffix": "hasPrefix",
@@ -914,6 +964,34 @@ private final class Sites: SyntaxVisitor {
         "Int", "UInt", "Int64", "Int32", "Int16", "Int8", "UInt64", "UInt32", "UInt16", "UInt8",
         "Double", "Float", "CGFloat", "TimeInterval",
     ]
+
+    private func stdlibMemberSwap(member: MemberAccessExprSyntax, call: FunctionCallExprSyntax) -> String? {
+        let name = member.declName.baseName.text
+        if name == "contains" {
+            if call.arguments.isEmpty, call.trailingClosure != nil {
+                return swappingToken(member.declName.baseName, in: call, for: "allSatisfy")
+            }
+            if call.arguments.count == 1, let first = call.arguments.first, first.label?.text == "where",
+                call.trailingClosure == nil, let base = member.base
+            {
+                return "\(base.trimmedDescription).allSatisfy(\(first.expression.trimmedDescription))"
+            }
+            return nil
+        }
+        if name == "allSatisfy" {
+            if call.arguments.isEmpty, call.trailingClosure != nil {
+                return swappingToken(member.declName.baseName, in: call, for: "contains")
+            }
+            if call.arguments.count == 1, let first = call.arguments.first, first.label == nil,
+                call.trailingClosure == nil, let base = member.base
+            {
+                return "\(base.trimmedDescription).contains(where: \(first.expression.trimmedDescription))"
+            }
+            return nil
+        }
+        guard let swapped = Self.stdlibMemberPairs[name] else { return nil }
+        return swappingToken(member.declName.baseName, in: call, for: swapped)
+    }
 
     private func swappingToken(_ token: TokenSyntax, in node: some SyntaxProtocol, for replacement: String) -> String {
         let text = Array(node.trimmedDescription.utf8)
