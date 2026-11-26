@@ -1,5 +1,6 @@
 import Foundation
 import ProjectModel
+import ReportSupport
 import SourceCorpus
 import Synchronization
 import Testing
@@ -701,6 +702,109 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(second.results.map(\.verdict) == [.killed])
     #expect(second.results[0].reusedFrom == nil)
     #expect(executor.calls.withLock { $0.map(activeID(in:)) }.contains(target.id))
+}
+
+@Test func `an accepted mutant is not run; verify-accepted runs it and reports a stale acceptance`() async throws {
+    let base = try fixture(twoSites)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let root = base.path + "/input"
+    let driver = try BuildDriver(root: root, scheme: nil, destination: nil)
+    let first = try await MutationRunner(executor: FakeExecutor()).run(
+        driver: driver,
+        outputDirectory: base.path + "/run1",
+        options: options()
+    )
+    let target = try #require(first.results.first?.mutation)
+    // The run killed it: accepting a detected mutant needs --force.
+    #expect(throws: LitmusFailure.self) {
+        try AcceptedMutants.accept(
+            target.id,
+            run: base.path + "/run1",
+            root: root,
+            reason: "equal operands give the same result",
+            today: "2026-11-27"
+        )
+    }
+    #expect(throws: LitmusFailure.self) {
+        try AcceptedMutants.accept(
+            target.id,
+            run: base.path + "/run1",
+            root: root,
+            reason: "ok",
+            force: true,
+            today: "x"
+        )
+    }
+    let (entry, path) = try AcceptedMutants.accept(
+        target.id,
+        run: base.path + "/run1",
+        root: root,
+        reason: "equal operands give the same result",
+        force: true,
+        today: "2026-11-27"
+    )
+    #expect(entry.id == target.id && path == root + "/.litmus-accepted.json")
+
+    let second = try await MutationRunner(executor: FakeExecutor()).run(
+        driver: driver,
+        outputDirectory: base.path + "/run2",
+        options: options()
+    )
+    #expect(!second.plan.mutations.map(\.id).contains(target.id))
+    #expect(second.plan.suppressed.map(\.id).contains(target.id))
+    #expect(second.plan.acceptance?.accepted[target.id] == "equal operands give the same result")
+    #expect(second.staleKilledAcceptances.isEmpty)
+
+    var verifying = options()
+    verifying.verifyAccepted = true
+    let third = try await MutationRunner(executor: FakeExecutor()).run(
+        driver: driver,
+        outputDirectory: base.path + "/run3",
+        options: verifying
+    )
+    #expect(third.staleKilledAcceptances == [target.id])
+    #expect(third.notes.contains { $0.hasPrefix("stale-killed: accepted mutant \(target.id)") })
+
+    #expect(try AcceptedMutants.unaccept(target.id, root: root))
+    #expect(try !AcceptedMutants.unaccept(target.id, root: root))
+}
+
+@Test func `an acceptance whose code is gone is reported stale; one of an unread file is not judged`() throws {
+    let base = try fixture(twoSites)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let root = SourcePath.canonical(base.path + "/input")
+    let sites = try MutationPlanner.mutations(in: twoSites, path: "Sources/Example/Example.swift")
+    let plan = MutationPlan(root: root, analyzedFiles: 1, mutations: sites)
+    var file = AcceptanceFile(tool: "litmus")
+    file = try file.adding(AcceptedMutants.entry(for: sites[0], reason: "reviewed: equivalent here", addedAt: "d"))
+    let gone = AcceptanceFile.Entry(
+        id: "ffffffffffffffff",
+        path: "Sources/Example/Example.swift",
+        declaration: "a(_:)",
+        rule: "swap-ternary",
+        text: "deleted code",
+        replacement: nil,
+        reason: "reviewed: equivalent here",
+        addedAt: "d"
+    )
+    let elsewhere = AcceptanceFile.Entry(
+        id: "eeeeeeeeeeeeeeee",
+        path: "Package.swift",
+        declaration: "",
+        rule: "swap-ternary",
+        text: "a ? b : c",
+        replacement: nil,
+        reason: "reviewed: equivalent here",
+        addedAt: "d"
+    )
+    file = try file.adding(gone).adding(elsewhere)
+    let applied = AcceptedMutants.apply(file, path: "f", to: plan, verify: false)
+    #expect(applied.mutations.map(\.id) == Array(sites.dropFirst()).map(\.id))
+    #expect(applied.suppressed.map(\.id) == [sites[0].id])
+    #expect(applied.acceptance?.staleMissing == ["ffffffffffffffff"])
+    #expect(applied.notes.contains { $0.reason.hasPrefix("stale-missing: accepted ffffffffffffffff") })
+    let verified = AcceptedMutants.apply(file, path: "f", to: plan, verify: true)
+    #expect(verified.mutations.count == sites.count && verified.acceptance?.verifying == true)
 }
 
 @Test func `a time budget stops starting work and reports what did not run`() async throws {

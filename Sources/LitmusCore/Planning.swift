@@ -3,6 +3,7 @@ internal import AemiKernel
 internal import AemiRuntime
 internal import Foundation
 internal import ProjectModel
+internal import ReportSupport
 internal import SourceCorpus
 internal import Suppression
 internal import SwiftOperators
@@ -429,11 +430,9 @@ private final class Anchors {
     }
 }
 
-/// `text` with every run of whitespace replaced by one space, and none at either end (analyzerkit's anchored
-/// fingerprint normalisation).
-func normalized(_ text: String) -> String {
-    text.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r" }).joined(separator: " ")
-}
+/// `text` with every run of whitespace replaced by one space, and none at either end: analyzerkit's anchored
+/// normalisation, so mutant ids and acceptance anchors agree with the family's fingerprints.
+func normalized(_ text: String) -> String { Fingerprint.normalized(text) }
 
 /// A function-like declaration's name with its argument labels: `name(_:label:)`.
 private func signature(_ name: String, _ parameters: FunctionParameterListSyntax) -> String {

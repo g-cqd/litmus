@@ -17,7 +17,7 @@ struct Plan: AsyncParsableCommand {
     mutating func run() async throws {
         guard (1...16).contains(jobs) else { throw ValidationError("jobs must be 1...16") }
         let excludes = try subject.excludes()
-        let plan: MutationPlan
+        var plan: MutationPlan
         do {
             let driver = try BuildDriver(
                 root: subject.absoluteRoot,
@@ -37,6 +37,12 @@ struct Plan: AsyncParsableCommand {
                 aridCalls: try subject.resolvedAridCalls(),
                 excludeDeclarations: try subject.resolvedExcludeDeclarations()
             )
+            if let accepted = try AcceptedMutants.load(
+                root: subject.absoluteRoot,
+                path: try subject.resolvedAcceptedFile()
+            ) {
+                plan = AcceptedMutants.apply(accepted.file, path: accepted.path, to: plan, verify: false)
+            }
         } catch let error as ValidationError {
             throw error
         } catch {

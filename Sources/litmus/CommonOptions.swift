@@ -24,6 +24,8 @@ struct SubjectOptions: ParsableArguments {
         help: "Declaration name or *-pattern whose body is not mutated, e.g. *ForTesting (repeatable)."
     )
     var excludeDeclarations: [String] = []
+    @Option(help: "Acceptance file of reviewed equivalent mutants (default: .litmus-accepted.json at the root).")
+    var acceptedFile: String?
     @Option(
         help:
             "Operators to mutate, comma-separated rule ids (default: the stable tier). Known: negate-condition, swap-ternary, replace-logical, replace-relational, flip-boolean, replace-arithmetic, replace-range, remove-negation, replace-nil-coalescing, remove-call, remove-view-element, replace-stdlib-semantic, remove-normalization, replace-optional-chain, return-boundary, return-constant, empty-body, empty-closure-body, remove-switch-case."
@@ -61,6 +63,7 @@ struct SubjectOptions: ParsableArguments {
     func excludes() throws -> [String] { try loadedConfig().exclude + exclusions }
     func includes() throws -> [String] { try loadedConfig().include + inclusions }
     func resolvedAridCalls() throws -> [String] { try loadedConfig().aridCalls + aridCalls }
+    func resolvedAcceptedFile() throws -> String? { try acceptedFile ?? loadedConfig().acceptedFile }
     func resolvedExcludeDeclarations() throws -> [String] {
         try loadedConfig().excludeDeclarations + excludeDeclarations
     }

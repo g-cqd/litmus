@@ -212,6 +212,8 @@ public struct MutationPlan: Codable, Equatable, Sendable {
     /// Non-mutated sites summarised by reason (e.g. view-builder statements skipped by `remove-call`), so reports can
     /// explain omissions without inflating findings or breaking older artifacts.
     public var skipped: [String: Int]? = nil
+    /// What `.litmus-accepted.json` decided for this plan; nil when no acceptance file was read.
+    public var acceptance: AcceptanceRecord? = nil
 
     public init(
         root: String,

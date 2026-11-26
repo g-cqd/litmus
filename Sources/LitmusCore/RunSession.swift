@@ -298,19 +298,39 @@ final class RunSession<Executor: ProcessExecutor> {
             excludeDeclarations: options.excludeDeclarations
         )
         account("plan", since: phase)
-        // `--only-id`: only the selected files are rewritten into the workspace, only their mutants run.
-        let mutations =
-            options.onlyIDs.isEmpty
-            ? clonePlan.mutations : try MutationSelector.select(clonePlan.mutations, by: options.onlyIDs)
-        plan = MutationPlan(
+        var rooted = MutationPlan(
             root: root,
             analyzedFiles: clonePlan.analyzedFiles,
-            mutations: mutations,
+            mutations: clonePlan.mutations,
             suppressed: clonePlan.suppressed,
             notes: clonePlan.notes
         )
-        plan.scope = clonePlan.scope
-        plan.skipped = clonePlan.skipped
+        rooted.scope = clonePlan.scope
+        rooted.skipped = clonePlan.skipped
+        // Accepted mutants leave the plan; `--only-id` and `--verify-accepted` keep them, to run what was asked.
+        if let loaded = try AcceptedMutants.load(root: root, path: options.acceptedFile) {
+            rooted = AcceptedMutants.apply(
+                loaded.file,
+                path: loaded.path,
+                to: rooted,
+                verify: options.verifyAccepted || !options.onlyIDs.isEmpty
+            )
+        }
+        plan = rooted
+        // `--only-id`: only the selected files are rewritten into the workspace, only their mutants run.
+        if !options.onlyIDs.isEmpty {
+            var selected = MutationPlan(
+                root: root,
+                analyzedFiles: plan.analyzedFiles,
+                mutations: try MutationSelector.select(plan.mutations, by: options.onlyIDs),
+                suppressed: plan.suppressed,
+                notes: plan.notes
+            )
+            selected.scope = plan.scope
+            selected.skipped = plan.skipped
+            selected.acceptance = plan.acceptance
+            plan = selected
+        }
         guard !plan.mutations.isEmpty else {
             throw LitmusFailure("no mutable production sites; inspect plan exclusions")
         }
@@ -486,6 +506,15 @@ final class RunSession<Executor: ProcessExecutor> {
     /// Ends the run: complete, timed, costed, the workspace removed unless kept.
     func finish() throws -> RunArtifact {
         artifact.complete = true
+        if let acceptance = plan.acceptance, !acceptance.accepted.isEmpty {
+            artifact.notes.append(
+                "\(acceptance.accepted.count) mutant(s) accepted in \(acceptance.file)"
+                    + (acceptance.verifying ? ", run anyway" : ", not run")
+            )
+        }
+        for id in artifact.staleKilledAcceptances {
+            artifact.notes.append("stale-killed: accepted mutant \(id) is now detected; run `litmus unaccept \(id)`")
+        }
         if let store {
             let removed = store.evict()
             artifact.notes += store.notes

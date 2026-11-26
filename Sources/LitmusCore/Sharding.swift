@@ -85,6 +85,8 @@ enum Sharding {
                 onChangedLines: scope.onChangedLines.filter(ids.contains)
             )
         }
+        selected.skipped = plan.skipped
+        selected.acceptance = plan.acceptance
         let record = ShardRecord(
             index: shard.index,
             count: shard.count,

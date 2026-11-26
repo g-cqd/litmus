@@ -13,17 +13,22 @@ public struct LitmusConfiguration: Decodable, Sendable {
     /// Names or `*`-patterns of declarations whose bodies are not mutated (`excludeDeclarations` in `.litmus.json`,
     /// or `--exclude-declaration` on the CLI), such as `*ForTesting` or `*ForPreview`.
     public var excludeDeclarations: [String] = []
+    /// The acceptance file of reviewed equivalent mutants (`acceptedFile`), relative to the root; default
+    /// `.litmus-accepted.json`.
+    public var acceptedFile: String?
 
     public init(
         exclude: [String] = [],
         include: [String] = [],
         aridCalls: [String] = [],
-        excludeDeclarations: [String] = []
+        excludeDeclarations: [String] = [],
+        acceptedFile: String? = nil
     ) {
         self.exclude = exclude
         self.include = include
         self.aridCalls = aridCalls
         self.excludeDeclarations = excludeDeclarations
+        self.acceptedFile = acceptedFile
     }
 
     /// Resolves the family's shared top-level exclusions plus `.litmus.json`; rejects duplicate/unknown keys.
@@ -33,7 +38,7 @@ public struct LitmusConfiguration: Decodable, Sendable {
             for: SharedConfiguration.Tool(
                 name: "litmus",
                 fileName: ".litmus.json",
-                keys: ["include", "aridCalls", "excludeDeclarations"]
+                keys: ["include", "aridCalls", "excludeDeclarations", "acceptedFile"]
             ),
             explicit: explicit,
             currentDirectory: root,
@@ -52,7 +57,8 @@ public struct LitmusConfiguration: Decodable, Sendable {
             exclude: value.exclude ?? [],
             include: value.include ?? [],
             aridCalls: value.aridCalls ?? [],
-            excludeDeclarations: value.excludeDeclarations ?? []
+            excludeDeclarations: value.excludeDeclarations ?? [],
+            acceptedFile: value.acceptedFile
         )
     }
     private struct SharedValues: Decodable {
@@ -60,6 +66,7 @@ public struct LitmusConfiguration: Decodable, Sendable {
         let include: [String]?
         let aridCalls: [String]?
         let excludeDeclarations: [String]?
+        let acceptedFile: String?
         let defines: [String]?
         let platforms: [String]?
         let includeRegions: [String]?

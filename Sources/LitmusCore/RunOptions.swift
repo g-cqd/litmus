@@ -115,6 +115,10 @@ public struct RunOptions: Sendable {
     /// Run only the mutants these select (`--only-id`), always executed: their stored or resumed verdicts are not
     /// reused, since the tests may have changed since. Empty runs the whole plan.
     public var onlyIDs: [MutationSelector] = []
+    /// The acceptance file (`--accepted-file`, `acceptedFile`); nil reads `.litmus-accepted.json` at the root if any.
+    public var acceptedFile: String?
+    /// Run accepted mutants too, to report those a test now detects (`--verify-accepted`).
+    public var verifyAccepted = false
 
     public init() {}
 

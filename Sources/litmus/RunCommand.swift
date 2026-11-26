@@ -81,6 +81,8 @@ struct Run: AsyncParsableCommand {
             "Run only this mutant (repeatable): its id, an id prefix of 8+ hex digits, or path:line[:operator]. Always executed, never reused."
     )
     var onlyID: [String] = []
+    @Flag(help: "Run accepted mutants too, and report those a test now detects (their acceptance is stale).")
+    var verifyAccepted = false
     @Flag(help: "Build and test the unmutated subject first, instead of using the first schema's inactive run.")
     var unmutatedBaseline = false
     @Option(
@@ -162,6 +164,8 @@ struct Run: AsyncParsableCommand {
         options.resume = resume
         options.reachFrom = reachFrom
         options.simulatorHarness = !noSimulatorHelper
+        options.acceptedFile = try subject.resolvedAcceptedFile()
+        options.verifyAccepted = verifyAccepted
         do { options.onlyIDs = try onlyID.map(MutationSelector.init(parsing:)) } catch {
             throw ValidationError("\(error)")
         }
