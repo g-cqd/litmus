@@ -46,6 +46,8 @@ final class RunSession<Executor: ProcessExecutor> {
     /// A single shutdown destination simulator being booted while the first schema builds.
     var bootTask: Task<Void, Never>?
     var poolTornDown = false
+    /// Test modules that failed unmutated, with why (`--skip-failing-targets`); left out of every later run.
+    var quarantined: [String: String] = [:]
     /// The schema currently written into the workspace, restored on any exit.
     var installed: InstalledSchema?
 
@@ -667,6 +669,8 @@ final class RunSession<Executor: ProcessExecutor> {
             return (allowedWorkers, pool, judge)
         }
         var (allowedWorkers, pool, current) = try makeJudge(for: harness)
+        // A target quarantined by an earlier schema's baseline stays out.
+        if options.skipFailingTargets { current.quarantined = Set(quarantined.keys) }
         phase = clock.now
         let singlePassReach = options.perTestReach && harness.selectsTests && harness.controlsSwiftTesting
         var usageBefore = ChildUsage.cpuSeconds()
@@ -706,6 +710,27 @@ final class RunSession<Executor: ProcessExecutor> {
                 deadline: options.timeoutCap
             )
             suiteCPU = ChildUsage.cpuSeconds() - usageBefore
+        }
+        if options.skipFailingTargets, harness.selectsModules {
+            current.quarantined = Set(quarantined.keys)
+            // One module at a time: each failing bundle ends its run, so the next one shows on the rerun.
+            for attempt in 1...64 {
+                guard baseline.result.outcome != .passed || (baseline.result.counts?.passed ?? 0) == 0,
+                    let module = Self.failedModule(baseline.result), quarantined[module] == nil
+                else { break }
+                quarantined[module] = baseline.result.reason
+                current.quarantined.insert(module)
+                artifact.notes.append(
+                    "test target \(module) failed unmutated (\(baseline.result.reason)) and was excluded "
+                        + "(--skip-failing-targets); mutants only it covers are not run"
+                )
+                baseline = try await current.execute(
+                    name: "baseline-quarantine-\(attempt)",
+                    activeID: "",
+                    deadline: options.timeoutCap,
+                    collectPerTestReach: singlePassReach
+                )
+            }
         }
         account("tests", since: phase)
         guard baseline.result.outcome == .passed, var baselineCounts = baseline.result.counts,
@@ -841,6 +866,7 @@ final class RunSession<Executor: ProcessExecutor> {
             rerunDeadline: rerunDeadline
         )
         judge.skip = flaky
+        judge.quarantined = Set(quarantined.keys)
         judge.baselineByModule = baselineByModule
         if let nightly, nightly.reuse?.mode == .closure, let reach = nightly.perTestReach,
             let counts = nightly.testCounts
@@ -890,6 +916,16 @@ final class RunSession<Executor: ProcessExecutor> {
                     + "\(toRun.count) mutants; the others run every test module"
             )
         }
+        if !quarantined.isEmpty {
+            // Covering targets over every module, quarantined ones included, then without them: an empty set means
+            // only quarantined targets cover the mutant.
+            let all = Runner.coveringModules(
+                toRun,
+                root: snapshot.root,
+                modules: Set(baselineByModule.keys).union(quarantined.keys)
+            )
+            for (id, modules) in all { judge.covering[id] = modules.subtracting(quarantined.keys) }
+        }
         return Established(
             judge: judge,
             counts: baselineCounts,
@@ -898,6 +934,13 @@ final class RunSession<Executor: ProcessExecutor> {
             testFunctions: testFunctions,
             baseline: baseline
         )
+    }
+
+    /// The test module whose failure ended `result`: the harness's, else the module of its first failing test.
+    static func failedModule(_ result: TestRunResult) -> String? {
+        if let module = result.failedModule { return module }
+        guard let test = result.failingTests.first, let dot = test.firstIndex(of: ".") else { return nil }
+        return String(test[..<dot])
     }
 
     /// `sites` with the slowest first, by what each cost before; sites without history keep their order, after those
@@ -952,7 +995,7 @@ final class RunSession<Executor: ProcessExecutor> {
         /// The bisection budget left to each mutant's lineage of failing controls.
         var controlBudget: [String: Int] = [:]
         var lastBuild = Duration.zero
-        while let group = pending.popLast() {
+        while var group = pending.popLast() {
             try Task.checkCancellation()
             if let budgetEnd, clock.now + lastBuild > budgetEnd {
                 // Not started: the next build would end past the budget (estimated by the last one).
@@ -1115,6 +1158,19 @@ final class RunSession<Executor: ProcessExecutor> {
             var judge = current.judge
             let deadline = current.deadline
             let workerCount = current.workerCount
+            // Mutants only quarantined targets cover: no run can decide them, and the control never ran those targets.
+            let unjudgeable = group.filter { judge.covering[$0.id]?.isEmpty == true }
+            if !unjudgeable.isEmpty {
+                try runner.untested(
+                    unjudgeable,
+                    "covering test target(s) \(quarantined.keys.sorted().joined(separator: ", ")) failed unmutated",
+                    stoppedBy: "failing-test-target",
+                    into: &artifact,
+                    sink
+                )
+                let skipped = Set(unjudgeable.map(\.id))
+                group.removeAll { skipped.contains($0.id) }
+            }
             for site in group where !control.reached.contains(site.id) {
                 try runner.record(
                     site,

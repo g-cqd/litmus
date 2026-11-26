@@ -32,6 +32,8 @@ public struct TestRunRequest: Sendable {
     public var collectPerTestReach = false
     /// The run's ``ActivationEnvironment`` token, which the schemas it built read their variables under.
     public var environmentToken = ""
+    /// Test modules never run (`--skip-failing-targets` quarantine): their bundles are left out.
+    public var skipModules: Set<String> = []
 }
 
 /// What a suite execution showed, before activation is considered.
@@ -52,6 +54,8 @@ public struct TestRunResult: Sendable {
     public var failingTests: [String] = []
     /// Counts per test module, for a harness that runs modules separately; empty otherwise.
     public var moduleCounts: [String: TestCounts] = [:]
+    /// The test module whose bundle ended the run, when it did not pass; nil when unknown.
+    public var failedModule: String? = nil
     /// Per-test mutant reach collected during a single-pass control run (`collectPerTestReach`).
     public var perTestReach: [String: Set<String>] = [:]
     /// Mutants evaluated outside any test boundary during single-pass collection (`static let`, launch init).
@@ -405,9 +409,11 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
             )
             result.failingTests = failing
             result.moduleCounts = moduleCounts
+            result.failedModule = outcome == .passed ? nil : currentModule
             for scan in scans { result.absorb(scan) }
             return result
         }
+        var currentModule: String?
         var moduleCounts: [String: TestCounts] = [:]
         func count(_ module: String, passed: Int, skipped: Int) {
             let previous = moduleCounts[module] ?? TestCounts(passed: 0, failed: 0, skipped: 0)
@@ -422,6 +428,8 @@ public struct SwiftPMDirectHarness<Executor: ProcessExecutor>: TestHarness {
                 continue
             }
             if let modules = request.onlyModules, !modules.contains(bundle.module) { continue }
+            if request.skipModules.contains(bundle.module) { continue }
+            currentModule = bundle.module
             if bundle.swiftTestingCount > 0 {
                 let stem = "\(request.name)-\(bundle.module)-swift-testing"
                 let events = "\(logs)/\(stem).events.jsonl", xunit = "\(logs)/\(stem).xml"
@@ -660,6 +668,7 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
             result: bundle,
             xctestrun: xctestrun,
             onlyTesting: request.onlyModules.map { Array($0) },
+            skipTesting: Array(request.skipModules),
             resultStream: stream,
             destination: device?.destination,
             derivedData: derivedData

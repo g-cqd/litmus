@@ -124,6 +124,9 @@ public struct RunOptions: Sendable {
     /// (`--all-test-targets`); UI-test targets too with `includeUITests`.
     public var allTestTargets = false
     public var includeUITests = false
+    /// Quarantine test targets that fail unmutated instead of stopping the run (`--skip-failing-targets`): they are
+    /// left out of every run, and the mutants only they cover are reported as not run.
+    public var skipFailingTargets = false
 
     public init() {}
 

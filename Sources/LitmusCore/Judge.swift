@@ -27,6 +27,8 @@ struct Judge: Sendable {
     var reach: [String: Set<String>] = [:]
     /// Each test's counts when it ran alone (with per-test reach): what a run of selected tests must pass.
     var testCounts: [String: TestCounts] = [:]
+    /// Test modules quarantined for failing unmutated (`--skip-failing-targets`): never run.
+    var quarantined: Set<String> = []
 
     /// The reaching tests a mutant's runs are limited to: known, not empty, every count known; nil runs the modules.
     func selected(_ site: Mutation) -> [String]? {
@@ -104,6 +106,7 @@ struct Judge: Sendable {
         request.onlySwiftTesting = only
         request.collectPerTestReach = collectPerTestReach
         request.environmentToken = options.environmentToken
+        request.skipModules = quarantined
         // A run alone decides a timeout: never at background priority.
         request.supervision = options.supervision(background: alone ? false : nil)
         if harness.selectsModules { request.onlyModules = only == nil ? modules : nil }

@@ -401,4 +401,61 @@ struct PhaseDTests {
         )
         try XcodeTestConfiguration.preflight(driver: driver, workspace: workspace)
     }
+
+    @Test func `a test target failing unmutated is quarantined and only its mutants go unrun`() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-d42-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let pkg = root.appendingPathComponent("Pkg")
+        let files = [
+            "Package.swift": """
+            // swift-tools-version: 6.2
+            import PackageDescription
+            let package = Package(
+                name: "Pkg",
+                platforms: [.macOS(.v15)],
+                targets: [
+                    .target(name: "A"), .target(name: "B"),
+                    .testTarget(name: "ATests", dependencies: ["A"]),
+                    .testTarget(name: "BTests", dependencies: ["B"]),
+                ]
+            )
+            """,
+            "Sources/A/A.swift": "public func a(_ x: Bool) -> Int { x ? 1 : 2 }\n",
+            "Sources/B/B.swift": "public func b(_ y: Bool) -> Int { y ? 3 : 4 }\n",
+            "Tests/ATests/ATests.swift": "import Testing\nimport A\n@Test func both() { #expect(a(true) == 1) }\n",
+            // Fails unmutated: an environment assumption that does not hold here.
+            "Tests/BTests/BTests.swift": "import Testing\nimport B\n@Test func broken() { #expect(b(true) == 4) }\n",
+        ]
+        for (path, text) in files {
+            let url = pkg.appendingPathComponent(path)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try Data(text.utf8).write(to: url)
+        }
+        var options = RunOptions()
+        options.baselineRepetitions = 1
+        options.jobs = 2
+        let driver = try BuildDriver(root: pkg.path, scheme: nil, destination: nil)
+        await #expect(throws: LitmusFailure.self) {
+            try await MutationRunner(executor: BoundedExecutor()).run(
+                driver: driver,
+                outputDirectory: root.appendingPathComponent("strict").path,
+                options: options
+            )
+        }
+        options.skipFailingTargets = true
+        let artifact = try await MutationRunner(executor: BoundedExecutor()).run(
+            driver: driver,
+            outputDirectory: root.appendingPathComponent("run").path,
+            options: options
+        )
+        #expect(artifact.isSuccessfulExecution)
+        let byPath = Dictionary(grouping: artifact.results, by: \.mutation.path)
+        #expect(byPath["Sources/A/A.swift"]?.allSatisfy { $0.verdict == .killed } == true)
+        #expect(byPath["Sources/B/B.swift"]?.allSatisfy { $0.verdict == .notRun } == true)
+        #expect(artifact.budget?.stoppedBy == "failing-test-target")
+        #expect(artifact.notes.contains { $0.hasPrefix("test target BTests failed unmutated") })
+    }
 }

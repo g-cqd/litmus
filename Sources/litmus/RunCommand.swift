@@ -87,6 +87,11 @@ struct Run: AsyncParsableCommand {
     var onlyID: [String] = []
     @Flag(help: "Run accepted mutants too, and report those a test now detects (their acceptance is stale).")
     var verifyAccepted = false
+    @Flag(
+        help:
+            "Exclude test targets that fail unmutated instead of stopping (implied by --all-test-targets); mutants only they cover are reported as not run."
+    )
+    var skipFailingTargets = false
     @Flag(help: "Build and test the unmutated subject first, instead of using the first schema's inactive run.")
     var unmutatedBaseline = false
     @Option(
@@ -170,6 +175,7 @@ struct Run: AsyncParsableCommand {
         options.simulatorHarness = !noSimulatorHelper
         options.allTestTargets = build.allTestTargets
         options.includeUITests = build.includeUITests
+        options.skipFailingTargets = skipFailingTargets || build.allTestTargets
         options.acceptedFile = try subject.resolvedAcceptedFile()
         options.verifyAccepted = verifyAccepted
         do { options.onlyIDs = try onlyID.map(MutationSelector.init(parsing:)) } catch {

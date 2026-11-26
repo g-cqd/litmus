@@ -329,6 +329,7 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
         var evidence: [String] = []
         var failing: [String] = []
         var moduleCounts: [String: TestCounts] = [:]
+        var currentModule: String?
         var scans: [TestEvidence.EventScan] = []
         func result(_ outcome: TestRunOutcome, _ counts: TestCounts?, _ reason: String) -> TestRunResult {
             var result = TestRunResult(
@@ -340,6 +341,7 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
             )
             result.failingTests = failing
             result.moduleCounts = moduleCounts
+            result.failedModule = outcome == .passed ? nil : currentModule
             for scan in scans { result.absorb(scan) }
             return result
         }
@@ -348,6 +350,8 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
                 continue
             }
             if let modules = request.onlyModules, !modules.contains(bundle.module) { continue }
+            if request.skipModules.contains(bundle.module) { continue }
+            currentModule = bundle.module
             let stem = "\(request.name)-\(bundle.module)-simulator"
             let events = "\(logs)/\(stem).events.jsonl"
             let configJSON = Self.configuration(request)

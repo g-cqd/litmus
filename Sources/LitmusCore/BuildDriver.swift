@@ -141,6 +141,7 @@ public struct BuildDriver: Codable, Sendable, Equatable {
     /// Runs the same entire selected suite for the baseline, every inactive schema and each active mutant.
     /// - Parameters:
     ///   - onlyTesting: Xcode test targets to run (`-only-testing:`); nil runs the whole test plan.
+    ///   - skipTesting: Xcode test targets never to run (`-skip-testing:`).
     ///   - resultStream: a file Xcode writes its event stream to while tests run (it must exist), for stopping early.
     ///   - destination: the device to run on, when a worker has its own; the driver's otherwise.
     ///   - derivedData: the DerivedData directory a worker owns; the run's otherwise.
@@ -150,6 +151,7 @@ public struct BuildDriver: Codable, Sendable, Equatable {
         result: String,
         xctestrun: String? = nil,
         onlyTesting: [String]? = nil,
+        skipTesting: [String] = [],
         resultStream: String? = nil,
         destination workerDestination: String? = nil,
         derivedData: String? = nil
@@ -169,6 +171,7 @@ public struct BuildDriver: Codable, Sendable, Equatable {
                 ] + Self.codeCoverageArguments(for: xcodebuildArguments)
                     + (resultStream.map { ["-resultStreamPath", $0] } ?? []) + xcodebuildArguments
                     + (onlyTesting ?? []).sorted().map { "-only-testing:" + $0 }
+                    + skipTesting.sorted().map { "-skip-testing:" + $0 }
             )
         }
         return ToolCommand(
