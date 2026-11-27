@@ -454,5 +454,5 @@ func seconds(_ duration: Duration) -> Double {
 
 /// The tool's version, written to provenance and reports.
 public enum LitmusVersion {
-    public static let current = "0.4.14"
+    public static let current = "0.4.15"
 }
