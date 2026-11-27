@@ -69,6 +69,8 @@ litmus accept <id> --from /tmp/litmus-run --reason "<proof of equivalence>"     
 litmus agent-guide --install                                                        # the workflow, as an agent skill
 ```
 
+Agents that speak MCP can use `litmus mcp` instead: plan, run, gaps and accept as tools, with warm incremental builds between calls. For example, in an MCP client's configuration: `{"command": "litmus", "args": ["mcp"]}`. While you work, `litmus watch . -- --trust-project` reruns what each save changes.
+
 See [usage](docs/usage.md#mutation-scope) for selectors, acceptance files and stale acceptances.
 
 Use `--minimum-score PERCENT` to fail below a mutation score, `--operator-tier standard` for comparison, boolean and arithmetic mutations, and the [GitHub Action](docs/ci.md#github-action) to run it on a runner. Use `--result-store DIR` to reuse eligible verdicts and `--baseline FILE --gate new-survivors` to report new survivors. A budget limits new work; it does not establish that every selected mutation was tested. See [CI and incremental runs](docs/ci.md).
@@ -94,6 +96,7 @@ The mutation score is detected mutations divided by detected plus undetected mut
 - [Execution model and limitations](docs/execution.md)
 - [Testing and performance](docs/testing.md)
 - [CLI, exit-code, and schema stability](docs/stability.md)
+- [Invariants: restoration, cache soundness, shared-process equivalence](docs/formal/README.md)
 - [Benchmark against other Swift mutation testers](docs/benchmark.md)
 - [Security](SECURITY.md)
 - [Release notes](release-notes/v0.11.0.md)

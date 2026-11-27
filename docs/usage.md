@@ -14,6 +14,9 @@ Run `litmus --help` or `litmus <command> --help` for the full option reference.
 - `accept` / `unaccept`: record or remove a reviewed equivalent mutant in `.litmus-accepted.json`.
 - `agent-guide`: print, or install with `--install`, the workflow a coding agent follows to close mutation gaps.
 - `clean`: delete orphaned pool simulators, and with `--run DIR` a finished run's workspace and build products.
+- `store`: inspect (`status`), prune (`gc`), and move (`pack`, `unpack`) a result store.
+- `watch`: rerun the mutants of the working tree's changes (`--base`, default `HEAD`, with `--include-test-changes`) each time a Swift file is saved. It runs at background priority, with a persistent build directory and result store under `~/Library/Caches/litmus/watch/`, and prints the verdicts that changed. Pass `run` arguments after `--`, for example `litmus watch . -- --trust-project --scheme App`.
+- `mcp`: a Model Context Protocol server on stdin and stdout. Its tools are `litmus_plan`, `litmus_run` (requires `trust_project: true`), `litmus_gaps` and `litmus_accept`. Each tool runs the matching subcommand of the same executable, so it validates input and needs consent exactly as the command line does. `litmus_run` builds incrementally in a persistent directory per subject and reuses unchanged verdicts from a store under `~/Library/Caches/litmus/mcp/`. Test processes do not stay alive between calls.
 
 ## Mutation scope
 
