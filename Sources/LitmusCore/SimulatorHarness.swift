@@ -87,69 +87,30 @@ enum SimulatorHelper {
         let compiler = try await query(["--sdk", "iphonesimulator", "swiftc", "--version"])
         let resolvedSimctl = try? await query(["--find", "simctl"])
         let simctl = resolvedSimctl.flatMap { BinaryTrustChecker.isTrusted(at: $0) ? $0 : nil } ?? "/usr/bin/xcrun"
-        #if arch(arm64)
-            let architecture = "arm64"
-        #else
-            let architecture = "x86_64"
-        #endif
         let frameworks = platform + "/Developer/Library/Frameworks"
-        let key = Digest.sha256(Array((simulatorHelperSource + "\u{0}" + compiler + "\u{0}" + architecture).utf8))
-        let cacheRoot: String = {
-            if let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.path {
-                let candidate = caches + "/litmus/simulator-helper"
-                if (try? FileManager.default.createDirectory(atPath: candidate, withIntermediateDirectories: true))
-                    != nil
-                {
-                    return candidate
-                }
-            }
-            return directory + "/litmus-simulator-helper"
-        }()
-        let home = cacheRoot + "/" + key.prefix(24)
-        let helper = home + "/helper"
-        let built = Built(
+        let helper = try await HelperCache.helper(
+            name: "simulator-helper",
+            label: "simulator test helper",
+            source: simulatorHelperSource,
+            compiler: compiler,
+            directory: directory,
+            executor: executor,
+            logs: logs
+        ) { source, output, architecture in
+            [
+                "--sdk", "iphonesimulator", "swiftc", "-parse-as-library", "-swift-version", "5", "-O",
+                "-target", "\(architecture)-apple-ios17.0-simulator", "-sdk", sdk, source,
+                "-o", output, "-F", frameworks, "-Xlinker", "-framework", "-Xlinker", "XCTest",
+                "-Xlinker", "-framework", "-Xlinker", "Testing", "-Xlinker", "-rpath", "-Xlinker", frameworks,
+            ]
+        }
+        return Built(
             helper: helper,
             simctl: simctl,
             frameworks: frameworks,
             libraries: platform + "/Developer/usr/lib",
             platforms: (platform as NSString).deletingLastPathComponent
         )
-        if FileManager.default.isExecutableFile(atPath: helper), BinaryTrustChecker.isTrusted(at: helper) {
-            return built
-        }
-        try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)
-        let partial = helper + ".partial-" + UUID().uuidString.prefix(8)
-        let source = home + "/main-" + UUID().uuidString.prefix(8) + ".swift"
-        defer {
-            try? FileManager.default.removeItem(atPath: source)
-            try? FileManager.default.removeItem(atPath: partial)
-        }
-        try AtomicFile.replace(at: source, with: Array(simulatorHelperSource.utf8), durability: .none)
-        let output = try await executor.execute(
-            ToolCommand(
-                executable: "/usr/bin/xcrun",
-                arguments: [
-                    "--sdk", "iphonesimulator", "swiftc", "-parse-as-library", "-swift-version", "5", "-O",
-                    "-target", "\(architecture)-apple-ios17.0-simulator", "-sdk", sdk, source,
-                    "-o", partial, "-F", frameworks, "-Xlinker", "-framework", "-Xlinker", "XCTest",
-                    "-Xlinker", "-framework", "-Xlinker", "Testing", "-Xlinker", "-rpath", "-Xlinker", frameworks,
-                ]
-            ),
-            directory: home,
-            environment: subjectEnvironment(nil),
-            timeout: 600
-        )
-        try writeLog(output, path: logs + "/simulator-helper-build.log")
-        guard output.exitStatus == 0, !output.timedOut else {
-            throw LitmusFailure("the simulator test helper did not build (logs/simulator-helper-build.log)")
-        }
-        if !FileManager.default.isExecutableFile(atPath: helper) {
-            try? FileManager.default.moveItem(atPath: partial, toPath: helper)
-        }
-        guard FileManager.default.isExecutableFile(atPath: helper) else {
-            throw LitmusFailure("the simulator test helper could not be published at \(helper)")
-        }
-        return built
     }
 }
 

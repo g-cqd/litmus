@@ -7,28 +7,8 @@ let simulatorHelperSource = #"""
     // an observer that writes one {"xctest":...} line per case to <XCTest file>. The events file may be a FIFO (per-test
     // reach), so the XCTest file is named on its own. Exit: 0 all passed, 1 a test failed, 64 and above a setup problem
     // (the caller then uses xcodebuild).
-    import Darwin
-    import Foundation
     import XCTest
-
-    typealias EntryPoint = @convention(thin) @Sendable (
-        _ configurationJSON: UnsafeRawBufferPointer?,
-        _ recordHandler: @escaping @Sendable (_ recordJSON: UnsafeRawBufferPointer) -> Void
-    ) async throws -> Bool
-
-    /// Appends JSON lines from any thread.
-    final class Lines: @unchecked Sendable {
-        private let handle: FileHandle
-        private let lock = NSLock()
-        init(_ handle: FileHandle) { self.handle = handle }
-        func emit(_ bytes: Data) {
-            lock.lock()
-            defer { lock.unlock() }
-            handle.write(bytes)
-            handle.write(Data([0x0A]))
-        }
-        func close() { try? handle.close() }
-    }
+    \#(helperCommonSource)
 
     /// One JSON line per finished XCTest case.
     final class Observer: NSObject, XCTestObservation {
@@ -93,16 +73,7 @@ let simulatorHelperSource = #"""
 
         /// Swift Testing through its versioned ABI entry point; its records go to `lines`.
         static func runSwiftTesting(_ configuration: Data, _ lines: Lines) async throws -> Bool {
-            guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "swt_abiv0_getEntryPoint") else {
-                fail("no swt_abiv0_getEntryPoint: Swift Testing is not loaded", 67)
-            }
-            let getEntryPoint = unsafeBitCast(symbol, to: (@convention(c) () -> UnsafeRawPointer).self)
-            let entryPoint = unsafeBitCast(getEntryPoint(), to: EntryPoint.self)
-            let buffer = UnsafeMutableRawBufferPointer.allocate(byteCount: max(configuration.count, 1), alignment: 1)
-            configuration.copyBytes(to: buffer)
-            return try await entryPoint(UnsafeRawBufferPointer(rebasing: buffer[0..<configuration.count])) { record in
-                lines.emit(Data(record))
-            }
+            try await runEntryPoint(swiftTestingEntryPoint(), configuration, lines)
         }
 
         /// The bundle's XCTest cases; true when none failed.
@@ -121,9 +92,5 @@ let simulatorHelperSource = #"""
             return Lines(handle)
         }
 
-        static func fail(_ message: String, _ status: Int32) -> Never {
-            fputs("litmus-helper: \(message)\n", stderr)
-            exit(status)
-        }
     }
     """#
