@@ -15,11 +15,14 @@ internal import SourceCorpus
 /// timeouts and any doubt about the worker's state, after which the worker is replaced.
 public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness, @unchecked Sendable {
     let direct: SwiftPMDirectHarness<Executor>
-    let helper: String
+    /// Builds (or finds in the cache) the helper program; called once, when the first worker starts.
+    let buildHelper: @Sendable () async throws -> String
     let scratch: String
     let token: String
+    let mode: SharedProcessMode
     public var capabilities: HarnessCapabilities { direct.capabilities }
-    public var kind: String { "swiftpm-shared" }
+    /// `swiftpm-shared` when always on; with `auto`, the direct harness's kind (a note says which batches used workers).
+    public var kind: String { mode == .on ? "swiftpm-shared" : direct.kind }
 
     private let lock = NSLock()
     private var generation = 0
@@ -29,6 +32,10 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
     /// Modules whose worker could not be classified in this generation: fresh processes only.
     private var unshareable: Set<String> = []
     private var counts = Statistics()
+    /// Whether this batch's narrowed runs go to workers: always with `on`, per batch with `auto` (``decide(covered:workers:suiteNanoseconds:spawnNanoseconds:)``).
+    private var engaged: Bool
+    /// The built helper, or why it could not be built (`auto` then stays off for the run).
+    private var helperPath: Result<String, LitmusFailure>?
 
     /// What the harness decided where, for the run's notes.
     public struct Statistics: Sendable, Equatable {
@@ -37,13 +44,86 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
         public var workersStarted = 0
         public var workersRetired = 0
         public var processCached: Set<String> = []
+        /// Batches `auto` engaged, and those it left to fresh processes.
+        public var batchesEngaged = 0
+        public var batchesDeclined = 0
     }
 
-    public init(direct: SwiftPMDirectHarness<Executor>, helper: String, scratch: String, token: String) {
+    public init(
+        direct: SwiftPMDirectHarness<Executor>,
+        helper: @escaping @Sendable () async throws -> String,
+        scratch: String,
+        token: String,
+        mode: SharedProcessMode = .on
+    ) {
         self.direct = direct
-        self.helper = helper
+        self.buildHelper = helper
         self.scratch = scratch
         self.token = token
+        self.mode = mode
+        self.engaged = mode == .on
+    }
+
+    /// The process start below which shared workers never pay: on macOS (0.07–0.17 s per SwiftPM bundle on the
+    /// benchmark's packages) `on` was as slow or up to twice as slow as isolated runs, the classification passes,
+    /// control passes and survivor checks costing more than the starts saved (docs/design/shared-process.md).
+    static var minimumSpawnNanoseconds: Int64 { 250_000_000 }
+
+    /// Whether shared workers pay for a batch (design note, decision 9): at least 8 covered mutants, a process start of
+    /// at least ``minimumSpawnNanoseconds``, and the starts saved exceeding what the workers cost, each a start and two
+    /// unmutated passes over its bundle: `covered × spawn > workers × (2 × suite + spawn)`.
+    static func breaksEven(covered: Int, workers: Int, suiteNanoseconds: Int64, spawnNanoseconds: Int64) -> Bool {
+        guard covered >= 8, spawnNanoseconds >= minimumSpawnNanoseconds else { return false }
+        let saved = Double(covered) * Double(spawnNanoseconds)
+        let cost = Double(max(1, workers)) * (2 * Double(suiteNanoseconds) + Double(spawnNanoseconds))
+        return saved > cost
+    }
+
+    /// With `auto`, engages workers for the batch about to run when they pay; returns the note that says why. `on` and
+    /// `off` decide nothing. Process start and suite times come from the batch's inactive control run, per bundle.
+    func decide(covered: Int, workers: Int, suiteNanoseconds: Int64, spawnNanoseconds: Int64) -> String? {
+        guard mode == .auto else { return nil }
+        let pays = Self.breaksEven(
+            covered: covered,
+            workers: workers,
+            suiteNanoseconds: suiteNanoseconds,
+            spawnNanoseconds: spawnNanoseconds
+        )
+        let available = lock.withLock {
+            let available = (try? helperPath?.get()) != nil || helperPath == nil
+            engaged = pays && available
+            if engaged { counts.batchesEngaged += 1 } else { counts.batchesDeclined += 1 }
+            return available
+        }
+        guard available else { return nil }
+        let seconds = { (nanos: Int64) in (Double(nanos) / 1e7).rounded() / 100 }
+        return
+            "shared process (auto): \(pays ? "on" : "off") for \(covered) covered mutant(s) and \(workers) worker(s); "
+            + "process start ~\(seconds(spawnNanoseconds)) s, bundle suite ~\(seconds(suiteNanoseconds)) s per bundle"
+    }
+
+    /// The helper's path, built on first use. With `auto`, a helper that does not build turns shared workers off for
+    /// the rest of the run (returns nil); with `on`, it is an error.
+    private func helper() async throws -> String? {
+        if let known = lock.withLock({ helperPath }) {
+            switch known {
+            case .success(let path): return path
+            case .failure(let failure): if mode == .on { throw failure } else { return nil }
+            }
+        }
+        do {
+            let path = try await buildHelper()
+            lock.withLock { helperPath = .success(path) }
+            return path
+        } catch {
+            let failure = LitmusFailure("the shared-process helper is unavailable: \(error)")
+            lock.withLock {
+                helperPath = .failure(failure)
+                if mode == .auto { engaged = false }
+            }
+            if mode == .on { throw failure }
+            return nil
+        }
     }
 
     deinit { shutdown() }
@@ -73,10 +153,12 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
 
     public func run(_ request: TestRunRequest) async throws -> TestRunResult {
         let start = ContinuousClock.now
+        let isEngaged = lock.withLock { engaged }
         func fresh() async throws -> TestRunResult {
-            lock.withLock { counts.freshRuns += 1 }
+            if isEngaged { lock.withLock { counts.freshRuns += 1 } }
             return try await direct.run(request)
         }
+        guard isEngaged else { return try await fresh() }
         guard !request.activeID.isEmpty, let only = request.onlySwiftTesting, !only.isEmpty,
             !request.collectPerTestReach, request.repetitions == nil,
             lock.withLock({ slots.contains(request.activeID) })
@@ -218,6 +300,7 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
         slots: [String],
         request: TestRunRequest
     ) async throws -> Worker? {
+        guard let helper = try await helper() else { return nil }
         let directory = scratch + "/worker-" + UUID().uuidString.prefix(8)
         try FileManager.default.createDirectory(atPath: directory + "/tmp", withIntermediateDirectories: true)
         let page = try SharedControlPage(path: directory + "/page", slots: slots)

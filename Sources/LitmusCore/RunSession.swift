@@ -1213,6 +1213,20 @@ final class RunSession<Executor: ProcessExecutor> {
                 )
             }
             let covered = group.filter { control.reached.contains($0.id) }
+            if let shared = judge.harness as? SharedProcessHarness<Executor> {
+                // Per bundle: the control ran every module once, fresh; what its tests did not take is process start.
+                let bundles = Int64(max(1, shared.direct.bundles.count))
+                let tests = control.result.testDurations.values.reduce(0, +)
+                let wall = control.result.nanoseconds
+                if let note = shared.decide(
+                    covered: covered.count,
+                    workers: workerCount,
+                    suiteNanoseconds: wall / bundles,
+                    spawnNanoseconds: max(0, wall - tests) / bundles
+                ) {
+                    artifact.notes.append(note)
+                }
+            }
             if options.perTestReach, judge.harness.selectsTests, !covered.isEmpty {
                 let ids = Set(covered.map(\.id))
                 var reach: [String: [String]] = artifact.perTestReach ?? [:]
@@ -1419,6 +1433,7 @@ final class RunSession<Executor: ProcessExecutor> {
         if let shared = established?.judge.harness as? SharedProcessHarness<Executor> {
             shared.shutdown()
             let statistics = shared.statistics
+            guard shared.mode == .on || statistics.batchesEngaged > 0 else { return }
             artifact.notes.append(
                 "shared process: \(statistics.sharedKills) kill(s) decided in shared workers, "
                     + "\(statistics.freshRuns) run(s) in fresh processes; \(statistics.workersStarted) worker(s) "

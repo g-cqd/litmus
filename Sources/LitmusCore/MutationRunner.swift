@@ -334,19 +334,28 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             logs: logs,
             workers: options.jobs
         )
-        guard options.sharedProcess else { return direct }
-        let helperPath = try await MacOSHelper.build(into: artifacts, executor: executor, logs: logs)
+        guard options.sharedProcess != .off, bundles.contains(where: { $0.swiftTestingCount > 0 }) else {
+            return direct
+        }
         let scratch = artifacts + "/shared-process"
         try FileManager.default.createDirectory(atPath: scratch, withIntermediateDirectories: true)
-        notes.append(
-            "shared process: kills of narrowed Swift Testing runs are decided in helper processes that keep the test "
-                + "bundle loaded; survivors and everything else run in fresh processes"
-        )
+        let build: @Sendable () async throws -> String = { [executor, artifacts, logs] in
+            try await MacOSHelper.build(into: artifacts, executor: executor, logs: logs)
+        }
+        if options.sharedProcess == .on {
+            // Always: a helper that does not build fails the run now, not mutant by mutant.
+            _ = try await build()
+            notes.append(
+                "shared process: kills of narrowed Swift Testing runs are decided in helper processes that keep the "
+                    + "test bundle loaded; survivors and everything else run in fresh processes"
+            )
+        }
         return SharedProcessHarness(
             direct: direct,
-            helper: helperPath,
+            helper: build,
             scratch: scratch,
-            token: options.environmentToken
+            token: options.environmentToken,
+            mode: options.sharedProcess
         )
     }
 

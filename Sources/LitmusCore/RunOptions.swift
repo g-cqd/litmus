@@ -106,9 +106,9 @@ public struct RunOptions: Sendable {
     public var shard: ShardSelection?
     /// Run hostless Xcode test bundles on the simulator through Litmus's helper rather than `xcodebuild`.
     public var simulatorHarness = true
-    /// Decide kills of narrowed Swift Testing runs in a helper process that keeps the test bundle loaded
-    /// (`--shared-process on`, macOS SwiftPM direct bundles; docs/design/shared-process.md).
-    public var sharedProcess = false
+    /// Whether kills of narrowed Swift Testing runs are decided in a helper process that keeps the test bundle loaded
+    /// (macOS SwiftPM direct bundles; docs/design/shared-process.md).
+    public var sharedProcess = SharedProcessMode.auto
     /// Where the run builds and mutates (`--workspace`).
     public var workspace = WorkspaceStrategy.copy
     /// The directory holding Xcode's `DerivedData` (`--build-directory`); default: the run's or the persistent one.
@@ -156,4 +156,9 @@ public struct RunOptions: Sendable {
             )
         }
     }
+}
+
+/// `--shared-process`: never, always, or per batch when it pays (`SharedProcessHarness.breaksEven`).
+public enum SharedProcessMode: String, Sendable, CaseIterable {
+    case off, on, auto
 }

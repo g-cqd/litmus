@@ -116,9 +116,9 @@ struct Run: AsyncParsableCommand {
     var noSimulatorHelper = false
     @Option(
         help:
-            "on: decide kills of narrowed Swift Testing runs in a helper process that keeps the bundle loaded (macOS SwiftPM)."
+            "auto (default): decide kills in a helper that keeps the test bundle loaded when it pays; on; off. macOS SwiftPM."
     )
-    var sharedProcess: String = "off"
+    var sharedProcess: String = "auto"
     @Option(
         name: .customLong("xcodebuild-argument"),
         parsing: .unconditionalSingleValue,
@@ -181,8 +181,10 @@ struct Run: AsyncParsableCommand {
         options.resume = resume
         options.reachFrom = reachFrom.map(runArtifactPath)
         options.simulatorHarness = !noSimulatorHelper
-        guard ["on", "off"].contains(sharedProcess) else { throw ValidationError("--shared-process takes on or off") }
-        options.sharedProcess = sharedProcess == "on"
+        guard let mode = SharedProcessMode(rawValue: sharedProcess) else {
+            throw ValidationError("--shared-process takes auto, on or off")
+        }
+        options.sharedProcess = mode
         options.allTestTargets = build.allTestTargets
         options.includeUITests = build.includeUITests
         options.skipFailingTargets = skipFailingTargets || build.allTestTargets
