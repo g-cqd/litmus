@@ -99,7 +99,7 @@ The mutation score is detected mutations divided by detected plus undetected mut
 - [Invariants: restoration, cache soundness, shared-process equivalence](docs/formal/README.md)
 - [Benchmark against other Swift mutation testers](docs/benchmark.md)
 - [Security](SECURITY.md)
-- [Release notes](release-notes/v1.0.0.md)
+- [Release notes](release-notes/v1.0.1.md)
 
 ## License
 
