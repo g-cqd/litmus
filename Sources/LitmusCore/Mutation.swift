@@ -138,10 +138,14 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
     /// What a run mutates unless told otherwise.
     public static let defaults = operators(upTo: .stable)
 
-    /// The operators named by a comma-separated list of rule identifiers.
+    /// The operators named by a comma-separated list of rule identifiers (or `all` for every logic-domain operator).
     public static func parse(_ list: String) throws -> Set<MutationOperator> {
         var result: Set<MutationOperator> = []
         for name in list.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) where !name.isEmpty {
+            if name == "all" {
+                result.formUnion(allCases.filter { $0.domain == .logic })
+                continue
+            }
             guard let found = MutationOperator(rawValue: name) else {
                 throw LitmusFailure(
                     "unknown operator \(name); known: \(allCases.map(\.rawValue).joined(separator: ", "))"

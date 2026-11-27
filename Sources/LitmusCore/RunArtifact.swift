@@ -72,6 +72,53 @@ public struct RunProvenance: Codable, Sendable {
     public var runID: String { "\(startedAt) \(snapshotSHA256.prefix(12))" }
 }
 
+/// Per-operator effectiveness breakdown over a run: generated, viable, unviable rate, verdicts, score, and mean runtime.
+public struct OperatorSummary: Codable, Sendable, Equatable {
+    public let `operator`: String
+    public let generated: Int
+    public let viable: Int
+    public let unviable: Int
+    public let unviablePercent: Double
+    public let killed: Int
+    public let crashed: Int
+    public let timeout: Int
+    public let survived: Int
+    public let noCoverage: Int
+    public let accepted: Int
+    public let scorePercent: Double?
+    public let meanSeconds: Double
+
+    public init(
+        operator: String,
+        generated: Int,
+        viable: Int,
+        unviable: Int,
+        unviablePercent: Double,
+        killed: Int,
+        crashed: Int,
+        timeout: Int,
+        survived: Int,
+        noCoverage: Int,
+        accepted: Int,
+        scorePercent: Double?,
+        meanSeconds: Double
+    ) {
+        self.operator = `operator`
+        self.generated = generated
+        self.viable = viable
+        self.unviable = unviable
+        self.unviablePercent = unviablePercent
+        self.killed = killed
+        self.crashed = crashed
+        self.timeout = timeout
+        self.survived = survived
+        self.noCoverage = noCoverage
+        self.accepted = accepted
+        self.scorePercent = scorePercent
+        self.meanSeconds = meanSeconds
+    }
+}
+
 /// One decision with the test evidence and explanation that justified it.
 public struct MutationResult: Codable, Sendable {
     public let mutation: Mutation
@@ -139,6 +186,46 @@ public struct RunArtifact: Codable, Sendable {
     public var logicScore: MutationScore? { domainScore(.logic) }
     /// The score over UI-domain mutants only (`remove-view-element`); nil when none ran.
     public var uiScore: MutationScore? { domainScore(.ui) }
+
+    /// Effectiveness breakdown per operator that generated or suppressed at least one mutant, sorted by operator id.
+    public var operatorSummaries: [OperatorSummary] {
+        let byOp = Dictionary(grouping: results, by: \.mutation.operatorID)
+        let suppressedByOp = Dictionary(grouping: plan.suppressed, by: \.operatorID)
+        let untested = Set(budget?.untested ?? [])
+        let verifiedAccepted = plan.acceptance?.verifying == true ? (plan.acceptance?.accepted ?? [:]) : [:]
+        let ops = Set(byOp.keys).union(suppressedByOp.keys).sorted { $0.rawValue < $1.rawValue }
+        return ops.map { op in
+            let items = byOp[op] ?? []
+            let suppressedCount = suppressedByOp[op]?.count ?? 0
+            let verifiedCount = items.count { verifiedAccepted[$0.mutation.id] != nil }
+            let generated = items.count + suppressedCount
+            let unviable = items.count { $0.verdict == .unviable }
+            let viable = generated - unviable
+            let unviablePct = generated > 0 ? ((Double(unviable) / Double(generated)) * 10_000).rounded() / 100 : 0
+            let decided = items.filter { !untested.contains($0.mutation.id) }
+            let timed = items.filter { $0.nanoseconds > 0 }
+            let meanSec =
+                timed.isEmpty
+                ? 0
+                : ((timed.reduce(0.0) { $0 + Double($1.nanoseconds) / 1e9 } / Double(timed.count)) * 1000).rounded()
+                    / 1000
+            return OperatorSummary(
+                operator: op.rawValue,
+                generated: generated,
+                viable: viable,
+                unviable: unviable,
+                unviablePercent: unviablePct,
+                killed: items.count { $0.verdict == .killed },
+                crashed: items.count { $0.verdict == .crashed },
+                timeout: items.count { $0.verdict == .timeout },
+                survived: items.count { $0.verdict == .survived },
+                noCoverage: items.count { $0.verdict == .noCoverage },
+                accepted: suppressedCount + verifiedCount,
+                scorePercent: MutationScore(decided.map(\.verdict)).percent,
+                meanSeconds: meanSec
+            )
+        }
+    }
 
     private func domainScore(_ domain: OperatorDomain) -> MutationScore? {
         let untested = Set(budget?.untested ?? [])

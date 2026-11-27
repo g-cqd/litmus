@@ -67,6 +67,7 @@ public struct MutationReport: Codable, Sendable, ToolReport {
     public let score: MutationScore
     public let policy: RunPolicy?
     public let executionTimings: [String: Double]
+    public let operators: [OperatorSummary]
     public var suppressedCount: Int { suppressed.count }
     public var classificationIssues: [ClassificationIssue] { [] }
     public var timings: [String: Double] { [:] }
@@ -143,7 +144,8 @@ public struct MutationReport: Codable, Sendable, ToolReport {
             ],
             score: artifact.score,
             policy: artifact.policy,
-            executionTimings: artifact.timings
+            executionTimings: artifact.timings,
+            operators: artifact.operatorSummaries
         )
     }
 

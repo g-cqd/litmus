@@ -176,6 +176,58 @@ import Testing
         #expect(counted["unary-minus-removal"]?.implementedBy == .removeUnaryMinus)
     }
 
+    @Test func `per-operator summary reports generated, unviable rate, verdicts, accepted, score, and markdown table`()
+        async throws
+    {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-e4-\(UUID().uuidString)").path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        try FileManager.default.createDirectory(atPath: root + "/Sources/App", withIntermediateDirectories: true)
+        let source = """
+            func check(_ a: Int?, _ b: Int) -> Bool {
+                // @lm:accept:next replace-relational -- intentional
+                if b < 0 { return false }
+                if let x = a { return x > b }
+                return false
+            }
+            """
+        try Data(source.utf8).write(to: URL(fileURLWithPath: root + "/Sources/App/Check.swift"))
+        let plan = try await MutationPlanner.plan(root: root, operators: [.nullifyOptionalBinding, .replaceRelational])
+        let entries = try await WorkspaceSnapshot.currentEntries(root)
+        let snap = Digest.sha256(try ArtifactCodec.json(entries))
+        let prov = RunProvenance(
+            toolVersion: LitmusVersion.current,
+            snapshotSHA256: snap,
+            inputs: entries,
+            driver: try BuildDriver(root: root, scheme: nil, destination: nil),
+            toolchain: "test",
+            startedAt: "2026-11-27T00:00:00Z",
+            executionPolicy: RunArtifact.executionPolicy
+        )
+        var artifact = RunArtifact(provenance: prov, plan: plan)
+        artifact.complete = true
+        artifact.results = plan.mutations.enumerated().map { idx, m in
+            MutationResult(
+                mutation: m,
+                verdict: idx == 0 ? .killed : .survived,
+                reason: idx == 0 ? "killed" : "survived",
+                nanoseconds: 250_000_000
+            )
+        }
+        let summaries = artifact.operatorSummaries
+        #expect(summaries.map(\.operator) == ["nullify-optional-binding", "replace-relational"])
+        let rel = try #require(summaries.first { $0.operator == "replace-relational" })
+        #expect(rel.accepted == 2 && rel.generated == 4 && rel.viable == 4 && rel.unviable == 0)
+        let report = try await MutationReport.make(artifact, root: root, relative: true)
+        #expect(report.operators == summaries)
+        let md = MarkdownReport.render(report, artifact: artifact)
+        #expect(md.contains("### Results by operator"))
+        #expect(md.contains("`nullify-optional-binding`"))
+        let agent = AgentReport.make(artifact, root: root)
+        #expect(agent.summary.operators == summaries)
+        #expect(try MutationOperator.parse("all").contains(.nullifyOptionalBinding))
+        #expect(!((try? MutationOperator.parse("all"))?.contains(.removeViewElement) ?? true))
+    }
+
     #if os(macOS)
         @Test(.timeLimit(.minutes(2))) func `rendered Phase E2 schemas typecheck under Swift 6`() throws {
             let source = """

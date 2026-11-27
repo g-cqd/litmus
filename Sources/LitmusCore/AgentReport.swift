@@ -23,6 +23,8 @@ public enum AgentReport {
         public let unviable: Int
         /// Accepted entries that match no mutant (`stale-missing`) or that a test now detects (`stale-killed`).
         public let staleAccepted: [String]
+        /// Per-operator effectiveness breakdown over the run.
+        public let operators: [OperatorSummary]
     }
 
     public struct Gap: Codable, Sendable, Equatable {
@@ -65,7 +67,8 @@ public enum AgentReport {
             survived: verdicts.count { $0 == .survived },
             noCoverage: verdicts.count { $0 == .noCoverage },
             unviable: verdicts.count { $0 == .unviable },
-            staleAccepted: ((acceptance?.staleMissing ?? []) + artifact.staleKilledAcceptances).sorted()
+            staleAccepted: ((acceptance?.staleMissing ?? []) + artifact.staleKilledAcceptances).sorted(),
+            operators: artifact.operatorSummaries
         )
         let gaps = artifact.results.filter { result in
             guard result.verdict == .survived || result.verdict == .noCoverage else { return false }

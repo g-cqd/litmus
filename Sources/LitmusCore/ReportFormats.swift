@@ -82,6 +82,23 @@ public enum MarkdownReport {
                 }
             }
         }
+        let opSummaries = artifact.operatorSummaries
+        if !opSummaries.isEmpty {
+            lines += [
+                "", "### Results by operator", "",
+                "| Operator | Score | Generated | Unviable | Killed | Crashed | Timeout | Survived | No coverage | Accepted | Mean s |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+            for item in opSummaries {
+                let scoreText = item.scorePercent.map { "\(format($0)) %" } ?? "n/a"
+                let unviableText = item.unviable > 0 ? "\(item.unviable) (\(format(item.unviablePercent)) %)" : "0"
+                lines.append(
+                    "| `\(escape(item.operator))` | \(scoreText) | \(item.generated) | \(unviableText) | "
+                        + "\(item.killed) | \(item.crashed) | \(item.timeout) | \(item.survived) | "
+                        + "\(item.noCoverage) | \(item.accepted) | \(format(item.meanSeconds)) |"
+                )
+            }
+        }
         let shown = report.findings.filter { $0.severity != "note" || $0.rule == "litmus/unviable" }
         if !shown.isEmpty {
             lines += ["", "| | Location | Mutation | Verdict | Why |", "| --- | --- | --- | --- | --- |"]
