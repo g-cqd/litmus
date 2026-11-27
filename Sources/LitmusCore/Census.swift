@@ -43,7 +43,9 @@ extension CensusEntry {
         case "nil-coalescing-to-default": .replaceNilCoalescing
         case "void-call-removal": .removeCall
         case "collection-method-swap": .replaceStdlibSemantic
+        case "first-last-swap": .swapFirstLast
         case "collection-method-removal": .removeNormalization
+        case "collection-transform-removal": .replaceCollectionTransform
         case "return-default-bool", "return-default-number", "return-default-string", "return-default-nil",
             "return-default-empty-collection":
             .returnConstant
@@ -426,13 +428,15 @@ private final class CensusVisitor: SyntaxVisitor {
     }
     override func visit(_ node: MemberAccessExprSyntax) -> SyntaxVisitorContinueKind {
         let pairs: Set<String> = [
-            "first", "last", "min", "max", "prefix", "suffix", "dropFirst", "dropLast", "hasPrefix", "hasSuffix",
+            "min", "max", "prefix", "suffix", "dropFirst", "dropLast", "hasPrefix", "hasSuffix",
             "uppercased", "lowercased", "popFirst", "popLast", "removeFirst", "removeLast", "startIndex", "endIndex",
         ]
-        let removals: Set<String> = ["sorted", "reversed", "filter", "trimmingCharacters", "shuffled"]
+        let transforms: Set<String> = ["sorted", "reversed", "filter", "shuffled"]
         let name = node.declName.baseName.text
+        if name == "first" || name == "last" { add("first-last-swap", .expression, node) }
         if pairs.contains(name) { add("collection-method-swap", .expression, node) }
-        if removals.contains(name) { add("collection-method-removal", .expression, node) }
+        if name == "trimmingCharacters" { add("collection-method-removal", .expression, node) }
+        if transforms.contains(name) { add("collection-transform-removal", .expression, node) }
         if name == "isEmpty" { add("isEmpty-negation", .expression, node) }
         return .visitChildren
     }

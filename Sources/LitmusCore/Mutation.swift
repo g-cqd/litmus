@@ -53,6 +53,8 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
     case removeCleanupCall = "remove-cleanup-call"
     case weakenCapture = "weaken-capture"
     case swapAsyncOrder = "swap-async-order"
+    case replaceCollectionTransform = "replace-collection-transform"
+    case swapFirstLast = "swap-first-last"
 
     /// The kind of edit it makes, which decides how its schema is written.
     public var shape: SchemaShape {
@@ -73,7 +75,8 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
         case .removeCall, .removeViewElement, .replaceStdlibSemantic, .removeNormalization, .replaceOptionalChain,
             .returnBoundary, .returnConstant, .emptyBody, .emptyClosureBody, .removeSwitchCase,
             .nullifyOptionalBinding, .negateIsEmpty, .skipLoop, .swapBreakContinue, .replaceBitwise,
-            .removeUnaryMinus, .removeDefer, .removeCleanupCall, .weakenCapture, .swapAsyncOrder:
+            .removeUnaryMinus, .removeDefer, .removeCleanupCall, .weakenCapture, .swapAsyncOrder,
+            .replaceCollectionTransform, .swapFirstLast:
             .experimental
         }
     }
@@ -97,7 +100,8 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
         case .removeViewElement, .replaceStdlibSemantic, .removeNormalization, .replaceOptionalChain, .returnBoundary,
             .returnConstant, .emptyBody, .emptyClosureBody, .removeSwitchCase,
             .nullifyOptionalBinding, .negateIsEmpty, .skipLoop, .swapBreakContinue, .replaceBitwise,
-            .removeUnaryMinus, .removeDefer, .removeCleanupCall, .weakenCapture, .swapAsyncOrder:
+            .removeUnaryMinus, .removeDefer, .removeCleanupCall, .weakenCapture, .swapAsyncOrder,
+            .replaceCollectionTransform, .swapFirstLast:
             false
         }
     }
@@ -137,12 +141,23 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
         case .weakenCapture:
             "retain a weak or unowned closure capture strongly to test leak detection (fault injection)"
         case .swapAsyncOrder: "swap two adjacent suspension statements to test async ordering (fault injection)"
+        case .replaceCollectionTransform:
+            "remove collection transforms (.sorted() to Array(x), .filter(...) to x/Array(x), Array(x.reversed()) to Array(x))"
+        case .swapFirstLast: "swap .first and .last on bidirectional collections (Array, ArraySlice, String)"
         }
     }
 
     /// The logic operators of `tier` and every tier before it. UI and extended opt-in operators require `--operators`.
     public static func operators(upTo tier: OperatorTier) -> Set<MutationOperator> {
         Set(allCases.filter { $0.domain == .logic && $0.inDefaultTiers && $0.tier <= tier })
+    }
+
+    /// Whether this operator benefits from compiler-resolved USRs in `TypeOracle`.
+    public var usesTypeOracle: Bool {
+        switch self {
+        case .replaceCollectionTransform, .swapFirstLast: true
+        default: false
+        }
     }
 
     /// Whether this operator is an explicit fault-injection operator (`--fault-operators`).

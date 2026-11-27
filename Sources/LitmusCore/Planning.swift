@@ -52,7 +52,8 @@ public enum MutationPlanner {
         path: String,
         operators: Set<MutationOperator> = MutationOperator.defaults,
         aridCalls: [String] = [],
-        excludeDeclarations: [String] = []
+        excludeDeclarations: [String] = [],
+        oracle: TypeOracle = .empty()
     ) throws -> Discovery {
         let parsed = Parser.parse(source: source)
         guard !parsed.hasError, !SyntaxDepth.exceeds(parsed, limit: 256) else {
@@ -66,7 +67,8 @@ public enum MutationPlanner {
             anchors: Anchors(fileText: tree.description),
             operators: operators,
             aridCalls: aridCalls,
-            excludeDeclarations: excludeDeclarations
+            excludeDeclarations: excludeDeclarations,
+            oracle: oracle
         )
         let visitor = Sites(context)
         visitor.walk(tree)
@@ -79,14 +81,16 @@ public enum MutationPlanner {
         path: String,
         operators: Set<MutationOperator> = MutationOperator.defaults,
         aridCalls: [String] = [],
-        excludeDeclarations: [String] = []
+        excludeDeclarations: [String] = [],
+        oracle: TypeOracle = .empty()
     ) throws -> [Mutation] {
         try discover(
             in: source,
             path: path,
             operators: operators,
             aridCalls: aridCalls,
-            excludeDeclarations: excludeDeclarations
+            excludeDeclarations: excludeDeclarations,
+            oracle: oracle
         ).sites
     }
 
@@ -109,9 +113,12 @@ public enum MutationPlanner {
         scope: ChangeScope? = nil,
         operators: Set<MutationOperator> = MutationOperator.defaults,
         aridCalls: [String] = [],
-        excludeDeclarations: [String] = []
+        excludeDeclarations: [String] = [],
+        indexedRoot: String? = nil,
+        indexStorePath: String? = nil
     ) async throws -> MutationPlan {
         let root = SourcePath.canonical(root)
+        let storeRoot = indexedRoot.map(SourcePath.canonical) ?? root
         guard FileManager.default.fileExists(atPath: root) else { throw LitmusFailure("root does not exist: \(root)") }
         let filter = PathFilter(exclude + ["Package.swift", "Dangerfile.swift", "**/Plugins/**"], root: root)
         if let scope {
@@ -124,7 +131,9 @@ public enum MutationPlanner {
                 scope: scope,
                 operators: operators,
                 aridCalls: aridCalls,
-                excludeDeclarations: excludeDeclarations
+                excludeDeclarations: excludeDeclarations,
+                indexedRoot: storeRoot,
+                indexStorePath: indexStorePath
             )
         }
         let discovery = SourceDiscovery.discover(under: root, isExcluded: filter.excludes)
@@ -140,6 +149,13 @@ public enum MutationPlanner {
             }
         }
         let classification = ProjectLayout.discover(paths: [root]).map(ProjectClassification.load) ?? .conventionsOnly
+        let oracle = try await openOracleIfNeeded(
+            operators: operators,
+            indexedRoot: storeRoot,
+            root: root,
+            discoveredPaths: discovered,
+            explicitStorePath: indexStorePath
+        )
         let files = try await mapConcurrently(discovered, limit: min(max(jobs, 1), 16)) { path in
             try Task.checkCancellation()
             return await LargeStack.run {
@@ -149,7 +165,8 @@ public enum MutationPlanner {
                     classification: classification,
                     operators: operators,
                     aridCalls: aridCalls,
-                    excludeDeclarations: excludeDeclarations
+                    excludeDeclarations: excludeDeclarations,
+                    oracle: oracle
                 )
             }
         }
@@ -172,6 +189,27 @@ public enum MutationPlanner {
     }
 
     /// The plan of the changed Swift files only: no directory walk, so a change touching no Swift file costs nothing.
+    private static func openOracleIfNeeded(
+        operators: Set<MutationOperator>,
+        indexedRoot: String,
+        root: String,
+        discoveredPaths: [String],
+        explicitStorePath: String?
+    ) async throws -> TypeOracle {
+        guard operators.contains(where: \.usesTypeOracle) || explicitStorePath != nil else {
+            return .empty(root: indexedRoot)
+        }
+        let relatives = discoveredPaths.compactMap { path -> String? in
+            guard path.hasPrefix(root + "/") else { return nil }
+            return String(path.dropFirst(root.count + 1))
+        }
+        return try await TypeOracle.open(
+            indexedRoot: indexedRoot,
+            analyzedRelativePaths: relatives,
+            explicitStorePath: explicitStorePath
+        )
+    }
+
     private static func plan(
         root: String,
         filter: PathFilter,
@@ -181,7 +219,9 @@ public enum MutationPlanner {
         scope: ChangeScope,
         operators: Set<MutationOperator>,
         aridCalls: [String],
-        excludeDeclarations: [String]
+        excludeDeclarations: [String],
+        indexedRoot: String,
+        indexStorePath: String?
     ) async throws -> MutationPlan {
         let wanted = include.isEmpty ? nil : PathFilter(include, root: root)
         var files: [String] = []
@@ -206,6 +246,13 @@ public enum MutationPlanner {
             files.append(path)
         }
         let classification = ProjectLayout.discover(paths: [root]).map(ProjectClassification.load) ?? .conventionsOnly
+        let oracle = try await openOracleIfNeeded(
+            operators: operators,
+            indexedRoot: indexedRoot,
+            root: root,
+            discoveredPaths: files,
+            explicitStorePath: indexStorePath
+        )
         let planned = try await mapConcurrently(files, limit: min(max(jobs, 1), 16)) { path in
             try Task.checkCancellation()
             return await LargeStack.run {
@@ -215,7 +262,8 @@ public enum MutationPlanner {
                     classification: classification,
                     operators: operators,
                     aridCalls: aridCalls,
-                    excludeDeclarations: excludeDeclarations
+                    excludeDeclarations: excludeDeclarations,
+                    oracle: oracle
                 )
             }
         }
@@ -301,7 +349,8 @@ public enum MutationPlanner {
         classification: ProjectClassification,
         operators: Set<MutationOperator>,
         aridCalls: [String] = [],
-        excludeDeclarations: [String] = []
+        excludeDeclarations: [String] = [],
+        oracle: TypeOracle = .empty()
     ) -> MutationPlan {
         let relative = String(path.dropFirst(root.count + 1))
         func excludedFile(_ reason: String) -> MutationPlan {
@@ -339,7 +388,8 @@ public enum MutationPlanner {
                 path: relative,
                 operators: operators,
                 aridCalls: aridCalls,
-                excludeDeclarations: excludeDeclarations
+                excludeDeclarations: excludeDeclarations,
+                oracle: oracle
             )
             var active: [Mutation] = [], suppressed: [Mutation] = []
             var notes =
@@ -404,6 +454,7 @@ private struct SiteContext {
     let operators: Set<MutationOperator>
     let aridCalls: [String]
     let excludeDeclarations: [String]
+    let oracle: TypeOracle
 }
 
 /// The enclosing declarations of the walk, and how many identical sites each has had: what anchors a mutant's
@@ -473,6 +524,8 @@ private final class Sites: SyntaxVisitor {
     var aridCallDepth = 0
     /// Stack of enclosing functions' declared return types (`nil` for Void/untyped, or normalized type string).
     var returnTypes: [String?] = []
+    /// Stack of declared identifier types (`x -> "[Int]"`, `"Set<String>"`, `"String"`, ...) for conservative receiver typing.
+    var declaredTypes: [[String: String]] = [[:]]
 
     init(_ context: SiteContext) {
         self.context = context
@@ -547,20 +600,31 @@ private final class Sites: SyntaxVisitor {
     }
 
     // Declarations, for anchored identities: pushed on the way in, popped on the way out.
-    override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind { enter(node.name.text, node) }
-    override func visitPost(_ node: StructDeclSyntax) { context.anchors.pop() }
-    override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind { enter(node.name.text, node) }
-    override func visitPost(_ node: ClassDeclSyntax) { context.anchors.pop() }
-    override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind { enter(node.name.text, node) }
-    override func visitPost(_ node: EnumDeclSyntax) { context.anchors.pop() }
-    override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind { enter(node.name.text, node) }
-    override func visitPost(_ node: ActorDeclSyntax) { context.anchors.pop() }
-    override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind { enter(node.name.text, node) }
-    override func visitPost(_ node: ProtocolDeclSyntax) { context.anchors.pop() }
+    override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind { pushScope(node.name.text, node) }
+    override func visitPost(_ node: StructDeclSyntax) { popScope() }
+    override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind { pushScope(node.name.text, node) }
+    override func visitPost(_ node: ClassDeclSyntax) { popScope() }
+    override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind { pushScope(node.name.text, node) }
+    override func visitPost(_ node: EnumDeclSyntax) { popScope() }
+    override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind { pushScope(node.name.text, node) }
+    override func visitPost(_ node: ActorDeclSyntax) { popScope() }
+    override func visit(_ node: ProtocolDeclSyntax) -> SyntaxVisitorContinueKind { pushScope(node.name.text, node) }
+    override func visitPost(_ node: ProtocolDeclSyntax) { popScope() }
     override func visit(_ node: ExtensionDeclSyntax) -> SyntaxVisitorContinueKind {
-        enter(normalized(node.extendedType.trimmedDescription), node)
+        pushScope(normalized(node.extendedType.trimmedDescription), node)
     }
-    override func visitPost(_ node: ExtensionDeclSyntax) { context.anchors.pop() }
+    override func visitPost(_ node: ExtensionDeclSyntax) { popScope() }
+
+    private func pushScope(_ name: String, _ node: some SyntaxProtocol, body: Bool = false) -> SyntaxVisitorContinueKind
+    {
+        declaredTypes.append([:])
+        return enter(name, node, body: body)
+    }
+
+    private func popScope() {
+        _ = declaredTypes.popLast()
+        context.anchors.pop()
+    }
     private func adjustBuilderDepth(_ node: some SyntaxProtocol, by delta: Int) {
         switch BuilderContext.classify(node) {
         case .optionalViewBuilder:
@@ -577,7 +641,8 @@ private final class Sites: SyntaxVisitor {
         adjustBuilderDepth(node, by: 1)
         let returnType = node.signature.returnClause.map { normalized($0.type.trimmedDescription) }
         returnTypes.append(returnType)
-        _ = enter(signature(node.name.text, node.signature.parameterClause.parameters), node, body: true)
+        _ = pushScope(signature(node.name.text, node.signature.parameterClause.parameters), node, body: true)
+        recordParameters(node.signature.parameterClause.parameters)
         if builderDepth == 0, let body = node.body {
             if node.signature.effectSpecifiers?.throwsClause == nil,
                 !CallRemoval.returnsValue(node.signature.returnClause),
@@ -599,7 +664,17 @@ private final class Sites: SyntaxVisitor {
     override func visitPost(_ node: FunctionDeclSyntax) {
         adjustBuilderDepth(node, by: -1)
         _ = returnTypes.popLast()
-        context.anchors.pop()
+        popScope()
+    }
+
+    private func recordParameters(_ params: FunctionParameterListSyntax) {
+        guard !declaredTypes.isEmpty else { return }
+        for param in params {
+            let name = (param.secondName ?? param.firstName).text
+            if name != "_" {
+                declaredTypes[declaredTypes.count - 1][name] = normalized(param.type.trimmedDescription)
+            }
+        }
     }
     override func visit(_ node: InitializerDeclSyntax) -> SyntaxVisitorContinueKind {
         returnTypes.append(nil)
@@ -703,6 +778,12 @@ private final class Sites: SyntaxVisitor {
         context.anchors.pop()
     }
     override func visit(_ node: PatternBindingSyntax) -> SyntaxVisitorContinueKind {
+        if let ident = node.pattern.as(IdentifierPatternSyntax.self)?.identifier.text,
+            let type = node.typeAnnotation.map({ normalized($0.type.trimmedDescription) }),
+            !declaredTypes.isEmpty
+        {
+            declaredTypes[declaredTypes.count - 1][ident] = type
+        }
         guard node.accessorBlock != nil else { return .visitChildren }
         let returnType = node.typeAnnotation.map { normalized($0.type.trimmedDescription) }
         returnTypes.append(returnType)
@@ -990,6 +1071,9 @@ private final class Sites: SyntaxVisitor {
                 )
             }
         }
+        if context.operators.contains(.replaceCollectionTransform) {
+            addCollectionTransformMutation(node)
+        }
         // String normalization removal (`.lowercased()`, `.uppercased()`, `.trimmingCharacters(in: ...)`).
         if context.operators.contains(.removeNormalization),
             let member = node.calledExpression.as(MemberAccessExprSyntax.self),
@@ -1084,6 +1168,13 @@ private final class Sites: SyntaxVisitor {
     }
 
     override func visit(_ node: MemberAccessExprSyntax) -> SyntaxVisitorContinueKind {
+        if context.operators.contains(.swapFirstLast),
+            let base = node.base,
+            !Self.chainHasOptionalChaining(base),
+            node.parent?.as(FunctionCallExprSyntax.self)?.calledExpression.id != Syntax(node).id
+        {
+            addFirstLastSwap(node, base: base)
+        }
         if context.operators.contains(.negateIsEmpty),
             node.declName.baseName.text == "isEmpty",
             let base = node.base,
@@ -1095,6 +1186,158 @@ private final class Sites: SyntaxVisitor {
             add(node, operatorID: .negateIsEmpty, replacement: "!(\(node.trimmedDescription))")
         }
         return .visitChildren
+    }
+
+    private func addCollectionTransformMutation(_ node: FunctionCallExprSyntax) {
+        let calleeText = node.calledExpression.trimmedDescription
+        // `Array(x.reversed())` / `Swift.Array(x.reversed())` -> `Swift.Array(x)`.
+        if (calleeText == "Array" || calleeText == "Swift.Array"),
+            node.arguments.count == 1,
+            node.trailingClosure == nil,
+            let arg = node.arguments.first,
+            arg.label == nil,
+            let innerCall = arg.expression.as(FunctionCallExprSyntax.self),
+            innerCall.arguments.isEmpty,
+            innerCall.trailingClosure == nil,
+            let innerMember = innerCall.calledExpression.as(MemberAccessExprSyntax.self),
+            innerMember.declName.baseName.text == "reversed",
+            let base = innerMember.base,
+            !Self.chainHasOptionalChaining(base)
+        {
+            add(node, operatorID: .replaceCollectionTransform, replacement: "Swift.Array(\(base.trimmedDescription))")
+            return
+        }
+        guard let member = node.calledExpression.as(MemberAccessExprSyntax.self),
+            let base = member.base,
+            !Self.chainHasOptionalChaining(base)
+        else { return }
+        let name = member.declName.baseName.text
+        let loc = context.converter.location(for: member.declName.baseName.positionAfterSkippingLeadingTrivia)
+        if name == "sorted", node.arguments.count <= 1 {
+            if context.oracle.isArrayReturningSorted(relativePath: context.path, line: loc.line, column: loc.column)
+                || isKnownSequenceReceiver(base)
+            {
+                add(
+                    node,
+                    operatorID: .replaceCollectionTransform,
+                    replacement: "Swift.Array(\(base.trimmedDescription))"
+                )
+            }
+        } else if name == "filter", (node.arguments.count + (node.trailingClosure != nil ? 1 : 0)) == 1 {
+            if let shape = context.oracle.filterReturnShape(
+                relativePath: context.path,
+                line: loc.line,
+                column: loc.column
+            ) {
+                let replacement =
+                    shape == .array ? "Swift.Array(\(base.trimmedDescription))" : base.trimmedDescription
+                add(node, operatorID: .replaceCollectionTransform, replacement: replacement)
+            } else if let shape = syntacticFilterShape(base) {
+                let replacement =
+                    shape == .array ? "Swift.Array(\(base.trimmedDescription))" : base.trimmedDescription
+                add(node, operatorID: .replaceCollectionTransform, replacement: replacement)
+            }
+        }
+    }
+
+    private func addFirstLastSwap(_ node: MemberAccessExprSyntax, base: ExprSyntax) {
+        let name = node.declName.baseName.text
+        guard name == "first" || name == "last" else { return }
+        let loc = context.converter.location(for: node.declName.baseName.positionAfterSkippingLeadingTrivia)
+        let allowed: Bool
+        if name == "last" {
+            allowed =
+                context.oracle.isBidirectionalLast(relativePath: context.path, line: loc.line, column: loc.column)
+                || isKnownBidirectionalReceiver(base)
+        } else {
+            allowed = isKnownBidirectionalReceiver(base)
+        }
+        if allowed {
+            let swapped = name == "first" ? "last" : "first"
+            add(
+                node,
+                operatorID: .swapFirstLast,
+                replacement: swappingToken(node.declName.baseName, in: node, for: swapped)
+            )
+        }
+    }
+
+    private func lookupDeclaredType(_ expr: ExprSyntax) -> String? {
+        let name: String?
+        if let decl = expr.as(DeclReferenceExprSyntax.self) {
+            name = decl.baseName.text
+        } else if let member = expr.as(MemberAccessExprSyntax.self),
+            member.base?.trimmedDescription == "self"
+        {
+            name = member.declName.baseName.text
+        } else {
+            name = nil
+        }
+        guard let name else { return nil }
+        for scope in declaredTypes.reversed() {
+            if let found = scope[name] { return found }
+        }
+        return nil
+    }
+
+    private func isKnownBidirectionalReceiver(_ expr: ExprSyntax) -> Bool {
+        if expr.is(ArrayExprSyntax.self) || expr.is(StringLiteralExprSyntax.self) { return true }
+        if let call = expr.as(FunctionCallExprSyntax.self) {
+            let callee = call.calledExpression.trimmedDescription
+            if callee == "Array" || callee == "Swift.Array" || callee == "String" || callee == "Swift.String" {
+                return true
+            }
+            if let m = call.calledExpression.as(MemberAccessExprSyntax.self),
+                ["sorted", "map", "compactMap", "flatMap"].contains(m.declName.baseName.text)
+            {
+                return true
+            }
+        }
+        guard let type = lookupDeclaredType(expr) else { return false }
+        if type == "String" || type == "Substring" || type == "Swift.String" { return true }
+        if type.hasPrefix("[") && type.hasSuffix("]") && !type.contains(":") { return true }
+        return type.hasPrefix("Array<") || type.hasPrefix("ArraySlice<") || type.hasPrefix("ContiguousArray<")
+    }
+
+    private func isKnownSequenceReceiver(_ expr: ExprSyntax) -> Bool {
+        if isKnownBidirectionalReceiver(expr) { return true }
+        if let call = expr.as(FunctionCallExprSyntax.self) {
+            let callee = call.calledExpression.trimmedDescription
+            if callee == "Set" || callee == "Swift.Set" { return true }
+        }
+        if let member = expr.as(MemberAccessExprSyntax.self),
+            member.declName.baseName.text == "keys" || member.declName.baseName.text == "values"
+        {
+            return true
+        }
+        guard let type = lookupDeclaredType(expr) else { return false }
+        return type.hasPrefix("Set<")
+    }
+
+    private func syntacticFilterShape(_ expr: ExprSyntax) -> TypeOracle.FilterReturnShape? {
+        if expr.is(ArrayExprSyntax.self) { return .array }
+        if expr.is(StringLiteralExprSyntax.self) { return .sameReceiver }
+        if let call = expr.as(FunctionCallExprSyntax.self) {
+            let callee = call.calledExpression.trimmedDescription
+            if callee == "Array" || callee == "Swift.Array" { return .array }
+            if callee == "Set" || callee == "Swift.Set" || callee == "String" { return .sameReceiver }
+            if let m = call.calledExpression.as(MemberAccessExprSyntax.self),
+                ["sorted", "map", "compactMap", "flatMap"].contains(m.declName.baseName.text)
+            {
+                return .array
+            }
+        }
+        guard let type = lookupDeclaredType(expr) else { return nil }
+        if type.hasPrefix("[") && type.hasSuffix("]") {
+            return type.contains(":") ? .sameReceiver : .array
+        }
+        if type.hasPrefix("Array<") || type.hasPrefix("ArraySlice<") || type.hasPrefix("ContiguousArray<") {
+            return .array
+        }
+        if type.hasPrefix("Set<") || type.hasPrefix("Dictionary<") || type == "String" || type == "Substring" {
+            return .sameReceiver
+        }
+        return nil
     }
 
     /// True if `base` propagates an unparenthesized optional chain (`a?.b` -> `.isEmpty` has type `Bool?`).

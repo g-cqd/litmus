@@ -189,6 +189,7 @@ struct Run: AsyncParsableCommand {
         options.includeUITests = build.includeUITests
         options.skipFailingTargets = skipFailingTargets || build.allTestTargets
         options.acceptedFile = try subject.resolvedAcceptedFile()
+        options.indexStorePath = subject.indexStorePath
         options.verifyAccepted = verifyAccepted
         do { options.onlyIDs = try onlyID.map(MutationSelector.init(parsing:)) } catch {
             throw ValidationError("\(error)")

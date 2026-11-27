@@ -269,6 +269,44 @@ import Testing
         #expect(counted["await-statement-swap (modeler)"]?.implementedBy == .swapAsyncOrder)
     }
 
+    @Test func `collection-transform and first-last operators preserve receiver types and skip Set.first`() throws {
+        let source = """
+            func process(_ arr: [Int], _ slice: ArraySlice<Int>, _ set: Set<Int>, _ dict: [String: Int], _ str: String) -> Int {
+                let s1 = arr.sorted()
+                let s2 = set.sorted(by: >)
+                let r1 = Array(arr.reversed())
+                let f1 = arr.filter { $0 > 0 }
+                let f2 = slice.filter { $0 > 0 }
+                let f3 = set.filter { $0 > 0 }
+                let f4 = dict.filter { $0.value > 0 }
+                let f5 = str.filter { $0.isLetter }
+                let a = arr.first ?? 0
+                let b = arr.last ?? 0
+                let c = set.first ?? 0
+                let d = dict.first?.value ?? 0
+                return s1.count + s2.count + r1.count + f1.count + f2.count + f3.count + f4.count + f5.count + a + b + c + d
+            }
+            """
+        let sites = try MutationPlanner.mutations(
+            in: source,
+            path: "Collect.swift",
+            operators: [.replaceCollectionTransform, .swapFirstLast]
+        )
+        #expect(sites.contains { $0.original == "arr.sorted()" && $0.replacement == "Swift.Array(arr)" })
+        #expect(sites.contains { $0.original == "set.sorted(by: >)" && $0.replacement == "Swift.Array(set)" })
+        #expect(sites.contains { $0.original == "Array(arr.reversed())" && $0.replacement == "Swift.Array(arr)" })
+        #expect(sites.contains { $0.original == "arr.filter { $0 > 0 }" && $0.replacement == "Swift.Array(arr)" })
+        #expect(sites.contains { $0.original == "slice.filter { $0 > 0 }" && $0.replacement == "Swift.Array(slice)" })
+        #expect(sites.contains { $0.original == "set.filter { $0 > 0 }" && $0.replacement == "set" })
+        #expect(sites.contains { $0.original == "dict.filter { $0.value > 0 }" && $0.replacement == "dict" })
+        #expect(sites.contains { $0.original == "str.filter { $0.isLetter }" && $0.replacement == "str" })
+        #expect(sites.contains { $0.original == "arr.first" && $0.replacement == "arr.last" })
+        #expect(sites.contains { $0.original == "arr.last" && $0.replacement == "arr.first" })
+        // `Set` and `Dictionary` have no `.last`: must not mutate `.first` on them!
+        #expect(!sites.contains { $0.original == "set.first" })
+        #expect(!sites.contains { $0.original.contains("dict.first") })
+    }
+
     #if os(macOS)
         @Test(.timeLimit(.minutes(2))) func `rendered Phase E2 schemas typecheck under Swift 6`() throws {
             let source = """
@@ -397,6 +435,103 @@ import Testing
             #expect(try run(active: nil) == "during=body;after=body,deferred\nleaked=false")
             #expect(try run(active: deferSite.id) == "during=body;after=body\nleaked=false")
             #expect(try run(active: weakSite.id) == "during=body;after=body,deferred\nleaked=true")
+        }
+
+        @Test(.timeLimit(.minutes(2)))
+        func `TypeOracle resolves cross-declaration collection USRs from an index store and schemas typecheck`()
+            async throws
+        {
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-e1-\(UUID().uuidString)")
+            let sourcesDir = dir.appendingPathComponent("Sources/Lib")
+            let storeDir = dir.appendingPathComponent("index-store")
+            try FileManager.default.createDirectory(at: sourcesDir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+
+            let model = """
+                public struct Bag {
+                    public var numbers: [Int]
+                    public var tags: Set<String>
+                    public var scores: [String: Int]
+                }
+                """
+            let consumer = """
+                public func summarize(_ bag: Bag) -> Int {
+                    let a = bag.tags.sorted()
+                    let b = bag.tags.filter { !$0.isEmpty }
+                    let c = bag.scores.filter { $0.value > 0 }
+                    let d = bag.numbers.last ?? 0
+                    return a.count + b.count + c.count + d
+                }
+                """
+            let modelFile = sourcesDir.appendingPathComponent("Model.swift")
+            let consumerFile = sourcesDir.appendingPathComponent("Consumer.swift")
+            try Data(model.utf8).write(to: modelFile)
+            try Data(consumer.utf8).write(to: consumerFile)
+
+            let build = Process()
+            build.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+            build.arguments = [
+                "swiftc", "-c", "-swift-version", "6", "-module-name", "Lib",
+                "-index-store-path", storeDir.path,
+                modelFile.path, consumerFile.path,
+            ]
+            build.currentDirectoryURL = dir
+            let errPipe = Pipe()
+            build.standardError = errPipe
+            try build.run()
+            let buildErr = String(decoding: errPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            build.waitUntilExit()
+            #expect(build.terminationStatus == 0, "swiftc index build failed:\n\(buildErr)")
+
+            // Without TypeOracle, `bag.tags` / `bag.scores` / `bag.numbers` have cross-file types unknown to syntax alone.
+            let withoutOracle = try MutationPlanner.mutations(
+                in: consumer,
+                path: "Sources/Lib/Consumer.swift",
+                operators: [.replaceCollectionTransform, .swapFirstLast]
+            )
+            #expect(withoutOracle.isEmpty)
+
+            // With TypeOracle opened against the index store, all 4 sites resolve accurately and typecheck!
+            let plan = try await MutationPlanner.plan(
+                root: dir.path,
+                operators: [.replaceCollectionTransform, .swapFirstLast],
+                indexStorePath: storeDir.path
+            )
+            #expect(plan.mutations.count == 4)
+            #expect(
+                plan.mutations.contains {
+                    $0.original == "bag.tags.sorted()" && $0.replacement == "Swift.Array(bag.tags)"
+                }
+            )
+            #expect(
+                plan.mutations.contains {
+                    $0.original == "bag.tags.filter { !$0.isEmpty }" && $0.replacement == "bag.tags"
+                }
+            )
+            #expect(
+                plan.mutations.contains {
+                    $0.original == "bag.scores.filter { $0.value > 0 }" && $0.replacement == "bag.scores"
+                }
+            )
+            #expect(
+                plan.mutations.contains { $0.original == "bag.numbers.last" && $0.replacement == "bag.numbers.first" }
+            )
+
+            let rendered = try SchemaWriter.schema(consumer, mutations: plan.mutations, token: "01020304")
+            let schemaFile = dir.appendingPathComponent("ConsumerSchema.swift")
+            try Data(rendered.text.utf8).write(to: schemaFile)
+            let check = Process()
+            check.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+            check.arguments = [
+                "swiftc", "-typecheck", "-swift-version", "6", "-module-name", "Lib",
+                modelFile.path, schemaFile.path,
+            ]
+            let checkPipe = Pipe()
+            check.standardError = checkPipe
+            try check.run()
+            let checkErr = String(decoding: checkPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            check.waitUntilExit()
+            #expect(check.terminationStatus == 0, "schema typecheck failed:\n\(checkErr)")
         }
     #endif
 }

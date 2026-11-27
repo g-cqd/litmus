@@ -148,7 +148,9 @@ final class RunSession<Executor: ProcessExecutor> {
             scope: scope,
             operators: options.operators,
             aridCalls: options.aridCalls,
-            excludeDeclarations: options.excludeDeclarations
+            excludeDeclarations: options.excludeDeclarations,
+            indexedRoot: root,
+            indexStorePath: options.indexStorePath
         )
         account("plan", since: phase)
         if sourcePlan.mutations.isEmpty {
@@ -317,7 +319,9 @@ final class RunSession<Executor: ProcessExecutor> {
             scope: options.scope,
             operators: options.operators,
             aridCalls: options.aridCalls,
-            excludeDeclarations: options.excludeDeclarations
+            excludeDeclarations: options.excludeDeclarations,
+            indexedRoot: root,
+            indexStorePath: options.indexStorePath
         )
         account("plan", since: phase)
         var rooted = MutationPlan(

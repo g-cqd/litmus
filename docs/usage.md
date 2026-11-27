@@ -25,7 +25,7 @@ Litmus mutates with operators in three tiers; each tier includes the ones before
 | `standard` | adds `replace-relational`, `flip-boolean`, `replace-arithmetic`, `replace-range`, `remove-negation`, `replace-nil-coalescing` |
 | `experimental` | adds `remove-call` |
 
-Extended operators (`remove-view-element`, `replace-stdlib-semantic`, `remove-normalization`, `replace-optional-chain`, `return-boundary`, `return-constant`, `empty-body`, `empty-closure-body`, `remove-switch-case`) are explicit opt-in via `--operators`.
+Extended operators (`remove-view-element`, `replace-stdlib-semantic`, `remove-normalization`, `replace-optional-chain`, `return-boundary`, `return-constant`, `empty-body`, `empty-closure-body`, `remove-switch-case`, `nullify-optional-binding`, `negate-is-empty`, `skip-loop`, `swap-break-continue`, `replace-bitwise`, `remove-unary-minus`, `replace-collection-transform`, `swap-first-last`) are opt-in via `--operators` (`--operators all` enables every non-fault logic operator). `--fault-operators` (or `--operators fault`) adds the four fault-injection operators (`remove-defer`, `remove-cleanup-call`, `weaken-capture`, `swap-async-order`). Type-directed operators auto-discover `.build` / `DerivedData` index stores or accept `--index-store-path PATH`.
 
 `--operator-tier TIER` picks a tier; `--operators ID,ID` names exactly which operators run (the two are alternatives); both work on `plan` and `run`. `litmus census` lists the candidates and which operator implements each. Litmus excludes tests, previews, generated code, debug-only regions, macro and attribute arguments, enum case declarations, and files it identifies as outside compiled targets. The plan records exclusions; inspect it when project classification is ambiguous.
 

@@ -35,7 +35,8 @@ struct Plan: AsyncParsableCommand {
                 scope: try await change.scope(root: subject.absoluteRoot),
                 operators: try subject.operatorSet(),
                 aridCalls: try subject.resolvedAridCalls(),
-                excludeDeclarations: try subject.resolvedExcludeDeclarations()
+                excludeDeclarations: try subject.resolvedExcludeDeclarations(),
+                indexStorePath: subject.indexStorePath
             )
             if let accepted = try AcceptedMutants.load(
                 root: subject.absoluteRoot,

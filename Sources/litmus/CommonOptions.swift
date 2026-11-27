@@ -26,6 +26,8 @@ struct SubjectOptions: ParsableArguments {
     var excludeDeclarations: [String] = []
     @Option(help: "Acceptance file of reviewed equivalent mutants (default: .litmus-accepted.json at the root).")
     var acceptedFile: String?
+    @Option(help: "Explicit index store path for type-directed operators (default: auto-discovered when needed).")
+    var indexStorePath: String?
     @Option(
         help:
             "Operators to mutate, comma-separated rule ids (default: the stable tier). Known: negate-condition, swap-ternary, replace-logical, replace-relational, flip-boolean, replace-arithmetic, replace-range, remove-negation, replace-nil-coalescing, remove-call, remove-view-element, replace-stdlib-semantic, remove-normalization, replace-optional-chain, return-boundary, return-constant, empty-body, empty-closure-body, remove-switch-case."

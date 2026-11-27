@@ -121,6 +121,8 @@ public struct RunOptions: Sendable {
     public var onlyIDs: [MutationSelector] = []
     /// The acceptance file (`--accepted-file`, `acceptedFile`); nil reads `.litmus-accepted.json` at the root if any.
     public var acceptedFile: String?
+    /// Explicit compiler index store path for type-directed operators; nil auto-discovers `.build` / `DerivedData`.
+    public var indexStorePath: String?
     /// Run accepted mutants too, to report those a test now detects (`--verify-accepted`).
     public var verifyAccepted = false
     /// Test every unit-test target of the Xcode project or workspace through a synthesized scheme

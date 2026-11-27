@@ -24,6 +24,18 @@ Each operator has a rule identifier, used by `--operators`, by suppression direc
 | `empty-body` | experimental (opt-in) | skip the body of a non-throwing `Void`-returning function or method |
 | `empty-closure-body` | experimental (opt-in) | skip the body of a trailing `Void` closure (excluding `withLock`, `sync`, `autoreleasepool`, `assumeIsolated`) |
 | `remove-switch-case` | experimental (opt-in) | guard a non-default `switch` case (`where !marker`) so it falls through to `default` |
+| `nullify-optional-binding` | experimental (opt-in) | force `if let`, `guard let` or `while let` bindings (explicit, `try`/`await`, or shorthand `if let x`) to evaluate to `nil` |
+| `negate-is-empty` | experimental (opt-in) | negate non-optional `.isEmpty` property accesses outside direct conditions |
+| `skip-loop` | experimental (opt-in) | guard a `for … in` loop with `where !marker` so its body runs zero times |
+| `swap-break-continue` | experimental (opt-in) | exchange unlabeled `break` and `continue` statements inside loops |
+| `replace-bitwise` | experimental (opt-in) | exchange `&` and `\|`, `^` to `&`, `<<` and `>>`, and compound `&=`/`\|=`/`^=` |
+| `remove-unary-minus` | experimental (opt-in) | remove unary `-` on non-literal expressions (`-x` to `x`) |
+| `replace-collection-transform` | experimental (opt-in, type-directed) | replace `.sorted()` with `Array(x)`, `.filter(...)` with `x`/`Array(x)`, and `Array(x.reversed())` with `Array(x)` |
+| `swap-first-last` | experimental (opt-in, type-directed) | exchange `.first` and `.last` on bidirectional collections (`Array`, `ArraySlice`, `String`) |
+| `remove-defer` | fault (`--fault-operators`) | skip the body of a `defer` block at scope exit (excluding lock unlocks) |
+| `remove-cleanup-call` | fault (`--fault-operators`) | skip standalone cleanup calls (`cancel`, `invalidate`, `close`, `finish`, `removeObserver`, …) |
+| `weaken-capture` | fault (`--fault-operators`) | retain a `weak` or `unowned` closure capture strongly to test retain-cycle / deallocation checks |
+| `swap-async-order` | fault (`--fault-operators`) | reverse two adjacent `await` call statements |
 
 ## What is left alone
 
