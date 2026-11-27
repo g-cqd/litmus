@@ -74,9 +74,12 @@ public enum GitHubSummaryReport {
         "<code>\(html(result.mutation.path)):\(result.mutation.line)</code>"
     }
 
-    static func html(_ text: String) -> String {
-        text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
+    static func html(_ text: String) -> String { markupSafe(text, ampersand: "&amp;", less: "&lt;", greater: "&gt;") }
+
+    /// `text` with `&` first, then `<` and `>`, replaced.
+    static func markupSafe(_ text: String, ampersand: String, less: String, greater: String) -> String {
+        text.replacingOccurrences(of: "&", with: ampersand).replacingOccurrences(of: "<", with: less)
+            .replacingOccurrences(of: ">", with: greater)
     }
 
     static func format(_ value: Double) -> String {

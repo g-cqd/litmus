@@ -82,7 +82,6 @@ public enum HTMLReport {
     /// JSON that cannot end its `<script>` element or open markup: `<`, `>` and `&` only ever occur inside JSON
     /// strings, where their `\u` escapes mean the same.
     static func embeddable(_ json: String) -> String {
-        json.replacingOccurrences(of: "&", with: "\\u0026").replacingOccurrences(of: "<", with: "\\u003c")
-            .replacingOccurrences(of: ">", with: "\\u003e")
+        GitHubSummaryReport.markupSafe(json, ampersand: "\\u0026", less: "\\u003c", greater: "\\u003e")
     }
 }
