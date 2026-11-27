@@ -2,7 +2,7 @@ name: Benchmark
 
 # The mutation-testing benchmark (docs/benchmark.md), one job per tool x scenario cell, all in parallel:
 #   plan     lists the applicable cells (bench/run.py --matrix);
-#   prepare  builds Litmus and installs the other tools once, for every cell;
+#   prepare  downloads the latest release binary of every tool once, for every cell (nothing is built);
 #   cell     runs one cell on its own macOS runner (so simulator cells never share a simulator);
 #   summary  merges every cell's results into the run's summary.
 # Weekly (Monday 04:17 UTC, every tool and scenario) and on demand: a full matrix is many hours of macOS runner time,
@@ -13,8 +13,8 @@ on:
   workflow_dispatch:
     inputs:
       tools:
-        description: Comma-separated tool ids (litmus, smt, mutest, muter)
-        default: litmus,smt,mutest,muter
+        description: Comma-separated tool ids (litmus, smt, muter, xcmutate, dlitmus; mutest has no release binary)
+        default: litmus,smt,muter,xcmutate,dlitmus
       scenarios:
         description: Comma-separated scenario ids, or all (python3 bench/run.py --list)
         default: all
@@ -54,7 +54,7 @@ jobs:
       - name: Settings
         id: settings
         env:
-          TOOLS: ${{ inputs.tools || 'litmus,smt,mutest,muter' }}
+          TOOLS: ${{ inputs.tools || 'litmus,smt,muter,xcmutate,dlitmus' }}
           SCENARIOS: ${{ inputs.scenarios || 'all' }}
           IDLE: ${{ inputs.idle-timeout || '900' }}
           HARD: ${{ inputs.hard-timeout || '7200' }}
@@ -82,45 +82,33 @@ jobs:
   prepare:
     name: Bench · Prepare tools
     needs: plan
-    runs-on: ${{ needs.plan.outputs.runner }}
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Swift version
-        id: swift
-        run: echo "version=$(cat .swift-version)" >> "$GITHUB_OUTPUT"
-      # The runner's Xcode is older than Litmus's tools version: the toolchain CI builds Litmus with, through the
-      # swift-ci action ci.yml pins. Cells run the built binary without it (its runtime is in /usr/lib/swift).
-      - name: Set up Swift
-        if: contains(format(',{0},', needs.plan.outputs.tools), ',litmus,')
-        uses: g-cqd/swift-ci/setup-swift@07936b09eef98d5fcef4eac36a7c3f97de133e19 # swift-ci 07936b0
-        with:
-          swift-version: ${{ steps.swift.outputs.version }}
-      - name: Build Litmus
-        if: contains(format(',{0},', needs.plan.outputs.tools), ',litmus,')
-        run: |
-          swift build -c release --product litmus
-          mkdir -p "$RUNNER_TEMP/tools/litmus"
-          cp "$(swift build -c release --show-bin-path)/litmus" "$RUNNER_TEMP/tools/litmus/litmus"
-          echo "LITMUS_BIN=litmus/litmus" >> "$RUNNER_TEMP/tools/tools.env"
-      - name: Install the other tools
+      - name: Download the latest release binaries
         env:
           TOOLS: ${{ needs.plan.outputs.tools }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          others="$(echo "$TOOLS" | tr ',' '\n' | grep -v '^litmus$' | paste -sd, - || true)"
-          if [ -n "$others" ]; then
-            # Paths relative to the tools directory: each cell extracts it elsewhere.
-            bench/install-tools.sh "$RUNNER_TEMP/tools" "$others" \
-              | sed -e 's/^export //' -e "s/'//g" -e "s|$RUNNER_TEMP/tools/||" >> "$RUNNER_TEMP/tools/tools.env"
-          fi
-          rm -rf "$RUNNER_TEMP/tools/src"
-          # Keep the executables only (artifacts drop file modes; the tarball keeps them).
-          find "$RUNNER_TEMP/tools" -path '*/.build/*' ! -path '*/.build/release/swift-mutation-testing' -delete 2> /dev/null || true
-          tar -czf tools.tgz -C "$RUNNER_TEMP/tools" .
+          mkdir -p "$RUNNER_TEMP/tools"
+          # Paths relative to the tools directory: each cell unpacks it elsewhere.
+          bench/install-tools.sh "$RUNNER_TEMP/tools" "$TOOLS" \
+            | grep '^export ' | sed -e 's/^export //' -e "s/'//g" -e "s|$RUNNER_TEMP/tools/||" > "$RUNNER_TEMP/tools/tools.env"
+          rm -f "$RUNNER_TEMP"/tools/*.tar.gz
+          {
+            echo "### Tools"
+            echo
+            echo '| Tool | Release | Asset | SHA-256 | Checked |'
+            echo '| --- | --- | --- | --- | --- |'
+            tail -n +2 "$RUNNER_TEMP/tools/versions.tsv" | awk -F'\t' '{ printf "| %s | %s | %s | `%s` | %s |\n", $1, $2, $3, $4, $5 }'
+          } >> "$GITHUB_STEP_SUMMARY"
           cat "$RUNNER_TEMP/tools/tools.env"
+          # Artifacts drop file modes; the tarball keeps them.
+          tar -czf tools.tgz -C "$RUNNER_TEMP/tools" .
       - name: Upload
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
