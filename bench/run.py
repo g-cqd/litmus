@@ -1373,13 +1373,16 @@ def main() -> int:
             future.result()
     write_markdown(output, results)
     print(f"results: {output / 'results.md'}")
-    # A cell that could not run (tool missing, step timed out or failed without a report) fails the run, so a CI job
-    # never shows success for a benchmark that did not happen.
+    # The run fails when the benchmark did not happen (a tool's binary is missing) or when Litmus's own cell did not
+    # end well. Another tool failing, timing out or writing no report is a result: it is in the table, with its errors.
     broken = [
         f"{r['tool']}/{r['scenario']}: {r['status']}"
         for r in results["rows"]
-        if r["status"] not in ("ok", "not-applicable")
+        if r["status"] == "unavailable" or (r["tool"] == "litmus" and r["status"] not in ("ok", "not-applicable"))
     ]
+    for row in results["rows"]:
+        if row["status"] not in ("ok", "not-applicable", "unavailable") and row["tool"] != "litmus":
+            print(f"note: {row['tool']}/{row['scenario']}: {row['status']} (reported, not a benchmark failure)")
     for line in broken:
         print(f"not ok: {line}", file=sys.stderr)
     return 1 if broken else 0

@@ -148,6 +148,8 @@ probes with the `probes.json` it runs with.
 | Peak memory | the largest resident set among those processes (`ru_maxrss`) |
 | Peak disk | `du` of the subject copy, the cell's private `TMPDIR` and its output, sampled every 30 s |
 
+`run.py` exits non-zero, and a CI cell fails, only when the benchmark did not happen (a tool's binary is missing) or Litmus's own cell did not end `ok`. Another tool that fails, times out or writes no report is a result: its row says so, with its first errors. For example, Muter 17 on WalletKit fails because its instrumented `Wallet.swift` does not compile (`attribute 'public' can only be used…`).
+
 Each cell gets its own `TMPDIR`, so a tool's sandboxes there count as its disk use and are removed with the cell, and
 xcmutate's `--work-dir` is put inside the cell. Not counted: Xcode's default DerivedData, which tools that do not choose
 their own build into, and debugholic/litmus's work copies in `~/Library/Caches/litmus`.
