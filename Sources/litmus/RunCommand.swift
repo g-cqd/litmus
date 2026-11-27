@@ -280,7 +280,10 @@ struct Run: AsyncParsableCommand {
             stderr("litmus: \(reused.resumed + reused.fromStore) verdict(s) reused (\(reused.mode.rawValue) keys)")
         }
         if let budget = artifact.budget, let stopped = budget.stoppedBy {
-            stderr("litmus: \(budget.untested.count) mutant(s) not run: the \(stopped) limit was reached")
+            let why =
+                stopped == "failing-test-target"
+                ? "only test targets that failed unmutated cover them" : "the \(stopped) limit was reached"
+            stderr("litmus: \(budget.untested.count) mutant(s) not run: \(why)")
         }
         if let cost = artifact.cost {
             stderr(

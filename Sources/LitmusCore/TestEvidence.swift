@@ -206,6 +206,7 @@ private struct XcodeSummary: Decodable {
     let testFailures: [Failure]?
     struct Failure: Decodable {
         let failureText: String?
+        let targetName: String?
     }
 }
 
@@ -220,6 +221,14 @@ extension TestEvidence {
             let text = (failure.failureText ?? "").lowercased()
             return text.contains("crashed") || text.hasPrefix("crash:")
         }
+    }
+
+    /// The test targets the failures of an `xcresulttool get test-results summary` name, in order without repeats:
+    /// what `-skip-testing:` takes.
+    public static func xcresultFailedTargets(_ bytes: [UInt8]) -> [String] {
+        guard let summary = try? ArtifactCodec.decode(XcodeSummary.self, bytes: bytes) else { return [] }
+        var seen: Set<String> = []
+        return (summary.testFailures ?? []).compactMap(\.targetName).filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
     /// Counts per test bundle from `xcresulttool get test-results tests`: each "Unit test bundle" (or UI test bundle)

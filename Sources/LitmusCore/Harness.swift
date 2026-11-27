@@ -756,6 +756,12 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
         func finished(_ outcome: TestRunOutcome, _ reason: String) -> TestRunResult {
             var finished = result(outcome, counts, reason)
             finished.moduleCounts = modules
+            if outcome != .passed {
+                // xcodebuild runs every bundle: the summary's first failing target, else a bundle with failures.
+                finished.failedModule =
+                    TestEvidence.xcresultFailedTargets(summary.stdout).first
+                    ?? modules.filter { $0.value.failed > 0 }.keys.sorted().first
+            }
             return finished
         }
         if counts.failed > 0 {

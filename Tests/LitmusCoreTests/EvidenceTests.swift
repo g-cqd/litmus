@@ -195,6 +195,15 @@ func `xcresult rejects hostile counters before arithmetic`(counter: Int) throws 
     #expect(TestEvidence.xcresultCrashed(Array(crashed.utf8)))
     #expect(!TestEvidence.xcresultCrashed(Array(failed.utf8)))
     #expect(try TestEvidence.xcresult(Array(crashed.utf8)) == TestCounts(passed: 11, failed: 1, skipped: 0))
+    // The failing targets, what --skip-failing-targets quarantines under xcodebuild.
+    let twoTargets = """
+        {"result":"Failed","totalTestCount":5,"passedTests":2,"failedTests":3,"skippedTests":0,"testFailures":[
+          {"failureText":"a","targetName":"DemoTests"},{"failureText":"b","targetName":"CoreTests"},
+          {"failureText":"c","targetName":"DemoTests"},{"failureText":"d"}]}
+        """
+    #expect(TestEvidence.xcresultFailedTargets(Array(twoTargets.utf8)) == ["DemoTests", "CoreTests"])
+    #expect(TestEvidence.xcresultFailedTargets(Array(crashed.utf8)) == ["ExampleTests"])
+    #expect(TestEvidence.xcresultFailedTargets(Array("{}".utf8)).isEmpty)
 }
 
 @Test func `xcodebuild test commands select test targets with -only-testing`() throws {

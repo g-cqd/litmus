@@ -681,9 +681,12 @@ final class RunSession<Executor: ProcessExecutor> {
             collectPerTestReach: singlePassReach
         )
         var suiteCPU = ChildUsage.cpuSeconds() - usageBefore
+        // The helper `xcodebuild` replaced, retried once `xcodebuild` has quarantined the targets that truly fail.
+        var fellBackFrom: SimulatorDirectHarness<Executor>?
         if (baseline.result.outcome != .passed || (baseline.result.counts?.passed ?? 0) == 0),
             let direct = harness as? SimulatorDirectHarness<Executor>, direct.hasAppHostedTargets
         {
+            fellBackFrom = direct
             // App-hosted unit tests that depend on UIApplication or host-app resources cannot run without launching
             // the `.app`; fall back to `xcodebuild` cleanly instead of failing the run.
             artifact.notes.append(
@@ -730,6 +733,26 @@ final class RunSession<Executor: ProcessExecutor> {
                     deadline: options.timeoutCap,
                     collectPerTestReach: singlePassReach
                 )
+            }
+            // The helper failed on a target `xcodebuild` also fails: without the quarantined targets it may pass, and
+            // it is much faster. A target that fails only under the helper keeps the run on `xcodebuild`.
+            if let helper = fellBackFrom, !quarantined.isEmpty, baseline.result.outcome == .passed {
+                var (helperWorkers, helperPool, helperJudge) = try makeJudge(for: helper)
+                helperJudge.quarantined = Set(quarantined.keys)
+                let retry = try await helperJudge.execute(
+                    name: "baseline-helper-quarantined",
+                    activeID: "",
+                    deadline: options.timeoutCap,
+                    collectPerTestReach: singlePassReach
+                )
+                if retry.result.outcome == .passed, (retry.result.counts?.passed ?? 0) > 0 {
+                    harness = helper
+                    (allowedWorkers, pool, current) = (helperWorkers, helperPool, helperJudge)
+                    baseline = retry
+                    artifact.notes.append(
+                        "simulator helper passes without the quarantined test target(s); back on the helper"
+                    )
+                }
             }
         }
         account("tests", since: phase)
