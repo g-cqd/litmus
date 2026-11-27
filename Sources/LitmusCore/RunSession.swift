@@ -1409,6 +1409,13 @@ final class RunSession<Executor: ProcessExecutor> {
             installed = nil
             try ArtifactCodec.write(artifact, path: checkpointPath)
         }
+        if let timings = established?.judge.timings {
+            artifact.notes += timings.summary(
+                factor: options.timeoutFactor,
+                minimum: options.minimumTimeout,
+                cap: established?.deadline ?? options.timeoutCap
+            )
+        }
         if let shared = established?.judge.harness as? SharedProcessHarness<Executor> {
             shared.shutdown()
             let statistics = shared.statistics

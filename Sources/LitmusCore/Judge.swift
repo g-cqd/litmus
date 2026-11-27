@@ -29,6 +29,8 @@ struct Judge: Sendable {
     var testCounts: [String: TestCounts] = [:]
     /// Test modules quarantined for failing unmutated (`--skip-failing-targets`): never run.
     var quarantined: Set<String> = []
+    /// This run's finished mutant runs, which shorten later deadlines; shared by every copy of the judge.
+    var timings = MutantTimings()
 
     /// The reaching tests a mutant's runs are limited to: known, not empty, every count known; nil runs the modules.
     func selected(_ site: Mutation) -> [String]? {
@@ -40,21 +42,18 @@ struct Judge: Sendable {
 
     /// The counts a passing run of `site` must have: its reaching tests', its selected modules', or the baseline's.
     func expected(_ site: Mutation) -> TestCounts {
-        if let tests = selected(site) {
-            var passed = 0, skipped = 0
-            for test in tests {
-                passed += testCounts[test]?.passed ?? 0
-                skipped += testCounts[test]?.skipped ?? 0
-            }
-            return TestCounts(passed: passed, failed: 0, skipped: skipped)
-        }
+        if let tests = selected(site) { return Self.passing(tests.map { testCounts[$0] }) }
         guard let modules = covering[site.id] else { return baseline }
-        var passed = 0, skipped = 0
-        for module in modules {
-            passed += baselineByModule[module]?.passed ?? 0
-            skipped += baselineByModule[module]?.skipped ?? 0
-        }
-        return TestCounts(passed: passed, failed: 0, skipped: skipped)
+        return Self.passing(modules.map { baselineByModule[$0] })
+    }
+
+    /// The passed and skipped counts of `parts` added up, with no failure; an unknown part counts nothing.
+    static func passing(_ parts: [TestCounts?]) -> TestCounts {
+        TestCounts(
+            passed: parts.reduce(0) { $0 + ($1?.passed ?? 0) },
+            failed: 0,
+            skipped: parts.reduce(0) { $0 + ($1?.skipped ?? 0) }
+        )
     }
 
     struct Execution {
@@ -175,15 +174,27 @@ struct Judge: Sendable {
         ledger: inout Ledger
     ) async throws -> Execution {
         // Every run of a mutant uses the same tests: its reaching ones when selected, so counts compare.
+        let tests = only ?? selected(site)
+        let kind = MutantTimings.kind(tests: tests, modules: covering[site.id])
         let execution = try await execute(
             name: "mutant-\(site.id)\(suffix)",
             activeID: active ? site.id : "",
-            deadline: deadline,
+            deadline: timings.deadline(
+                kind: kind,
+                cap: deadline,
+                factor: options.timeoutFactor,
+                minimum: options.minimumTimeout,
+                alone: !suffix.isEmpty
+            ),
             failFast: active && options.failFast,
-            only: only ?? selected(site),
+            only: tests,
             modules: covering[site.id],
             alone: !suffix.isEmpty
         )
+        // A first run that ended on its own is a sample; a timeout or crash never lengthens the next deadline.
+        if suffix.isEmpty, execution.result.outcome == .passed || execution.result.outcome == .failed {
+            timings.record(execution.result.nanoseconds, kind: kind)
+        }
         ledger.evidence += execution.result.evidence
         ledger.nanoseconds += execution.result.nanoseconds
         return execution
