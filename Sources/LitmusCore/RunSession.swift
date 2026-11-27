@@ -1185,6 +1185,8 @@ final class RunSession<Executor: ProcessExecutor> {
                 phase = clock.now
             }
             var judge = current.judge
+            // Shared workers loaded the previous build: they end, and slots follow this batch's schema.
+            (judge.harness as? SharedProcessHarness<Executor>)?.prepare(batch: group)
             let deadline = current.deadline
             let workerCount = current.workerCount
             // Mutants only quarantined targets cover: no run can decide them, and the control never ran those targets.
@@ -1406,6 +1408,16 @@ final class RunSession<Executor: ProcessExecutor> {
             try installedGroup.restore()
             installed = nil
             try ArtifactCodec.write(artifact, path: checkpointPath)
+        }
+        if let shared = established?.judge.harness as? SharedProcessHarness<Executor> {
+            shared.shutdown()
+            let statistics = shared.statistics
+            artifact.notes.append(
+                "shared process: \(statistics.sharedKills) kill(s) decided in shared workers, "
+                    + "\(statistics.freshRuns) run(s) in fresh processes; \(statistics.workersStarted) worker(s) "
+                    + "started, \(statistics.workersRetired) replaced; \(statistics.processCached.count) "
+                    + "process-cached mutant(s) always run fresh"
+            )
         }
     }
 }

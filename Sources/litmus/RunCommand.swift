@@ -115,6 +115,11 @@ struct Run: AsyncParsableCommand {
     @Flag(help: "Run Xcode tests through xcodebuild only, not through Litmus's simulator helper for hostless bundles.")
     var noSimulatorHelper = false
     @Option(
+        help:
+            "on: decide kills of narrowed Swift Testing runs in a helper process that keeps the bundle loaded (macOS SwiftPM)."
+    )
+    var sharedProcess: String = "off"
+    @Option(
         name: .customLong("xcodebuild-argument"),
         parsing: .unconditionalSingleValue,
         help: "An extra xcodebuild argument for builds and test runs (repeatable), e.g. -skipPackagePluginValidation."
@@ -176,6 +181,8 @@ struct Run: AsyncParsableCommand {
         options.resume = resume
         options.reachFrom = reachFrom.map(runArtifactPath)
         options.simulatorHarness = !noSimulatorHelper
+        guard ["on", "off"].contains(sharedProcess) else { throw ValidationError("--shared-process takes on or off") }
+        options.sharedProcess = sharedProcess == "on"
         options.allTestTargets = build.allTestTargets
         options.includeUITests = build.includeUITests
         options.skipFailingTargets = skipFailingTargets || build.allTestTargets

@@ -321,7 +321,7 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             notes.append("direct test bundles unavailable (layout not understood); using swift test, one worker")
             return fallback
         }
-        return SwiftPMDirectHarness(
+        let direct = SwiftPMDirectHarness(
             executor: executor,
             bundles: bundles,
             toolchain: .init(
@@ -333,6 +333,20 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
             workspace: driver.executionDirectory(workspace: workspace),
             logs: logs,
             workers: options.jobs
+        )
+        guard options.sharedProcess else { return direct }
+        let helperPath = try await MacOSHelper.build(into: artifacts, executor: executor, logs: logs)
+        let scratch = artifacts + "/shared-process"
+        try FileManager.default.createDirectory(atPath: scratch, withIntermediateDirectories: true)
+        notes.append(
+            "shared process: kills of narrowed Swift Testing runs are decided in helper processes that keep the test "
+                + "bundle loaded; survivors and everything else run in fresh processes"
+        )
+        return SharedProcessHarness(
+            direct: direct,
+            helper: helperPath,
+            scratch: scratch,
+            token: options.environmentToken
         )
     }
 
