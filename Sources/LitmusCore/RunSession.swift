@@ -298,6 +298,12 @@ final class RunSession<Executor: ProcessExecutor> {
                 "scheme \(SynthesizedScheme.name) synthesized in the workspace for \(scheme.targets.count) test "
                     + "target(s): \(scheme.targets.joined(separator: ", "))"
             )
+            if !scheme.outside.isEmpty {
+                prepared.notes.append(
+                    "--all-test-targets left out workspace projects outside the copied root: "
+                        + scheme.outside.joined(separator: ", ")
+                )
+            }
         }
         try driver.validatePackage(workspace: snapshot.root)
         try XcodeTestConfiguration.preflight(driver: driver, workspace: snapshot.root)

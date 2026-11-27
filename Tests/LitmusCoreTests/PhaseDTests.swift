@@ -378,6 +378,35 @@ struct PhaseDTests {
 
     // MARK: - D4 Scheme synthesis
 
+    @Test func `a workspace's synthesized scheme tests the projects it lists, not the ones beside it`() throws {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/ExampleApp").path
+        let parent = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-d4ws-\(UUID().uuidString)")
+            .path
+        defer { try? FileManager.default.removeItem(atPath: parent) }
+        let workspace = parent + "/repo"
+        try FileManager.default.createDirectory(
+            atPath: workspace + "/Main.xcworkspace",
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.copyItem(atPath: fixture, toPath: workspace + "/App")
+        try FileManager.default.copyItem(atPath: fixture, toPath: workspace + "/Examples")
+        let xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Workspace version = "1.0">
+               <FileRef location = "group:App/ExampleApp.xcodeproj"></FileRef>
+               <FileRef location = "container:../Outside/Outside.xcodeproj"></FileRef>
+            </Workspace>
+            """
+        try Data(xml.utf8).write(to: URL(fileURLWithPath: workspace + "/Main.xcworkspace/contents.xcworkspacedata"))
+        let scheme = try SynthesizedScheme.install(workspace: workspace, container: "Main.xcworkspace")
+        #expect(scheme.targets == ["ExampleAppTests"])
+        #expect(scheme.outside == [SourcePath.canonical(parent) + "/Outside/Outside.xcodeproj"])
+        let text = try String(contentsOfFile: scheme.path, encoding: .utf8)
+        #expect(text.contains(#"ReferencedContainer = "container:App/ExampleApp.xcodeproj""#))
+        #expect(!text.contains("Examples/"))
+    }
+
     @Test func `the synthesized scheme tests every unit-test target and lives only in the workspace copy`() throws {
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Fixtures/ExampleApp").path
@@ -386,7 +415,7 @@ struct PhaseDTests {
         defer { try? FileManager.default.removeItem(atPath: workspace) }
         try FileManager.default.copyItem(atPath: fixture, toPath: workspace)
         try? FileManager.default.removeItem(atPath: workspace + "/ExampleApp.xcodeproj/xcshareddata")
-        let (path, targets) = try SynthesizedScheme.install(workspace: workspace, container: "ExampleApp.xcodeproj")
+        let (path, targets, _) = try SynthesizedScheme.install(workspace: workspace, container: "ExampleApp.xcodeproj")
         #expect(targets == ["ExampleAppTests"])
         #expect(path.hasSuffix("/ExampleApp.xcodeproj/xcshareddata/xcschemes/__LitmusAllUnitTests.xcscheme"))
         let schemes = XcodeSchemeReader.schemes(in: SourcePath.canonical(workspace + "/ExampleApp.xcodeproj"))
