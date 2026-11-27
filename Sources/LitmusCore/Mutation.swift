@@ -55,11 +55,15 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
     case swapAsyncOrder = "swap-async-order"
     case replaceCollectionTransform = "replace-collection-transform"
     case swapFirstLast = "swap-first-last"
+    case negateDisabled = "negate-disabled"
+    case removePresentation = "remove-presentation"
+    case removeViewAction = "remove-view-action"
 
     /// The kind of edit it makes, which decides how its schema is written.
     public var shape: SchemaShape {
         switch self {
-        case .removeCall, .removeViewElement, .emptyBody, .emptyClosureBody, .removeDefer, .removeCleanupCall:
+        case .removeCall, .removeViewElement, .emptyBody, .emptyClosureBody, .removeDefer, .removeCleanupCall,
+            .removeViewAction:
             .statement
         case .removeSwitchCase, .skipLoop, .swapBreakContinue, .weakenCapture, .swapAsyncOrder: .clause
         default: .expression
@@ -76,7 +80,7 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
             .returnBoundary, .returnConstant, .emptyBody, .emptyClosureBody, .removeSwitchCase,
             .nullifyOptionalBinding, .negateIsEmpty, .skipLoop, .swapBreakContinue, .replaceBitwise,
             .removeUnaryMinus, .removeDefer, .removeCleanupCall, .weakenCapture, .swapAsyncOrder,
-            .replaceCollectionTransform, .swapFirstLast:
+            .replaceCollectionTransform, .swapFirstLast, .negateDisabled, .removePresentation, .removeViewAction:
             .experimental
         }
     }
@@ -85,7 +89,7 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
     /// `--operators` so they never dilute a unit-test suite's logic mutation score.
     public var domain: OperatorDomain {
         switch self {
-        case .removeViewElement: .ui
+        case .removeViewElement, .negateDisabled, .removePresentation, .removeViewAction: .ui
         default: .logic
         }
     }
@@ -101,7 +105,7 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
             .returnConstant, .emptyBody, .emptyClosureBody, .removeSwitchCase,
             .nullifyOptionalBinding, .negateIsEmpty, .skipLoop, .swapBreakContinue, .replaceBitwise,
             .removeUnaryMinus, .removeDefer, .removeCleanupCall, .weakenCapture, .swapAsyncOrder,
-            .replaceCollectionTransform, .swapFirstLast:
+            .replaceCollectionTransform, .swapFirstLast, .negateDisabled, .removePresentation, .removeViewAction:
             false
         }
     }
@@ -144,6 +148,11 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
         case .replaceCollectionTransform:
             "remove collection transforms (.sorted() to Array(x), .filter(...) to x/Array(x), Array(x.reversed()) to Array(x))"
         case .swapFirstLast: "swap .first and .last on bidirectional collections (Array, ArraySlice, String)"
+        case .negateDisabled: "negate a SwiftUI .disabled(...) predicate (UI domain)"
+        case .removePresentation:
+            "suppress SwiftUI modal/navigation presentations (.sheet, .fullScreenCover, .popover, .alert, .confirmationDialog, .navigationDestination)"
+        case .removeViewAction:
+            "skip the closure body of SwiftUI lifecycle/action modifiers (.onAppear, .onDisappear, .task, .refreshable, .onSubmit, .onChange)"
         }
     }
 
@@ -173,6 +182,11 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
         .removeDefer, .removeCleanupCall, .weakenCapture, .swapAsyncOrder,
     ]
 
+    /// The SwiftUI UI-domain operator bundle (`--ui-operators`).
+    public static let uiOperators: Set<MutationOperator> = [
+        .removeViewElement, .negateDisabled, .removePresentation, .removeViewAction,
+    ]
+
     /// What a run mutates unless told otherwise.
     public static let defaults = operators(upTo: .stable)
 
@@ -186,6 +200,10 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
             }
             if name == "fault" {
                 result.formUnion(faultOperators)
+                continue
+            }
+            if name == "ui" {
+                result.formUnion(uiOperators)
                 continue
             }
             guard let found = MutationOperator(rawValue: name) else {

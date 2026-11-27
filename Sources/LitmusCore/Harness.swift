@@ -794,13 +794,36 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
         // the input is owned bounded Data, and no caller-provided pointer is dereferenced or retained.
         let plist = try unsafe PropertyListSerialization.propertyList(from: Data(bytes), options: [], format: nil)
         let injected = subjectEnvironment(request)
+        let (patched, patchedTargets) = try Self.patchTestRunPlist(plist, injected: injected, products: products)
+        guard patchedTargets > 0 else {
+            throw LitmusFailure(
+                "zero supported test targets in \(products)/\(file); scheme \(driver.scheme ?? "unknown"). Check the selected test plan and containerPath; for nested packages use --package-path."
+            )
+        }
+        let data = try PropertyListSerialization.data(fromPropertyList: patched, format: .xml, options: 0)
+        try data.write(to: URL(fileURLWithPath: output), options: .atomic)
+        return output
+    }
+
+    /// Rewrites `EnvironmentVariables`, `TestingEnvironmentVariables`, and (for UI test bundles)
+    /// `UITargetAppEnvironmentVariables` so XCUITest launches `XCUIApplication` with Litmus's active mutant and
+    /// coverage directory automatically, with zero app or UI test setup.
+    static func patchTestRunPlist(
+        _ plist: Any,
+        injected: [String: String],
+        products: String
+    ) throws -> (Any, Int) {
         var patchedTargets = 0
         func patch(_ value: Any, depth: Int = 0) throws -> Any {
             guard depth <= 64 else { throw LitmusFailure("xctestrun nesting exceeds 64") }
             if let dictionary = value as? [String: Any] {
                 var updated = try dictionary.mapValues { try patch($0, depth: depth + 1) }
                 if dictionary["TestBundlePath"] != nil {
-                    for key in ["EnvironmentVariables", "TestingEnvironmentVariables"] {
+                    var keys = ["EnvironmentVariables", "TestingEnvironmentVariables"]
+                    if (dictionary["IsUITestBundle"] as? Bool) == true || dictionary["UITargetAppPath"] != nil {
+                        keys.append("UITargetAppEnvironmentVariables")
+                    }
+                    for key in keys {
                         var environment = updated[key] as? [String: String] ?? [:]
                         for (name, value) in injected where name != "DEVELOPER_DIR" { environment[name] = value }
                         updated[key] = environment
@@ -813,14 +836,6 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
             if let string = value as? String { return string.replacingOccurrences(of: "__TESTROOT__", with: products) }
             return value
         }
-        let patched = try patch(plist)
-        guard patchedTargets > 0 else {
-            throw LitmusFailure(
-                "zero supported test targets in \(products)/\(file); scheme \(driver.scheme ?? "unknown"). Check the selected test plan and containerPath; for nested packages use --package-path."
-            )
-        }
-        let data = try PropertyListSerialization.data(fromPropertyList: patched, format: .xml, options: 0)
-        try data.write(to: URL(fileURLWithPath: output), options: .atomic)
-        return output
+        return (try patch(plist), patchedTargets)
     }
 }

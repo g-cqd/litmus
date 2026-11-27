@@ -43,10 +43,17 @@ struct SubjectOptions: ParsableArguments {
             "Include the fault-injection operators (remove-defer, remove-cleanup-call, weaken-capture, swap-async-order)."
     )
     var faultOperators = false
+    @Flag(
+        help:
+            "Include the SwiftUI UI-domain operators (remove-view-element, negate-disabled, remove-presentation, remove-view-action)."
+    )
+    var uiOperators = false
     /// The operators this run or plan mutates; `--operators` names them exactly, a tier includes every tier before it.
     func operatorSet() throws -> Set<MutationOperator> {
         do {
-            let extra = faultOperators ? MutationOperator.faultOperators : []
+            var extra: Set<MutationOperator> = []
+            if faultOperators { extra.formUnion(MutationOperator.faultOperators) }
+            if uiOperators { extra.formUnion(MutationOperator.uiOperators) }
             if let operators {
                 guard operatorTier == nil else {
                     throw ValidationError("--operators and --operator-tier are alternatives; give one")
