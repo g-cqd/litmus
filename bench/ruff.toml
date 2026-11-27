@@ -1,0 +1,6 @@
+# bench/run.py style: ruff format bench && ruff check bench
+line-length = 120
+target-version = "py310"
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP"]

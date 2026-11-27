@@ -1,0 +1,87 @@
+{
+  "description": "Mutants of the Transit subject whose right verdict is known. A probe matches a tool's mutant on the same file and line (found by the anchor text) whose replacement contains one of `replacements` (tools spell the same mutation differently: Litmus swaps a ternary by negating its condition). `detected` means killed, timed out or crashed; `undetected` means survived or without coverage.",
+  "probes": [
+    {
+      "id": "endless-loop",
+      "file": "Modules/TripKit/Sources/TripKit/Delays.swift",
+      "anchor": "while remaining > 0 && remaining < 10_000",
+      "replacements": [
+        "||"
+      ],
+      "expect": "detected",
+      "why": "`||` never ends the loop: the test must time out, not hang the tool"
+    },
+    {
+      "id": "index-trap",
+      "file": "Modules/TripKit/Sources/TripKit/Journey.swift",
+      "anchor": "let previous = legs[index - 1]",
+      "replacements": [
+        "index + 1"
+      ],
+      "expect": "detected",
+      "why": "reads past the end of `legs` on the last connection: a trap"
+    },
+    {
+      "id": "xctest-only-kill",
+      "file": "Modules/TripKit/Sources/TripKit/Delays.swift",
+      "anchor": "return minutes < 5 ?",
+      "replacements": [
+        "<="
+      ],
+      "expect": "detected",
+      "why": "only the XCTest case `testLabels` checks the 5-minute boundary"
+    },
+    {
+      "id": "static-let",
+      "file": "Modules/WalletKit/Sources/WalletKit/Wallet.swift",
+      "anchor": "public static let maximumBalance",
+      "replacements": [
+        "20_000 : 50_000",
+        "(20_000) : (50_000)",
+        "!(isBusinessAccount(level: 1))"
+      ],
+      "expect": "detected",
+      "why": "a `static let` is evaluated once per process: the mutant must be active before its first read"
+    },
+    {
+      "id": "peak-surcharge",
+      "file": "Modules/FareKit/Sources/FareKit/Fare.swift",
+      "anchor": "if peak && rider != .senior",
+      "replacements": [
+        "||"
+      ],
+      "expect": "detected",
+      "why": "off-peak fares would carry the surcharge; FareTests checks them"
+    },
+    {
+      "id": "equivalent-upper-clamp",
+      "file": "Modules/WalletKit/Sources/WalletKit/Wallet.swift",
+      "anchor": "if bounded > 100 { return 100 }",
+      "replacements": [
+        ">="
+      ],
+      "expect": "undetected",
+      "why": "equivalent: at 100 both branches return 100"
+    },
+    {
+      "id": "equivalent-lower-clamp",
+      "file": "Modules/WalletKit/Sources/WalletKit/Wallet.swift",
+      "anchor": "if bounded < 0 { return 0 }",
+      "replacements": [
+        "<="
+      ],
+      "expect": "undetected",
+      "why": "equivalent: at 0 both branches return 0"
+    },
+    {
+      "id": "untested-boundary",
+      "file": "Modules/FareKit/Sources/FareKit/Fare.swift",
+      "anchor": "if rider == .child && age < 6",
+      "replacements": [
+        "<="
+      ],
+      "expect": "undetected",
+      "why": "no test rides a 6-year-old: a kill here is a false kill"
+    }
+  ]
+}
