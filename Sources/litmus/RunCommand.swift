@@ -154,6 +154,10 @@ struct Run: AsyncParsableCommand {
 
     @Option(help: "Run shard k of n (k/n): whole module units; put the shards together with `litmus merge`.")
     var shard: String?
+    @Option(
+        help: "How --shard divides the plan: module (whole module units) or mutant (single mutants, finest balance)."
+    )
+    var shardStrategy: String = "module"
 
     @Flag(help: "Run Xcode tests through xcodebuild only, not through Litmus's simulator helper for hostless bundles.")
     var noSimulatorHelper = false

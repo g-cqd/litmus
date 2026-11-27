@@ -60,6 +60,10 @@ extension Run {
         do { options.shard = try shard.map(ShardSelection.init(parsing:)) } catch {
             throw ValidationError("\(error)")
         }
+        guard let strategy = ShardStrategy(rawValue: shardStrategy) else {
+            throw ValidationError("shard-strategy must be module or mutant")
+        }
+        options.shard?.strategy = strategy
         guard let mode = ReuseContext.Mode(rawValue: reuse) else {
             throw ValidationError("reuse must be closure or declaration")
         }

@@ -1,11 +1,20 @@
 internal import Foundation
 
-/// One shard of a run (`--shard k/n`): the mutants of whole modules, so each shard rebuilds only what it
-/// mutates, and `litmus merge` puts the shards back together.
+/// How `--shard` divides a plan (`--shard-strategy`).
+public enum ShardStrategy: String, Sendable, CaseIterable {
+    /// Whole module units: each shard changes fewer modules, so its schema builds touch less.
+    case module
+    /// Single mutants: the finest balance, for plans with few or uneven modules.
+    case mutant
+}
+
+/// One shard of a run (`--shard k/n`): the mutants of whole modules (or single mutants, `--shard-strategy mutant`),
+/// and `litmus merge` puts the shards back together.
 public struct ShardSelection: Sendable, Equatable {
     /// 1-based.
     public let index: Int
     public let count: Int
+    public var strategy = ShardStrategy.module
 
     public init(index: Int, count: Int) throws {
         guard (1...1024).contains(count), (1...count).contains(index) else {
@@ -29,7 +38,7 @@ public struct ShardSelection: Sendable, Equatable {
 public struct ShardRecord: Codable, Sendable, Equatable {
     public let index: Int
     public let count: Int
-    /// The module units this shard holds.
+    /// The units this shard holds: module directories, or mutant ids with `--shard-strategy mutant`.
     public let units: [String]
     /// The whole plan: its mutant count and the SHA-256 of its sorted ids, the same in every shard.
     public let totalMutants: Int
@@ -49,23 +58,33 @@ enum Sharding {
         return parts.dropLast().joined(separator: "/")
     }
 
-    /// Historical cost per module unit (milliseconds, floor 100 ms per unit) from a prior run artifact.
-    static func unitCosts(from prior: RunArtifact?) -> [String: Int] {
+    /// The unit `mutation` belongs to under `strategy`.
+    static func unit(of mutation: Mutation, _ strategy: ShardStrategy) -> String {
+        strategy == .mutant ? mutation.id : unit(of: mutation.path)
+    }
+
+    /// Historical cost per unit (milliseconds, floor 100 ms per unit) from a prior run artifact.
+    static func unitCosts(from prior: RunArtifact?, _ strategy: ShardStrategy = .module) -> [String: Int] {
         guard let prior, !prior.results.isEmpty else { return [:] }
         var nanosByUnit: [String: Int64] = [:]
         for result in prior.results {
-            nanosByUnit[unit(of: result.mutation.path), default: 0] += max(result.nanoseconds, 100_000_000)
+            nanosByUnit[unit(of: result.mutation, strategy), default: 0] += max(result.nanoseconds, 100_000_000)
         }
         return nanosByUnit.mapValues { max(100, Int($0 / 1_000_000)) }
     }
 
     /// The units of each shard: heaviest unit first (historical runtime when `unitCosts` is non-empty, else mutant
     /// count), each assigned to the least-loaded shard (ties: lowest index). Deterministic for a given plan + weights.
-    static func partition(_ mutations: [Mutation], count: Int, unitCosts: [String: Int] = [:]) -> [[String]] {
-        let grouped = Dictionary(grouping: mutations, by: { unit(of: $0.path) })
+    static func partition(
+        _ mutations: [Mutation],
+        count: Int,
+        unitCosts: [String: Int] = [:],
+        strategy: ShardStrategy = .module
+    ) -> [[String]] {
+        let grouped = Dictionary(grouping: mutations, by: { unit(of: $0, strategy) })
         let weights: [String: Int] = grouped.mapValues { items in
             if unitCosts.isEmpty { return items.count }
-            return unitCosts[unit(of: items[0].path)] ?? (items.count * 1000)
+            return unitCosts[unit(of: items[0], strategy)] ?? (items.count * 1000)
         }
         var shards = Array(repeating: (load: 0, units: [String]()), count: count)
         for (unit, weight) in weights.sorted(by: { ($1.value, $0.key) < ($0.value, $1.key) }) {
@@ -82,13 +101,22 @@ enum Sharding {
         _ shard: ShardSelection,
         prior: RunArtifact? = nil
     ) -> (MutationPlan, ShardRecord) {
-        let units = partition(plan.mutations, count: shard.count, unitCosts: unitCosts(from: prior))[shard.index - 1]
+        let strategy = shard.strategy
+        let units = partition(
+            plan.mutations,
+            count: shard.count,
+            unitCosts: unitCosts(from: prior, strategy),
+            strategy: strategy
+        )[shard.index - 1]
         let keep = Set(units)
+        // Suppressed sites never run: by module they follow their unit; by mutant, the first shard keeps them all.
         var selected = MutationPlan(
             root: plan.root,
             analyzedFiles: plan.analyzedFiles,
-            mutations: plan.mutations.filter { keep.contains(unit(of: $0.path)) },
-            suppressed: plan.suppressed.filter { keep.contains(unit(of: $0.path)) },
+            mutations: plan.mutations.filter { keep.contains(unit(of: $0, strategy)) },
+            suppressed: plan.suppressed.filter {
+                strategy == .mutant ? shard.index == 1 : keep.contains(unit(of: $0.path))
+            },
             notes: plan.notes
         )
         selected.scope = plan.scope.map { scope in

@@ -79,7 +79,7 @@ Keep baselines separated by project and update them only from trusted runs. A ba
 
 `--budget SECONDS` stops starting new work after the budget, rather than killing work already running. `--max-mutants N` limits mutations tested. Both report untested mutations explicitly.
 
-`--shard k/n` assigns whole-module units to workers (balanced by historical runtime when `--reach-from` supplies a prior run, else by mutant count). Combine compatible shard results with `litmus merge`; incompatible runs are rejected. `litmus analyze --format github` emits GitHub Actions `::warning` and `::error` workflow annotations directly on pull request diffs.
+`--shard k/n` assigns whole-module units to workers (balanced by historical runtime when `--reach-from` supplies a prior run, else by mutant count); `--shard-strategy mutant` assigns single mutants instead, for plans whose modules are few or uneven. Each shard still builds the whole project: which test modules a mutant needs is known only after the baseline. Combine compatible shard results with `litmus merge`; incompatible runs are rejected. `litmus analyze --format github` emits GitHub Actions `::warning` and `::error` workflow annotations directly on pull request diffs. `--format github-summary` writes a step summary for `$GITHUB_STEP_SUMMARY`: logic and UI scores, one collapsible diff per survivor and uncovered mutant, and with `--compare <earlier run>` the change in points and the mutants that run detected and this one does not.
 
 ## Housekeeping
 

@@ -13,10 +13,14 @@ struct Analyze: AsyncParsableCommand {
     @Option(help: "Run artifact (.json or .pb). Missing data never means clean.") var results: String
     @Option(
         help:
-            "xcode, json, sarif, markdown (job summary), github (workflow annotations), stryker (mutation-testing-report-schema 2) or agent (one self-contained record per gap, for coding agents)."
+            "xcode, json, sarif, markdown (job summary), github (workflow annotations), github-summary (step summary with diffs), stryker (mutation-testing-report-schema 2) or agent (one self-contained record per gap, for coding agents)."
     )
     var format: String = "xcode"
     @Option(help: "With --format agent: the gaps of logic, ui or all mutants.") var domain: String = "all"
+    @Option(
+        help: "With --format github-summary: an earlier run artifact (.json or .pb) to compare scores and verdicts."
+    )
+    var compare: String?
     @Option(help: "Print paths relative to this root (must be the current subject root in this version).")
     var relativeTo: String?
     @Option(help: "Scope the report to a source file (repeatable), not test execution.") var only: [String] = []
@@ -30,8 +34,11 @@ struct Analyze: AsyncParsableCommand {
     @Option(help: "new-survivors: fail on survivors and uncovered mutants the --baseline (base branch) does not hold.")
     var gate: String?
     mutating func run() async throws {
-        guard ["xcode", "json", "sarif", "markdown", "github", "stryker", "agent"].contains(format) else {
-            throw ValidationError("format must be xcode, json, sarif, markdown, github, stryker or agent")
+        guard ["xcode", "json", "sarif", "markdown", "github", "github-summary", "stryker", "agent"].contains(format)
+        else {
+            throw ValidationError(
+                "format must be xcode, json, sarif, markdown, github, github-summary, stryker or agent"
+            )
         }
         guard let agentDomain = AgentReport.Domain(rawValue: domain) else {
             throw ValidationError("domain must be logic, ui or all")
@@ -89,6 +96,9 @@ struct Analyze: AsyncParsableCommand {
             switch format {
             case "markdown": print(MarkdownReport.render(report, artifact: artifact), terminator: "")
             case "github": print(GitHubReport.render(report, root: root), terminator: "")
+            case "github-summary":
+                let previous = try compare.map { try ArtifactCodec.read(RunArtifact.self, path: $0) }
+                print(GitHubSummaryReport.render(artifact, previous: previous), terminator: "")
             case "stryker": print(try StrykerReport.render(artifact, root: root))
             case "agent":
                 let document = AgentReport.make(artifact, root: root, domain: agentDomain)
