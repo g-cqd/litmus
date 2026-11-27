@@ -58,6 +58,8 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
     case negateDisabled = "negate-disabled"
     case removePresentation = "remove-presentation"
     case removeViewAction = "remove-view-action"
+    case neutralizeViewModifier = "neutralize-view-modifier"
+    case removeAccessibilityMetadata = "remove-accessibility-metadata"
 
     /// The kind of edit it makes, which decides how its schema is written.
     public var shape: SchemaShape {
@@ -80,7 +82,8 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
             .returnBoundary, .returnConstant, .emptyBody, .emptyClosureBody, .removeSwitchCase,
             .nullifyOptionalBinding, .negateIsEmpty, .skipLoop, .swapBreakContinue, .replaceBitwise,
             .removeUnaryMinus, .removeDefer, .removeCleanupCall, .weakenCapture, .swapAsyncOrder,
-            .replaceCollectionTransform, .swapFirstLast, .negateDisabled, .removePresentation, .removeViewAction:
+            .replaceCollectionTransform, .swapFirstLast, .negateDisabled, .removePresentation, .removeViewAction,
+            .neutralizeViewModifier, .removeAccessibilityMetadata:
             .experimental
         }
     }
@@ -89,7 +92,9 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
     /// `--operators` so they never dilute a unit-test suite's logic mutation score.
     public var domain: OperatorDomain {
         switch self {
-        case .removeViewElement, .negateDisabled, .removePresentation, .removeViewAction: .ui
+        case .removeViewElement, .negateDisabled, .removePresentation, .removeViewAction, .neutralizeViewModifier,
+            .removeAccessibilityMetadata:
+            .ui
         default: .logic
         }
     }
@@ -105,7 +110,8 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
             .returnConstant, .emptyBody, .emptyClosureBody, .removeSwitchCase,
             .nullifyOptionalBinding, .negateIsEmpty, .skipLoop, .swapBreakContinue, .replaceBitwise,
             .removeUnaryMinus, .removeDefer, .removeCleanupCall, .weakenCapture, .swapAsyncOrder,
-            .replaceCollectionTransform, .swapFirstLast, .negateDisabled, .removePresentation, .removeViewAction:
+            .replaceCollectionTransform, .swapFirstLast, .negateDisabled, .removePresentation, .removeViewAction,
+            .neutralizeViewModifier, .removeAccessibilityMetadata:
             false
         }
     }
@@ -152,7 +158,11 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
         case .removePresentation:
             "suppress SwiftUI modal/navigation presentations (.sheet, .fullScreenCover, .popover, .alert, .confirmationDialog, .navigationDestination)"
         case .removeViewAction:
-            "skip the closure body of SwiftUI lifecycle/action modifiers (.onAppear, .onDisappear, .task, .refreshable, .onSubmit, .onChange)"
+            "skip a SwiftUI action: Button actions and .onAppear, .onDisappear, .task, .refreshable, .onSubmit, .onChange, .onTapGesture, .onLongPressGesture"
+        case .neutralizeViewModifier:
+            "make a SwiftUI view invisible or untappable (.opacity(x) to 0, .allowsHitTesting(x) to !(x))"
+        case .removeAccessibilityMetadata:
+            "blank literal .accessibilityLabel/.accessibilityHint and negate .accessibilityHidden (opt-in, UI domain)"
         }
     }
 
@@ -182,9 +192,9 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
         .removeDefer, .removeCleanupCall, .weakenCapture, .swapAsyncOrder,
     ]
 
-    /// The SwiftUI UI-domain operator bundle (`--ui-operators`).
+    /// The SwiftUI UI-domain operator bundle (`--ui-operators`); `remove-accessibility-metadata` is named explicitly.
     public static let uiOperators: Set<MutationOperator> = [
-        .removeViewElement, .negateDisabled, .removePresentation, .removeViewAction,
+        .removeViewElement, .negateDisabled, .removePresentation, .removeViewAction, .neutralizeViewModifier,
     ]
 
     /// What a run mutates unless told otherwise.

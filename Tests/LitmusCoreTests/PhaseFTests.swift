@@ -66,7 +66,8 @@ import Testing
             }
         )
         #expect(sites.contains { $0.operatorID == .removePresentation && $0.original.contains("Route") })
-        #expect(sites.filter { $0.operatorID == .removeViewAction }.count == 2)
+        // `.onAppear`, `.task`, and the `Button("Pay")` action.
+        #expect(sites.filter { $0.operatorID == .removeViewAction }.count == 3)
     }
 
     @Test func `xctestrun patching injects UITargetAppEnvironmentVariables on UI test bundles for zero-setup XCUITest`()
