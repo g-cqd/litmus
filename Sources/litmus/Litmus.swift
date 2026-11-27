@@ -10,7 +10,7 @@ import ReportSupport
         version: LitmusVersion.current,
         subcommands: [
             Plan.self, Run.self, Analyze.self, Census.self, Restore.self, Merge.self, Check.self, Accept.self,
-            AgentGuideCommand.self, Clean.self, Unaccept.self,
+            AgentGuideCommand.self, Clean.self, Unaccept.self, Store.self,
         ]
     )
 }

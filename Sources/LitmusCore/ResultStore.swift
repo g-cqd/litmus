@@ -241,17 +241,17 @@ public final class ResultStore: Sendable {
     /// Problems met reading records (each a miss).
     public var notes: [String] { problems.withLock { $0 } }
 
-    private func path(_ key: String) -> String {
+    func recordPath(_ key: String) -> String {
         "\(directory)/v1/records/\(key.prefix(2))/\(key).rec"
     }
 
     /// The verified result stored under `key` for `mutation`, or nil.
     public func lookup(_ key: String, mutation: Mutation) -> ReusedResult? {
-        let file = path(key)
+        let file = recordPath(key)
         guard FileManager.default.fileExists(atPath: file) else { return nil }
         do {
             let bytes = try BoundedFileReader.read(path: file, cap: 4 << 20)
-            let (record, storedKey, runID) = try decode(bytes)
+            let (record, storedKey, runID) = try decodeRecord(bytes)
             guard storedKey == key, let result = record.result, result.mutation.id == mutation.id,
                 result.mutation.path == mutation.path, result.mutation.original == mutation.original,
                 result.mutation.replacement == mutation.replacement, result.verdict.isResolved
@@ -276,7 +276,7 @@ public final class ResultStore: Sendable {
     public func put(_ key: String, _ result: MutationResult, runID: String) throws {
         guard !readOnly, result.verdict.isResolved, result.reusedFrom == nil else { return }
         let record = try ProtobufEncoder().encodeToBytes(JournalRecord(result))
-        let file = path(key)
+        let file = recordPath(key)
         try FileManager.default.createDirectory(
             atPath: (file as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
@@ -285,30 +285,37 @@ public final class ResultStore: Sendable {
         try AtomicFile.replace(at: file, with: encode(record, key: key, runID: runID), durability: .none)
     }
 
-    /// Removes the least recently used records until the store holds at most 90 % of its limit.
-    /// - Returns: the records removed.
-    @discardableResult
-    public func evict() -> Int {
-        guard !readOnly else { return 0 }
+    func recordFiles() -> [(url: URL, date: Date, size: Int)] {
         let root = URL(fileURLWithPath: directory + "/v1/records")
-        let keys: [URLResourceKey] = [.contentModificationDateKey, .totalFileAllocatedSizeKey, .isRegularFileKey]
+        let keys: [URLResourceKey] = [
+            .contentModificationDateKey, .totalFileAllocatedSizeKey, .fileSizeKey, .isRegularFileKey,
+        ]
         guard
             let walk = FileManager.default.enumerator(
                 at: root,
                 includingPropertiesForKeys: keys,
                 options: [.skipsHiddenFiles]
             )
-        else { return 0 }
-        var files: [(url: URL, date: Date, size: Int)] = []
-        var total = 0
+        else { return [] }
+        var found: [(url: URL, date: Date, size: Int)] = []
         while let url = walk.nextObject() as? URL {
-            guard url.pathExtension == "rec", let values = try? url.resourceValues(forKeys: Set(keys)),
+            guard url.pathExtension == "rec",
+                let values = try? url.resourceValues(forKeys: Set(keys)),
                 values.isRegularFile == true
             else { continue }
-            let size = values.totalFileAllocatedSize ?? 0
-            total += size
-            files.append((url, values.contentModificationDate ?? .distantPast, size))
+            let logical = values.fileSize ?? 0
+            let size = max(values.totalFileAllocatedSize ?? logical, logical)
+            found.append((url, values.contentModificationDate ?? .distantPast, size))
         }
+        return found
+    }
+
+    /// Removes the least recently used records until the store holds at most 90 % of its limit.
+    @discardableResult
+    public func evict() -> Int {
+        guard !readOnly else { return 0 }
+        let files = recordFiles()
+        var total = files.reduce(0) { $0 + $1.size }
         guard total > limitBytes else { return 0 }
         var removed = 0
         for file in files.sorted(by: { $0.date < $1.date }) where total > limitBytes * 9 / 10 {
@@ -344,7 +351,7 @@ public final class ResultStore: Sendable {
         return writer.bytes
     }
 
-    private func decode(_ bytes: [UInt8]) throws -> (JournalRecord, String, String) {
+    func decodeRecord(_ bytes: [UInt8]) throws -> (JournalRecord, String, String) {
         let fields = try WireReader.withReader(over: bytes, limits: WireLimits(maxDepth: 8, maxMessageBytes: 4 << 20)) {
             (reader: inout WireReader) throws(WireError) -> (UInt64?, [UInt8]?, String?, String?, String?) in
             var version: UInt64?, record: [UInt8]?, key: String?, run: String?, tag: String?

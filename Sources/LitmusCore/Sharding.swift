@@ -49,22 +49,40 @@ enum Sharding {
         return parts.dropLast().joined(separator: "/")
     }
 
-    /// The units of each shard: largest unit first, each to the shard with the fewest mutants (ties: lowest index).
-    /// Deterministic for a given plan.
-    static func partition(_ mutations: [Mutation], count: Int) -> [[String]] {
-        let sizes = Dictionary(grouping: mutations, by: { unit(of: $0.path) }).mapValues(\.count)
+    /// Historical cost per module unit (milliseconds, floor 100 ms per unit) from a prior run artifact.
+    static func unitCosts(from prior: RunArtifact?) -> [String: Int] {
+        guard let prior, !prior.results.isEmpty else { return [:] }
+        var nanosByUnit: [String: Int64] = [:]
+        for result in prior.results {
+            nanosByUnit[unit(of: result.mutation.path), default: 0] += max(result.nanoseconds, 100_000_000)
+        }
+        return nanosByUnit.mapValues { max(100, Int($0 / 1_000_000)) }
+    }
+
+    /// The units of each shard: heaviest unit first (historical runtime when `unitCosts` is non-empty, else mutant
+    /// count), each assigned to the least-loaded shard (ties: lowest index). Deterministic for a given plan + weights.
+    static func partition(_ mutations: [Mutation], count: Int, unitCosts: [String: Int] = [:]) -> [[String]] {
+        let grouped = Dictionary(grouping: mutations, by: { unit(of: $0.path) })
+        let weights: [String: Int] = grouped.mapValues { items in
+            if unitCosts.isEmpty { return items.count }
+            return unitCosts[unit(of: items[0].path)] ?? (items.count * 1000)
+        }
         var shards = Array(repeating: (load: 0, units: [String]()), count: count)
-        for (unit, size) in sizes.sorted(by: { ($1.value, $0.key) < ($0.value, $1.key) }) {
+        for (unit, weight) in weights.sorted(by: { ($1.value, $0.key) < ($0.value, $1.key) }) {
             let target = shards.indices.min { (shards[$0].load, $0) < (shards[$1].load, $1) } ?? 0
-            shards[target].load += size
+            shards[target].load += weight
             shards[target].units.append(unit)
         }
         return shards.map { $0.units.sorted() }
     }
 
     /// The plan limited to `shard`'s units, and its record.
-    static func select(_ plan: MutationPlan, _ shard: ShardSelection) -> (MutationPlan, ShardRecord) {
-        let units = partition(plan.mutations, count: shard.count)[shard.index - 1]
+    static func select(
+        _ plan: MutationPlan,
+        _ shard: ShardSelection,
+        prior: RunArtifact? = nil
+    ) -> (MutationPlan, ShardRecord) {
+        let units = partition(plan.mutations, count: shard.count, unitCosts: unitCosts(from: prior))[shard.index - 1]
         let keep = Set(units)
         var selected = MutationPlan(
             root: plan.root,

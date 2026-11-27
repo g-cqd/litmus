@@ -360,9 +360,10 @@ final class RunSession<Executor: ProcessExecutor> {
         guard !plan.mutations.isEmpty else {
             throw LitmusFailure("no mutable production sites; inspect plan exclusions")
         }
+        nightly = try options.reachFrom.map { try ArtifactCodec.read(RunArtifact.self, path: $0) }
         var shardRecord: ShardRecord?
         if let shard = options.shard {
-            (plan, shardRecord) = Sharding.select(plan, shard)
+            (plan, shardRecord) = Sharding.select(plan, shard, prior: nightly)
         }
         guard Set(plan.mutations.map(\.id)).count == plan.mutations.count else {
             throw LitmusFailure("mutation ID collision")
@@ -455,7 +456,6 @@ final class RunSession<Executor: ProcessExecutor> {
             )
         }
         let previous = try options.resume.map { try Runner.previousResults(runDirectory: $0) } ?? [:]
-        nightly = try options.reachFrom.map { try ArtifactCodec.read(RunArtifact.self, path: $0) }
         let checkpointPath = output + "/run.json"
         try ArtifactCodec.write(artifact, path: checkpointPath)
         sink = Sink(

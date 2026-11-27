@@ -13,7 +13,7 @@ struct Analyze: AsyncParsableCommand {
     @Option(help: "Run artifact (.json or .pb). Missing data never means clean.") var results: String
     @Option(
         help:
-            "xcode, json, sarif, markdown (job summary), stryker (mutation-testing-report-schema 2) or agent (one self-contained record per gap, for coding agents)."
+            "xcode, json, sarif, markdown (job summary), github (workflow annotations), stryker (mutation-testing-report-schema 2) or agent (one self-contained record per gap, for coding agents)."
     )
     var format: String = "xcode"
     @Option(help: "With --format agent: the gaps of logic, ui or all mutants.") var domain: String = "all"
@@ -30,8 +30,8 @@ struct Analyze: AsyncParsableCommand {
     @Option(help: "new-survivors: fail on survivors and uncovered mutants the --baseline (base branch) does not hold.")
     var gate: String?
     mutating func run() async throws {
-        guard ["xcode", "json", "sarif", "markdown", "stryker", "agent"].contains(format) else {
-            throw ValidationError("format must be xcode, json, sarif, markdown, stryker or agent")
+        guard ["xcode", "json", "sarif", "markdown", "github", "stryker", "agent"].contains(format) else {
+            throw ValidationError("format must be xcode, json, sarif, markdown, github, stryker or agent")
         }
         guard let agentDomain = AgentReport.Domain(rawValue: domain) else {
             throw ValidationError("domain must be logic, ui or all")
@@ -88,6 +88,7 @@ struct Analyze: AsyncParsableCommand {
         do {
             switch format {
             case "markdown": print(MarkdownReport.render(report, artifact: artifact), terminator: "")
+            case "github": print(GitHubReport.render(report, root: root), terminator: "")
             case "stryker": print(try StrykerReport.render(artifact, root: root))
             case "agent":
                 let document = AgentReport.make(artifact, root: root, domain: agentDomain)
