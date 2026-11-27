@@ -1,11 +1,12 @@
 /// The source of the simulator test helper, compiled by Litmus for the simulator SDK (`SimulatorHelper`).
 /// Kept in a raw string so `\(` in it stays Swift source.
 let simulatorHelperSource = #"""
-    // Litmus simulator test helper. Usage: helper <bundle binary> <events file> <configuration JSON>
+    // Litmus simulator test helper. Usage: helper <bundle binary> <events file> <configuration JSON> <XCTest file>
     // Loads the test bundle, runs its Swift Testing tests through the versioned ABI entry point (records: JSON lines in the
     // events file, as `swift test --event-stream-output-path` writes them), then its XCTest cases through XCTestSuite with
-    // an observer that writes one {"xctest":...} line per case to <events file>.xctest. Exit: 0 all passed, 1 a test
-    // failed, 64 and above a setup problem (the caller then uses xcodebuild).
+    // an observer that writes one {"xctest":...} line per case to <XCTest file>. The events file may be a FIFO (per-test
+    // reach), so the XCTest file is named on its own. Exit: 0 all passed, 1 a test failed, 64 and above a setup problem
+    // (the caller then uses xcodebuild).
     import Darwin
     import Foundation
     import XCTest
@@ -58,10 +59,12 @@ let simulatorHelperSource = #"""
         /// services the main queue; XCTest then runs directly on the main thread.
         static func main() {
             let arguments = CommandLine.arguments
-            guard arguments.count == 4 else { fail("usage: helper <bundle binary> <events> <configuration JSON>", 64) }
+            guard arguments.count == 5 else {
+                fail("usage: helper <bundle binary> <events> <configuration JSON> <XCTest file>", 64)
+            }
             guard dlopen(arguments[1], RTLD_NOW) != nil else { fail("dlopen: \(String(cString: dlerror()))", 65) }
             let lines = open(arguments[2])
-            let xctestLines = open(arguments[2] + ".xctest")
+            let xctestLines = open(arguments[4])
             let configuration = Data(arguments[3].utf8)
             let options = (try? JSONSerialization.jsonObject(with: configuration) as? [String: Any]) ?? [:]
             let runsXCTest = options["xctest"] as? Bool ?? true

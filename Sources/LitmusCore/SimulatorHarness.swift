@@ -261,8 +261,15 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
         return environment
     }
 
-    private func spawnCommand(udid: String, bundle: Bundle, events: String, configuration: String) -> ToolCommand {
-        let spawn = ["spawn", udid, helper.helper, bundle.binary, events, configuration]
+    /// `events` may be the per-test reach FIFO; the helper's XCTest lines always go to `xctestEvents`, a regular file.
+    private func spawnCommand(
+        udid: String,
+        bundle: Bundle,
+        events: String,
+        xctestEvents: String,
+        configuration: String
+    ) -> ToolCommand {
+        let spawn = ["spawn", udid, helper.helper, bundle.binary, events, configuration, xctestEvents]
         if helper.simctl == "/usr/bin/xcrun" {
             return ToolCommand(executable: "/usr/bin/xcrun", arguments: ["simctl"] + spawn)
         }
@@ -291,6 +298,7 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
                     udid: udid,
                     bundle: bundle,
                     events: events,
+                    xctestEvents: events + ".xctest",
                     configuration: #"{"filter":["^litmus-probe-matches-nothing$"],"xctest":false}"#
                 ),
                 directory: workspace,
@@ -355,6 +363,8 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
             let stem = "\(request.name)-\(bundle.module)-simulator"
             let events = "\(logs)/\(stem).events.jsonl"
             let configJSON = Self.configuration(request)
+            let xctestEvents = events + ".xctest"
+            try? FileManager.default.removeItem(atPath: xctestEvents)
             let (output, stopped) = try await runEventStream(
                 executor: executor,
                 request: request,
@@ -366,7 +376,13 @@ public struct SimulatorDirectHarness<Executor: ProcessExecutor>: TestHarness {
                     + ActivationEnvironment.key(ActivationEnvironment.testTracePath, token: request.environmentToken),
                 deadline: remaining()
             ) { streamPath in
-                spawnCommand(udid: udid, bundle: bundle, events: streamPath, configuration: configJSON)
+                spawnCommand(
+                    udid: udid,
+                    bundle: bundle,
+                    events: streamPath,
+                    xctestEvents: xctestEvents,
+                    configuration: configJSON
+                )
             }
             if let output { try writeLog(output, path: "\(logs)/\(stem).log") }
             evidence += ["logs/\(stem).events.jsonl", "logs/\(stem).log"]
