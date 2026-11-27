@@ -53,6 +53,13 @@ litmus run . --trust-project --diff-base origin/main --budget 600 \
 
 Only mutation sites on changed lines are selected by default. `--diff-scope files` selects all sites in changed files. `--include-test-changes` also selects the production code a change's test edits can affect, so deleting or weakening a test is checked too. A run with no selected mutations skips building and testing.
 
+## Reading a run
+
+```sh
+litmus analyze . --results /tmp/litmus-run/run.json --format html > report.html          # one offline page to explore
+litmus analyze . --results run.json --format github-summary --compare base/run.json >> "$GITHUB_STEP_SUMMARY"
+```
+
 ## Closing gaps with a coding agent
 
 ```sh

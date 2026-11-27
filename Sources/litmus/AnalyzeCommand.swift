@@ -13,7 +13,7 @@ struct Analyze: AsyncParsableCommand {
     @Option(help: "Run artifact (.json or .pb). Missing data never means clean.") var results: String
     @Option(
         help:
-            "xcode, json, sarif, markdown (job summary), github (workflow annotations), github-summary (step summary with diffs), stryker (mutation-testing-report-schema 2) or agent (one self-contained record per gap, for coding agents)."
+            "xcode, json, sarif, markdown (job summary), github (workflow annotations), github-summary (step summary with diffs), html (one self-contained page to explore), stryker (mutation-testing-report-schema 2) or agent (one self-contained record per gap, for coding agents)."
     )
     var format: String = "xcode"
     @Option(help: "With --format agent: the gaps of logic, ui or all mutants.") var domain: String = "all"
@@ -34,11 +34,9 @@ struct Analyze: AsyncParsableCommand {
     @Option(help: "new-survivors: fail on survivors and uncovered mutants the --baseline (base branch) does not hold.")
     var gate: String?
     mutating func run() async throws {
-        guard ["xcode", "json", "sarif", "markdown", "github", "github-summary", "stryker", "agent"].contains(format)
-        else {
-            throw ValidationError(
-                "format must be xcode, json, sarif, markdown, github, github-summary, stryker or agent"
-            )
+        let formats = ["xcode", "json", "sarif", "markdown", "github", "github-summary", "html", "stryker", "agent"]
+        guard formats.contains(format) else {
+            throw ValidationError("format must be one of \(formats.joined(separator: ", "))")
         }
         guard let agentDomain = AgentReport.Domain(rawValue: domain) else {
             throw ValidationError("domain must be logic, ui or all")
@@ -96,6 +94,7 @@ struct Analyze: AsyncParsableCommand {
             switch format {
             case "markdown": print(MarkdownReport.render(report, artifact: artifact), terminator: "")
             case "github": print(GitHubReport.render(report, root: root), terminator: "")
+            case "html": print(try HTMLReport.render(artifact, root: root, run: results), terminator: "")
             case "github-summary":
                 let previous = try compare.map { try ArtifactCodec.read(RunArtifact.self, path: $0) }
                 print(GitHubSummaryReport.render(artifact, previous: previous), terminator: "")

@@ -35,4 +35,6 @@ Litmus shares `AnalyzerCLI`'s exit-code contract across all subcommands:
 | `analyze --format sarif` | SARIF `2.1.0` | Includes `litmus/anchored/v1` partial fingerprints for code-scanning deduplication. |
 | `analyze --format stryker` | `mutation-testing-report-schema` `2` | Compatible with Stryker dashboard and HTML report viewers. |
 | `analyze --format github` | GitHub Actions workflow commands | Emits `::warning`, `::error`, and `::notice` lines (capped at 50 inline annotations per step). |
+| `analyze --format github-summary` | Markdown for `$GITHUB_STEP_SUMMARY` | For people, not parsers: its layout may change in any minor version. |
+| `analyze --format html` | One self-contained HTML page | For people, not parsers: its layout and embedded data may change in any minor version. It makes no network request (`Content-Security-Policy: default-src 'none'`). |
 | Result store (`v1/records/*.rec`, `litmus store pack`) | Envelope `v1` (`litmus-store-pack/v1`) | Keyed by `litmus-reuse/v1` digest (including `toolVersion` and `executionPolicy`), verified by SHA-256 or `LITMUS_STORE_KEY` HMAC-SHA256 on every read and unpack. |
