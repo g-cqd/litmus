@@ -1,0 +1,643 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		267E26CB3BFB31C783FFD039 /* FareKit in Frameworks */ = {isa = PBXBuildFile; productRef = B82319926A5DA2DB67312CDA /* FareKit */; };
+		5F56F7496E038548C0FFA9A6 /* TripKit in Frameworks */ = {isa = PBXBuildFile; productRef = F51144EAFE839B102A339E37 /* TripKit */; };
+		61B6CE604B7B1629DD1FC765 /* TransitApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0948986C47B1CA40ED22B67A /* TransitApp.swift */; };
+		6ADBD8737E14D046C7A23B70 /* WalletKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4FAD68D6F36298931C413E58 /* WalletKit */; };
+		80EA6CB146C2474DB04A1F9E /* TripModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F48E24E7A802719E7E535B3 /* TripModelTests.swift */; };
+		D8A41BC8E597D44A56FB39A3 /* TripUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ED2E1F151A4EA34805238E7 /* TripUITests.swift */; };
+		FE98674C6D7D3C9EED131B2D /* ExtraTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D35270A23165047F70C378A0 /* ExtraTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		02B859960710A28A75CDD5A3 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 48F5111711B013737C96E902 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A7D878C694F2C646D73F2F7D;
+			remoteInfo = Transit;
+		};
+		1CEF4ED1BBD866A82F650B73 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 48F5111711B013737C96E902 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A7D878C694F2C646D73F2F7D;
+			remoteInfo = Transit;
+		};
+		232729AB6283D5440710CD11 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 48F5111711B013737C96E902 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A7D878C694F2C646D73F2F7D;
+			remoteInfo = Transit;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0948986C47B1CA40ED22B67A /* TransitApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransitApp.swift; sourceTree = "<group>"; };
+		1ED2E1F151A4EA34805238E7 /* TripUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripUITests.swift; sourceTree = "<group>"; };
+		41F24EC565152B9531DE2D0F /* TransitExtraTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TransitExtraTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		5F48E24E7A802719E7E535B3 /* TripModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TripModelTests.swift; sourceTree = "<group>"; };
+		652E317398B0B1DBA350DEA7 /* TransitTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TransitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1DB9370F1097CD45FA9C713 /* TransitUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TransitUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D35270A23165047F70C378A0 /* ExtraTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtraTests.swift; sourceTree = "<group>"; };
+		D9846AF377FFC81043C38210 /* WalletKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = WalletKit; path = Modules/WalletKit; sourceTree = SOURCE_ROOT; };
+		DB9420B84BEC2ADFB4CB2749 /* TripKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TripKit; path = Modules/TripKit; sourceTree = SOURCE_ROOT; };
+		ED2F00ADEE594A09BD9F2DD2 /* FareKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = FareKit; path = Modules/FareKit; sourceTree = SOURCE_ROOT; };
+		F1DFD8622EA93AB001CE7019 /* Transit.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Transit.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		8D05B04BB2FD16E85FC85075 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				267E26CB3BFB31C783FFD039 /* FareKit in Frameworks */,
+				5F56F7496E038548C0FFA9A6 /* TripKit in Frameworks */,
+				6ADBD8737E14D046C7A23B70 /* WalletKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		39A0CF2DF72809D8C020D9EB = {
+			isa = PBXGroup;
+			children = (
+				6AD0BEAF871BD85C9A64D9EF /* App */,
+				D06DAE76D24C0B705E5DC070 /* AppExtraTests */,
+				E02568BED1F8F4349DEB67B1 /* AppTests */,
+				911ADFD0DD180080826208A5 /* AppUITests */,
+				AA9A6750FB429F07597CEA52 /* Packages */,
+				6583B4B57ECCCC0B0A02B6F2 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		6583B4B57ECCCC0B0A02B6F2 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				F1DFD8622EA93AB001CE7019 /* Transit.app */,
+				41F24EC565152B9531DE2D0F /* TransitExtraTests.xctest */,
+				652E317398B0B1DBA350DEA7 /* TransitTests.xctest */,
+				A1DB9370F1097CD45FA9C713 /* TransitUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		6AD0BEAF871BD85C9A64D9EF /* App */ = {
+			isa = PBXGroup;
+			children = (
+				0948986C47B1CA40ED22B67A /* TransitApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		911ADFD0DD180080826208A5 /* AppUITests */ = {
+			isa = PBXGroup;
+			children = (
+				1ED2E1F151A4EA34805238E7 /* TripUITests.swift */,
+			);
+			path = AppUITests;
+			sourceTree = "<group>";
+		};
+		AA9A6750FB429F07597CEA52 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				ED2F00ADEE594A09BD9F2DD2 /* FareKit */,
+				DB9420B84BEC2ADFB4CB2749 /* TripKit */,
+				D9846AF377FFC81043C38210 /* WalletKit */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		D06DAE76D24C0B705E5DC070 /* AppExtraTests */ = {
+			isa = PBXGroup;
+			children = (
+				D35270A23165047F70C378A0 /* ExtraTests.swift */,
+			);
+			path = AppExtraTests;
+			sourceTree = "<group>";
+		};
+		E02568BED1F8F4349DEB67B1 /* AppTests */ = {
+			isa = PBXGroup;
+			children = (
+				5F48E24E7A802719E7E535B3 /* TripModelTests.swift */,
+			);
+			path = AppTests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		450E37648FEFBCB81C067AF5 /* TransitUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 83325C31B4F97DC6AA6D5410 /* Build configuration list for PBXNativeTarget "TransitUITests" */;
+			buildPhases = (
+				E71BE7284E16A1C9810C353E /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D2867F88E4C753D5BD80B495 /* PBXTargetDependency */,
+			);
+			name = TransitUITests;
+			packageProductDependencies = (
+			);
+			productName = TransitUITests;
+			productReference = A1DB9370F1097CD45FA9C713 /* TransitUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		783CAB619FA370CEBA802546 /* TransitTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 08300FBB3E0285CA4BB1D841 /* Build configuration list for PBXNativeTarget "TransitTests" */;
+			buildPhases = (
+				417E6E1B7EC900AC01FFC2E9 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A7026C2AC74241227E85A924 /* PBXTargetDependency */,
+			);
+			name = TransitTests;
+			packageProductDependencies = (
+			);
+			productName = TransitTests;
+			productReference = 652E317398B0B1DBA350DEA7 /* TransitTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A4E3B11D733DA316ECC125BD /* TransitExtraTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1F4D34D8DA019F0F91F09AF3 /* Build configuration list for PBXNativeTarget "TransitExtraTests" */;
+			buildPhases = (
+				BCCFBC4B882F062DEC19D754 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				68068637436BD5920EFF0DAD /* PBXTargetDependency */,
+			);
+			name = TransitExtraTests;
+			packageProductDependencies = (
+			);
+			productName = TransitExtraTests;
+			productReference = 41F24EC565152B9531DE2D0F /* TransitExtraTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A7D878C694F2C646D73F2F7D /* Transit */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 28F1357A031091A0BF90A445 /* Build configuration list for PBXNativeTarget "Transit" */;
+			buildPhases = (
+				338D80753062814756C9A465 /* Sources */,
+				8D05B04BB2FD16E85FC85075 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Transit;
+			packageProductDependencies = (
+				B82319926A5DA2DB67312CDA /* FareKit */,
+				F51144EAFE839B102A339E37 /* TripKit */,
+				4FAD68D6F36298931C413E58 /* WalletKit */,
+			);
+			productName = Transit;
+			productReference = F1DFD8622EA93AB001CE7019 /* Transit.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		48F5111711B013737C96E902 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					450E37648FEFBCB81C067AF5 = {
+						TestTargetID = A7D878C694F2C646D73F2F7D;
+					};
+				};
+			};
+			buildConfigurationList = B447D24F92F47AD38361B207 /* Build configuration list for PBXProject "Transit" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 39A0CF2DF72809D8C020D9EB;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				75767D395CB8F68EC7494CE0 /* XCLocalSwiftPackageReference "Modules/FareKit" */,
+				993BD3872202C92A66356ADE /* XCLocalSwiftPackageReference "Modules/TripKit" */,
+				431920CA6695EC198711D4CF /* XCLocalSwiftPackageReference "Modules/WalletKit" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 6583B4B57ECCCC0B0A02B6F2 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A7D878C694F2C646D73F2F7D /* Transit */,
+				783CAB619FA370CEBA802546 /* TransitTests */,
+				A4E3B11D733DA316ECC125BD /* TransitExtraTests */,
+				450E37648FEFBCB81C067AF5 /* TransitUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		338D80753062814756C9A465 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				61B6CE604B7B1629DD1FC765 /* TransitApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		417E6E1B7EC900AC01FFC2E9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				80EA6CB146C2474DB04A1F9E /* TripModelTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BCCFBC4B882F062DEC19D754 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FE98674C6D7D3C9EED131B2D /* ExtraTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E71BE7284E16A1C9810C353E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D8A41BC8E597D44A56FB39A3 /* TripUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		68068637436BD5920EFF0DAD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A7D878C694F2C646D73F2F7D /* Transit */;
+			targetProxy = 232729AB6283D5440710CD11 /* PBXContainerItemProxy */;
+		};
+		A7026C2AC74241227E85A924 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A7D878C694F2C646D73F2F7D /* Transit */;
+			targetProxy = 02B859960710A28A75CDD5A3 /* PBXContainerItemProxy */;
+		};
+		D2867F88E4C753D5BD80B495 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A7D878C694F2C646D73F2F7D /* Transit */;
+			targetProxy = 1CEF4ED1BBD866A82F650B73 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0F679D713C2DF369DB0BE30A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.litmus.bench.TransitUITests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Transit;
+			};
+			name = Release;
+		};
+		0F9A7225BD53AAA656B9A3C1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.litmus.bench.TransitTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Transit.app/Transit";
+			};
+			name = Debug;
+		};
+		1EEA823C009B612A56D54083 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_IDENTITY = "";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		54C278DC873CB35E2E2DEE2A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.litmus.bench.TransitTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Transit.app/Transit";
+			};
+			name = Release;
+		};
+		A4F62079576FDCDBE55BFD86 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.litmus.bench.TransitExtraTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Transit.app/Transit";
+			};
+			name = Release;
+		};
+		ACC98BFE1E3B83E50299C2B4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.litmus.bench.Transit;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		C711E4258836B1BAAF8B6884 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.litmus.bench.TransitUITests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = Transit;
+			};
+			name = Debug;
+		};
+		C8C8D4EE3E889BA9A50A5934 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.litmus.bench.TransitExtraTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Transit.app/Transit";
+			};
+			name = Debug;
+		};
+		E5EA0BC041380FBA99434BE7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.litmus.bench.Transit;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		E7B2286B4BE0A78D8612D769 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_IDENTITY = "";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		08300FBB3E0285CA4BB1D841 /* Build configuration list for PBXNativeTarget "TransitTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0F9A7225BD53AAA656B9A3C1 /* Debug */,
+				54C278DC873CB35E2E2DEE2A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		1F4D34D8DA019F0F91F09AF3 /* Build configuration list for PBXNativeTarget "TransitExtraTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C8C8D4EE3E889BA9A50A5934 /* Debug */,
+				A4F62079576FDCDBE55BFD86 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		28F1357A031091A0BF90A445 /* Build configuration list for PBXNativeTarget "Transit" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E5EA0BC041380FBA99434BE7 /* Debug */,
+				ACC98BFE1E3B83E50299C2B4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		83325C31B4F97DC6AA6D5410 /* Build configuration list for PBXNativeTarget "TransitUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C711E4258836B1BAAF8B6884 /* Debug */,
+				0F679D713C2DF369DB0BE30A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B447D24F92F47AD38361B207 /* Build configuration list for PBXProject "Transit" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E7B2286B4BE0A78D8612D769 /* Debug */,
+				1EEA823C009B612A56D54083 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		431920CA6695EC198711D4CF /* XCLocalSwiftPackageReference "Modules/WalletKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Modules/WalletKit;
+		};
+		75767D395CB8F68EC7494CE0 /* XCLocalSwiftPackageReference "Modules/FareKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Modules/FareKit;
+		};
+		993BD3872202C92A66356ADE /* XCLocalSwiftPackageReference "Modules/TripKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Modules/TripKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4FAD68D6F36298931C413E58 /* WalletKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = WalletKit;
+		};
+		B82319926A5DA2DB67312CDA /* FareKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = FareKit;
+		};
+		F51144EAFE839B102A339E37 /* TripKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TripKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 48F5111711B013737C96E902 /* Project object */;
+}

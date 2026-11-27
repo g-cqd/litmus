@@ -1,0 +1,7 @@
+results/
+.tools/
+.build/
+.swiftpm/
+xcuserdata/
+*.xcuserstate
+.ruff_cache/
