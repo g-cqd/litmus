@@ -401,12 +401,14 @@ public struct MutationRunner<Executor: ProcessExecutor>: Sendable {
     {
         var originals: [String: Data] = [:]
         var rendered: [String: RenderedSchema] = [:]
+        // One numbering for the whole batch: every file's switches share a run's control page.
+        let slots = SharedControlLayout.slots(for: group)
         do {
             for (relative, sites) in Dictionary(grouping: group, by: \.path).sorted(by: { $0.key < $1.key }) {
                 let path = try snapshot.path(for: relative)
                 let bytes = try BoundedFileReader.read(path: path, cap: 2 << 20)
                 guard let source = String(bytes: bytes, encoding: .utf8) else { throw LitmusFailure("not UTF-8") }
-                let schema = try SchemaWriter.schema(source, mutations: sites, token: token)
+                let schema = try SchemaWriter.schema(source, mutations: sites, token: token, slots: slots)
                 originals[path] = Data(bytes)
                 if let journal {
                     try journal.rewrite(path, original: bytes, schema: Array(schema.text.utf8))

@@ -51,7 +51,7 @@ Not covered by the spike: XCTest repeated in-process; app-hosted bundles on the 
 
 ## Order of work
 
-1. Runtime control page in `SchemaWriter`, with unit tests rendering both paths. The isolated path's output must stay byte-identical when the variable is unset.
+1. Runtime control page in `SchemaWriter`, with unit tests of both paths. **Done:** `SharedControlPage` and `SharedControlLayout`, plus the `_Page` runtime class. Activation is by mutant id plus an active flag, and a slot only indexes an evaluation counter. The page is a fixed 8 KiB layout with a magic word, and the runtime ignores a page without it. `SharedControlPageTests` compiles a schema with `swiftc`, with and without strict memory safety, into one long-lived process, then switches every mutant on and off through the page. Each mutant changes the output while active and the original output returns after it, its hit count rises only while it is active, and the evaluation counts per request stay stable. Without a valid page, the process keeps `LITMUS_ACTIVE_ID`.
 2. macOS helper (`MacOSHelperSource.swift`) with the command loop, behind `--shared-process on`, for `SwiftPMDirectHarness`. Then the snapshot classification and the kill and survivor rules.
 3. Oracle fixture and test. Then `auto`.
 4. Simulator helper loop. Then the benchmark on `mutation-test-ios-app`.

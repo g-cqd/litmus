@@ -16,6 +16,9 @@ public enum ActivationEnvironment {
     /// Optional path to a per-test trace log where test runners and schema evaluations append ordered `T <test>` and
     /// `R <id>` lines during the baseline/control run (single-pass per-test reach).
     public static let testTracePath = "LITMUS_TEST_TRACE"
+    /// Optional path to a ``SharedControlPage``: when set (and the page is valid), the active mutant is read from it at
+    /// every switch evaluation instead of from `LITMUS_ACTIVE_ID` once, so one process can run many mutants.
+    public static let sharedControlPage = "LITMUS_SHARED_MAP"
 
     /// `base` as the run with `token` spells it: `base_token`, or `base` for an empty token.
     public static func key(_ base: String, token: String) -> String { token.isEmpty ? base : base + "_" + token }
@@ -207,8 +210,16 @@ public enum SchemaWriter {
     /// The runtime helper uses `@_silgen_name` C declarations (`getenv`, `open`, `close`, `lseek`, `write`,
     /// `os_unfair_lock_*`) instead of injecting `import Foundation`, avoiding Swift 6 access-level conflicts with
     /// `internal import Foundation` or `private import Foundation` in other files of the module.
-    /// - Parameter token: the run's ``ActivationEnvironment`` token; empty reads the bare variable names.
-    public static func schema(_ source: String, mutations: [Mutation], token: String = "") throws -> RenderedSchema {
+    /// - Parameters:
+    ///   - token: the run's ``ActivationEnvironment`` token; empty reads the bare variable names.
+    ///   - slots: each mutant's ``SharedControlPage`` counter slot, from the whole batch
+    ///     (``SharedControlLayout/slots(for:)``); nil numbers this file's mutants alone.
+    public static func schema(
+        _ source: String,
+        mutations: [Mutation],
+        token: String = "",
+        slots: [String: Int]? = nil
+    ) throws -> RenderedSchema {
         guard !mutations.isEmpty else { return RenderedSchema(text: source, lines: [:]) }
         let bytes = Array(source.utf8)
         let fingerprint = Digest.sha256(bytes)
@@ -230,7 +241,14 @@ public enum SchemaWriter {
             throw LitmusFailure("a mutant precedes the schema declarations of \(sorted[0].path)")
         }
 
-        let declarations = runtime(symbol: symbol, ids: sorted.map(\.id), token: token)
+        let slots = slots ?? SharedControlLayout.slots(for: sorted)
+        let switches = try sorted.map(\.id).sorted().map { id in
+            guard let slot = slots[id], (0..<SharedControlLayout.maximumSlots).contains(slot) else {
+                throw LitmusFailure("mutant \(id) has no shared control slot")
+            }
+            return (id: id, slot: slot)
+        }
+        let declarations = runtime(symbol: symbol, switches: switches, token: token)
         let prefix: [UInt8] = placement.isTopLevelCode ? Array(("\n" + declarations).utf8) : []
         var output: [UInt8] = []
         output.reserveCapacity(bytes.count + sorted.count * 96 + declarations.utf8.count)
@@ -361,11 +379,18 @@ public enum SchemaWriter {
     /// Emits the per-file runtime without adding `import Foundation`, using `@_silgen_name` C bindings for environment
     /// and marker/trace file I/O so files in modules with `internal import Foundation` or `private import Foundation`
     /// never suffer access-level import collisions.
-    private static func runtime(symbol: String, ids: [String], token: String) -> String {
+    private static func runtime(symbol: String, switches: [(id: String, slot: Int)], token: String) -> String {
         func key(_ base: String) -> String { ActivationEnvironment.key(base, token: token) }
+        let byteCount = SharedControlLayout.byteCount
+        let magicIndex = SharedControlLayout.magic, magicValue = SharedControlLayout.magicValue
+        let modeIndex = SharedControlLayout.mode, slotsIndex = SharedControlLayout.slots
+        let headerWords = SharedControlLayout.headerWords, hitsIndex = SharedControlLayout.hits
+        let isActiveIndex = SharedControlLayout.isActive, activeIndex = SharedControlLayout.active
         func helperBlock(strict: Bool) -> String {
             let atUnsafe = strict ? "@unsafe " : ""
             let kwUnsafe = strict ? "unsafe " : ""
+            // SAFETY (the page): `words` is a mapping of the whole fixed layout, never unmapped, indexed only below it.
+            let atSafe = strict ? "@safe " : ""
             return """
                 \(atUnsafe)@_silgen_name("getenv") nonisolated private func \(symbol)_getenv(_ name: Swift.UnsafePointer<Swift.CChar>) -> Swift.UnsafeMutablePointer<Swift.CChar>?
                 \(atUnsafe)@_silgen_name("open") nonisolated private func \(symbol)_open(_ path: Swift.UnsafePointer<Swift.CChar>, _ oflag: Swift.Int32, _ mode: Swift.UInt32) -> Swift.Int32
@@ -373,12 +398,49 @@ public enum SchemaWriter {
                 \(atUnsafe)@_silgen_name("write") nonisolated private func \(symbol)_write(_ fd: Swift.Int32, _ buf: Swift.UnsafeRawPointer, _ nbyte: Swift.Int) -> Swift.Int
                 \(atUnsafe)@_silgen_name("os_unfair_lock_lock") nonisolated private func \(symbol)_lock(_ lock: Swift.UnsafeMutablePointer<Swift.UInt32>)
                 \(atUnsafe)@_silgen_name("os_unfair_lock_unlock") nonisolated private func \(symbol)_unlock(_ lock: Swift.UnsafeMutablePointer<Swift.UInt32>)
+                \(atUnsafe)@_silgen_name("mmap") nonisolated private func \(symbol)_mmap(_ address: Swift.UnsafeMutableRawPointer?, _ length: Swift.Int, _ protection: Swift.Int32, _ flags: Swift.Int32, _ fd: Swift.Int32, _ offset: Swift.Int64) -> Swift.UnsafeMutableRawPointer?
                 nonisolated private func \(symbol)_env(_ key: Swift.StaticString) -> Swift.String? {
                     key.withUTF8Buffer { buffer in
                         \(kwUnsafe)buffer.baseAddress.flatMap { base in
                             \(kwUnsafe)\(symbol)_getenv(Swift.UnsafeRawPointer(base).assumingMemoryBound(to: Swift.CChar.self))
                                 .map { \(kwUnsafe)Swift.String(cString: $0) }
                         }
+                    }
+                }
+                /// The shared control page (`SharedControlLayout`), when the run maps one; nil keeps `LITMUS_ACTIVE_ID`.
+                \(atSafe)nonisolated private final class \(symbol)_Page: @unchecked Swift.Sendable {
+                    private let words: Swift.UnsafeMutablePointer<Swift.UInt64>
+                    private var rawLock: Swift.UInt32 = 0
+                    private init(_ words: Swift.UnsafeMutablePointer<Swift.UInt64>) { \(kwUnsafe)self.words = words }
+                    static func map() -> \(symbol)_Page? {
+                        guard let path = \(symbol)_env("\(key(ActivationEnvironment.sharedControlPage))"), !path.isEmpty else { return nil }
+                        var bytes = Swift.Array(path.utf8)
+                        bytes.append(0)
+                        let fd: Swift.Int32 = bytes.withUnsafeBufferPointer { buffer in
+                            guard let base = buffer.baseAddress else { return -1 }
+                            return \(kwUnsafe)\(symbol)_open(Swift.UnsafeRawPointer(base).assumingMemoryBound(to: Swift.CChar.self), 0x0002, 0)
+                        }
+                        guard fd >= 0 else { return nil }
+                        defer { _ = \(symbol)_close(fd) }
+                        guard let raw = \(kwUnsafe)\(symbol)_mmap(nil, \(byteCount), 3, 1, fd, 0), Swift.Int(bitPattern: raw) != -1 else { return nil }
+                        let words = \(kwUnsafe)raw.assumingMemoryBound(to: Swift.UInt64.self)
+                        guard \(kwUnsafe)words[\(magicIndex)] == \(magicValue) else { return nil }
+                        return \(kwUnsafe)\(symbol)_Page(words)
+                    }
+                    /// Adds one to word `index` under this file's lock (a slot, or the hits only the active switch writes).
+                    private func bump(_ index: Swift.Int) {
+                        Swift.withUnsafeMutablePointer(to: &rawLock) { ptr in \(kwUnsafe)\(symbol)_lock(ptr) }
+                        \(kwUnsafe)words[index] &+= 1
+                        Swift.withUnsafeMutablePointer(to: &rawLock) { ptr in \(kwUnsafe)\(symbol)_unlock(ptr) }
+                    }
+                    /// Whether `id` is active; counts the evaluation in `slot` while the page asks for counts.
+                    func check(_ id: Swift.UInt64, _ slot: Swift.Int) -> Swift.Bool {
+                        if \(kwUnsafe)words[\(modeIndex)] & 1 != 0, slot < Swift.Int(truncatingIfNeeded: \(kwUnsafe)words[\(slotsIndex)]) {
+                            bump(\(headerWords) + slot)
+                        }
+                        guard \(kwUnsafe)words[\(isActiveIndex)] != 0, \(kwUnsafe)words[\(activeIndex)] == id else { return false }
+                        bump(\(hitsIndex))
+                        return true
                     }
                 }
                 nonisolated private final class \(symbol)_Tracker: @unchecked Swift.Sendable {
@@ -437,17 +499,19 @@ public enum SchemaWriter {
             nonisolated private let \(symbol)_trace: Swift.String? = \(symbol)_env("\(key(ActivationEnvironment.testTracePath))")
             nonisolated private let \(symbol)_tracker = \(symbol)_Tracker()
             nonisolated private let \(symbol)_tracks: Swift.Bool = \(symbol)_dir != nil || \(symbol)_trace != nil
+            nonisolated private let \(symbol)_page: \(symbol)_Page? = \(symbol)_Page.map()
             @inline(__always) nonisolated private func \(symbol)_reach(_ id: Swift.String) -> Swift.Bool {
                 \(symbol)_tracker.record(id, directory: \(symbol)_dir)
                 return true
             }
 
             """
-        for id in ids {
+        for (id, slot) in switches {
             text += """
                 nonisolated private let \(symbol)_on_\(id): Swift.Bool = \(symbol) == "\(id)"
                 @usableFromInline nonisolated internal var \(symbol)_\(id): Swift.Bool {
                     if \(symbol)_tracks { _ = \(symbol)_reach("\(id)") }
+                    if let page = \(symbol)_page { return page.check(0x\(id), \(slot)) }
                     return \(symbol)_on_\(id)
                 }
 
