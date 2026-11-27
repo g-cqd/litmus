@@ -60,3 +60,11 @@ schemes:
         - package: FareKit/FareKitTests
         - package: TripKit/TripKitTests
         - package: WalletKit/WalletKitTests
+  TransitUI:
+    build:
+      targets:
+        Transit: all
+        TransitUITests: [test]
+    test:
+      targets:
+        - TransitUITests

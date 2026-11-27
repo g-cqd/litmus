@@ -180,6 +180,14 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
     /// PropertyListSerialization supplies heterogeneous SDK data; the untyped boundary is contained here.
     /// Xcode-relative paths are absolutised before moving the plist outside Build/Products.
     private func preparedTestRun(output: String, request: TestRunRequest, products: String) throws -> String {
+        let patched = try testRunPlist(request: request, products: products)
+        let data = try PropertyListSerialization.data(fromPropertyList: patched, format: .xml, options: 0)
+        try data.write(to: URL(fileURLWithPath: output), options: .atomic)
+        return output
+    }
+
+    /// The built `.xctestrun`, with `request`'s environment in every test target.
+    func testRunPlist(request: TestRunRequest, products: String) throws -> Any {
         let candidates = try FileManager.default.contentsOfDirectory(atPath: products)
             .filter { $0.hasSuffix(".xctestrun") }.sorted()
         guard candidates.count == 1, let file = candidates.first else {
@@ -197,9 +205,7 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
                 "zero supported test targets in \(products)/\(file); scheme \(driver.scheme ?? "unknown"). Check the selected test plan and containerPath; for nested packages use --package-path."
             )
         }
-        let data = try PropertyListSerialization.data(fromPropertyList: patched, format: .xml, options: 0)
-        try data.write(to: URL(fileURLWithPath: output), options: .atomic)
-        return output
+        return patched
     }
 
     /// Rewrites `EnvironmentVariables`, `TestingEnvironmentVariables`, and (for UI test bundles)

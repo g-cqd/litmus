@@ -89,6 +89,7 @@ extension RunSession {
             // Shared workers loaded the previous build: they end, and slots follow this batch's schema.
             (judge.harness as? any SharedProcessControl)?.prepare(batch: group)
             let covered = try cover(&group, control: control, judge: &judge, workers: current.workerCount)
+            (judge.harness as? any UISessionControl)?.register(covered.map { ($0.id, judge.covering[$0.id]) })
             try await collectReach(
                 covered,
                 control: control,
@@ -251,6 +252,12 @@ extension RunSession {
 
     /// The run's timing summary and shared-process statistics, once every batch is done.
     func summarizeBatches(_ established: Established?) {
+        if let sessions = (established?.judge.harness as? any UISessionControl)?.statistics, sessions.sessions > 0 {
+            artifact.notes.append(
+                "UI sessions: \(sessions.sessions) xcodebuild session(s) decided \(sessions.served) first run(s), one "
+                    + "test-plan configuration per mutant; \(sessions.fallbacks) ran fresh instead"
+            )
+        }
         if let timings = established?.judge.timings {
             artifact.notes += timings.summary(
                 factor: options.timeoutFactor,

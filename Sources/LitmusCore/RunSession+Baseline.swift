@@ -34,6 +34,7 @@ extension RunSession {
         }
         run.counts = counts
         try shareSimulatorWorkers(&run)
+        try shareUISessions(&run)
         // The Swift Testing test functions, from the baseline's event streams (for `perTestReach`).
         let testFunctions =
             options.perTestReach ? Runner.testFunctions(in: run.execution.result.evidence, logs: output) : []
@@ -231,6 +232,20 @@ extension RunSession {
             mode: options.sharedProcess
         )
         let quarantinedNow = run.judge.quarantined
+        run.harness = shared
+        let made = try makeJudge(for: shared)
+        (run.allowedWorkers, run.pool, run.judge) = (made.allowedWorkers, made.pool, made.judge)
+        run.judge.quarantined = quarantinedNow
+    }
+
+    /// `xcodebuild` on one destination with UI test bundles: a batch's UI-test first runs share one session, one
+    /// test-plan configuration per mutant (`UISessionHarness`).
+    func shareUISessions(_ run: inout BaselineRun) throws {
+        guard options.sharedProcess != .off, let xcode = run.harness as? XcodeHarness<Executor>, xcode.fleet == nil,
+            try UISessionHarness<Executor>.hasUITests(products: artifacts + "/DerivedData/Build/Products")
+        else { return }
+        let quarantinedNow = run.judge.quarantined
+        let shared = UISessionHarness(inner: xcode)
         run.harness = shared
         let made = try makeJudge(for: shared)
         (run.allowedWorkers, run.pool, run.judge) = (made.allowedWorkers, made.pool, made.judge)
