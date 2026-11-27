@@ -5,7 +5,7 @@ import Testing
 
 @Suite("Phase A, B & C improvements")
 struct PhaseABCTests {
-    @Test func `all eight extended operators discover valid schematisable sites`() throws {
+    @Test(.timeLimit(.minutes(10))) func `all eight extended operators discover valid schematisable sites`() throws {
         let source = """
             struct Box { var count: Int }
             func run(_ items: [Int], _ name: String, _ box: Box?, _ queue: Runner) -> Int {
@@ -98,7 +98,7 @@ struct PhaseABCTests {
         #expect(!schema.text.contains("import Foundation"))
     }
 
-    @Test func `optional chaining on the left side of assignment is left alone`() throws {
+    @Test(.timeLimit(.minutes(10))) func `optional chaining on the left side of assignment is left alone`() throws {
         let source = "class C { var x = 0 }; func f(_ c: C?) -> Int { c?.x = 1; c?.x += 2; return c?.x ?? 0 }"
         let found = try MutationPlanner.mutations(
             in: source,
@@ -109,7 +109,8 @@ struct PhaseABCTests {
         #expect(found.first?.replacement == "c!.x")
     }
 
-    @Test func `aridCalls, excludeDeclarations and unknown accept directives work end-to-end`() async throws {
+    @Test(.timeLimit(.minutes(10)))
+    func `aridCalls, excludeDeclarations and unknown accept directives work end-to-end`() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("litmus-cfg-\(UUID().uuidString)").path
         defer { try? FileManager.default.removeItem(atPath: root) }
@@ -159,7 +160,8 @@ struct PhaseABCTests {
         #expect(plan.mutations.contains { $0.original == "a > b" && $0.operatorID == .negateCondition })
     }
 
-    @Test func `guaranteed constant-folded integer overflows and duplicate literal/relational returns are skipped`()
+    @Test(.timeLimit(.minutes(10)))
+    func `guaranteed constant-folded integer overflows and duplicate literal/relational returns are skipped`()
         throws
     {
         let overflow =
@@ -184,7 +186,8 @@ struct PhaseABCTests {
         #expect(retSites.map(\.replacement) == ["1"])
     }
 
-    @Test func `CompilerDiagnostics pinpoints the single offending mutant by column on nested single-line schemas`()
+    @Test(.timeLimit(.minutes(10)))
+    func `CompilerDiagnostics pinpoints the single offending mutant by column on nested single-line schemas`()
         throws
     {
         let source =
@@ -209,7 +212,7 @@ struct PhaseABCTests {
         #expect(suspects == [innerSite.id])
     }
 
-    @Test func `XcodeResultStream stops immediately on simulator host crash messages`() {
+    @Test(.timeLimit(.minutes(10))) func `XcodeResultStream stops immediately on simulator host crash messages`() {
         let lines = """
             {"name":{"_value":"issueEmitted"},"structuredPayload":{"issue":{"message":{"_value":"Restarting after unexpected exit, crash, or test timeout in AppTests.testBoom()"}}}}
             """
@@ -218,7 +221,7 @@ struct PhaseABCTests {
         #expect(!scan.failed)
     }
 
-    @Test
+    @Test(.timeLimit(.minutes(10)))
     func
         `single-build nested schemas, strict memory safety with internal import Foundation, single-pass perTestReach and survivor recheck`()
         async throws
@@ -290,21 +293,21 @@ struct PhaseABCTests {
 
             @Suite(.serialized)
             struct GateTests {
-                @Test func booleanLogic() {
+                @Test(.timeLimit(.minutes(10))) func booleanLogic() {
                     #expect(Gate.decide(true, true, false) == true)
                     #expect(Gate.decide(true, false, true) == true)
                     #expect(Gate.decide(true, false, false) == false)
                     #expect(Gate.decide(false, true, true) == false)
                 }
-                @Test func clamping() {
+                @Test(.timeLimit(.minutes(10))) func clamping() {
                     #expect(Gate.clamp(3) == 3)
                     #expect(Gate.clamp(25) == 10)
                 }
-                @Test func stepOneReachesBumpWithoutAsserting() {
+                @Test(.timeLimit(.minutes(10))) func stepOneReachesBumpWithoutAsserting() {
                     Gate.counter = 0
                     Gate.bump()
                 }
-                @Test func stepTwoAssertsSharedStateWithoutReachingBump() {
+                @Test(.timeLimit(.minutes(10))) func stepTwoAssertsSharedStateWithoutReachingBump() {
                     #expect(Gate.counter == 1)
                 }
             }

@@ -9,7 +9,8 @@ import Testing
 struct PhaseDTests {
     // MARK: - D5.1 Tokenized schema environment
 
-    @Test func `the environment token is eight stable hex digits that differ per subject root`() {
+    @Test(.timeLimit(.minutes(10)))
+    func `the environment token is eight stable hex digits that differ per subject root`() {
         let first = ActivationEnvironment.token(for: "/tmp/subject-a")
         #expect(first.count == 8)
         #expect(first.allSatisfy { $0.isHexDigit && !$0.isUppercase })
@@ -17,7 +18,7 @@ struct PhaseDTests {
         #expect(first != ActivationEnvironment.token(for: "/tmp/subject-b"))
     }
 
-    @Test func `a tokenized schema reads only its own run's variables`() throws {
+    @Test(.timeLimit(.minutes(10))) func `a tokenized schema reads only its own run's variables`() throws {
         let source = "func f(a: Bool) -> Int { a ? 1 : 2 }"
         let sites = try MutationPlanner.mutations(in: source, path: "F.swift")
         let schema = try SchemaWriter.schema(source, mutations: sites, token: "0a1b2c3d")
@@ -33,7 +34,8 @@ struct PhaseDTests {
         #expect(bare.text.contains("\"\(ActivationEnvironment.activeID)\""))
     }
 
-    @Test func `the subject environment carries the request's tokenized keys and no bare ones`() {
+    @Test(.timeLimit(.minutes(10)))
+    func `the subject environment carries the request's tokenized keys and no bare ones`() {
         var request = TestRunRequest(
             name: "t",
             activeID: "0123456789abcdef",
@@ -71,7 +73,8 @@ struct PhaseDTests {
         )
     }
 
-    @Test func `an id selector matches the full id or an unambiguous prefix of at least eight digits`() throws {
+    @Test(.timeLimit(.minutes(10)))
+    func `an id selector matches the full id or an unambiguous prefix of at least eight digits`() throws {
         let all = try sites()
         let target = try #require(all.first)
         #expect(try MutationSelector.select(all, by: [MutationSelector(parsing: target.id)]).map(\.id) == [target.id])
@@ -86,7 +89,9 @@ struct PhaseDTests {
         }
     }
 
-    @Test func `a location selector matches by path suffix, line and optional operator`() throws {
+    @Test(.timeLimit(.minutes(10))) func `a location selector matches by path suffix, line and optional operator`()
+        throws
+    {
         let all = try sites()
         let onLine = all.filter { ($0.line...$0.endLine).contains(3) }
         let byLine = try MutationSelector.select(all, by: [MutationSelector(parsing: "InventoryPolicy.swift:3")])
@@ -106,7 +111,7 @@ struct PhaseDTests {
         #expect(throws: LitmusFailure.self) { try MutationSelector(parsing: "InventoryPolicy.swift:0") }
     }
 
-    @Test func `several selectors keep plan order and drop repeats`() throws {
+    @Test(.timeLimit(.minutes(10))) func `several selectors keep plan order and drop repeats`() throws {
         let all = try sites()
         guard all.count >= 2 else { return }
         let picked = try MutationSelector.select(
@@ -158,7 +163,8 @@ struct PhaseDTests {
         return context.key(try #require(mutations.first))
     }
 
-    @Test func `a test edit invalidates the verdicts of the code it tests, not of its siblings`() throws {
+    @Test(.timeLimit(.minutes(10)))
+    func `a test edit invalidates the verdicts of the code it tests, not of its siblings`() throws {
         let root = SourcePath.canonical(
             FileManager.default.temporaryDirectory.appendingPathComponent("litmus-d54-\(UUID().uuidString)").path
         )
@@ -212,7 +218,8 @@ struct PhaseDTests {
 
     // MARK: - D1.1 Per-test reach by default
 
-    @Test func `per-test reach is on by default and an XCTest-only kill is never lost to narrowing`() async throws {
+    @Test(.timeLimit(.minutes(10)))
+    func `per-test reach is on by default and an XCTest-only kill is never lost to narrowing`() async throws {
         #expect(RunOptions().perTestReach)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-d11-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -232,7 +239,7 @@ struct PhaseDTests {
             "Tests/PkgTests/ReachTests.swift": """
             import Testing
             import Pkg
-            @Test func farAbove() { #expect(over(10)) }
+            @Test(.timeLimit(.minutes(10))) func farAbove() { #expect(over(10)) }
             """,
             "Tests/PkgTests/BoundaryTests.swift": """
             import XCTest
@@ -291,16 +298,17 @@ struct PhaseDTests {
             import Testing
             import A
             struct ATests {
-                @Test func first() {
+                @Test(.timeLimit(.minutes(10))) func first() {
                     #expect(a(true) == 1)
                 }
-                @Test func second() {
+                @Test(.timeLimit(.minutes(10))) func second() {
                     #expect(a(false) == 2)
                 }
             }
             // a trailing comment
             """,
-            "Tests/BTests/BTests.swift": "import Testing\nimport B\n@Test func onlyB() { #expect(b(true) == 3) }\n",
+            "Tests/BTests/BTests.swift":
+                "import Testing\nimport B\n@Test(.timeLimit(.minutes(10))) func onlyB() { #expect(b(true) == 3) }\n",
         ]
         for (path, text) in files {
             let url = URL(fileURLWithPath: root + "/" + path)
@@ -317,7 +325,8 @@ struct PhaseDTests {
         ChangeScope(changed: ChangedLines(files: files, deleted: deleted), breadth: .lines, source: "test", digest: "d")
     }
 
-    @Test func `a test-only change plans nothing without the flag, and its target's code with it`() async throws {
+    @Test(.timeLimit(.minutes(10)))
+    func `a test-only change plans nothing without the flag, and its target's code with it`() async throws {
         let root = try twoTargetPackage()
         defer { try? FileManager.default.removeItem(atPath: root) }
         let change = scope(["Tests/ATests/ATests.swift": [5...5]])
@@ -334,7 +343,8 @@ struct PhaseDTests {
         #expect(deletion.testDriven?.wholeFiles == ["Sources/B/B.swift"])
     }
 
-    @Test func `with per-test reach, an edit inside one test plans only the mutants that test reached`() async throws {
+    @Test(.timeLimit(.minutes(10)))
+    func `with per-test reach, an edit inside one test plans only the mutants that test reached`() async throws {
         let root = try twoTargetPackage()
         defer { try? FileManager.default.removeItem(atPath: root) }
         let sites = try MutationPlanner.mutations(
@@ -385,7 +395,8 @@ struct PhaseDTests {
 
     // MARK: - D4 Scheme synthesis
 
-    @Test func `a workspace's synthesized scheme tests the projects it lists, not the ones beside it`() throws {
+    @Test(.timeLimit(.minutes(10)))
+    func `a workspace's synthesized scheme tests the projects it lists, not the ones beside it`() throws {
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Fixtures/ExampleApp").path
         let parent = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-d4ws-\(UUID().uuidString)")
@@ -414,7 +425,8 @@ struct PhaseDTests {
         #expect(!text.contains("Examples/"))
     }
 
-    @Test func `the synthesized scheme tests every unit-test target and lives only in the workspace copy`() throws {
+    @Test(.timeLimit(.minutes(10)))
+    func `the synthesized scheme tests every unit-test target and lives only in the workspace copy`() throws {
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Fixtures/ExampleApp").path
         let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-d4-\(UUID().uuidString)")
@@ -438,7 +450,8 @@ struct PhaseDTests {
         try XcodeTestConfiguration.preflight(driver: driver, workspace: workspace)
     }
 
-    @Test func `a test target failing unmutated is quarantined and only its mutants go unrun`() async throws {
+    @Test(.timeLimit(.minutes(10)))
+    func `a test target failing unmutated is quarantined and only its mutants go unrun`() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-d42-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let pkg = root.appendingPathComponent("Pkg")
@@ -458,9 +471,11 @@ struct PhaseDTests {
             """,
             "Sources/A/A.swift": "public func a(_ x: Bool) -> Int { x ? 1 : 2 }\n",
             "Sources/B/B.swift": "public func b(_ y: Bool) -> Int { y ? 3 : 4 }\n",
-            "Tests/ATests/ATests.swift": "import Testing\nimport A\n@Test func both() { #expect(a(true) == 1) }\n",
+            "Tests/ATests/ATests.swift":
+                "import Testing\nimport A\n@Test(.timeLimit(.minutes(10))) func both() { #expect(a(true) == 1) }\n",
             // Fails unmutated: an environment assumption that does not hold here.
-            "Tests/BTests/BTests.swift": "import Testing\nimport B\n@Test func broken() { #expect(b(true) == 4) }\n",
+            "Tests/BTests/BTests.swift":
+                "import Testing\nimport B\n@Test(.timeLimit(.minutes(10))) func broken() { #expect(b(true) == 4) }\n",
         ]
         for (path, text) in files {
             let url = pkg.appendingPathComponent(path)

@@ -26,7 +26,9 @@ import Testing
             )
         }
 
-        @Test func `shared-process verdicts equal isolated verdicts, mutant by mutant`() async throws {
+        @Test(.timeLimit(.minutes(10))) func `shared-process verdicts equal isolated verdicts, mutant by mutant`()
+            async throws
+        {
             let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent("Fixtures/SharedProcess").path
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-d1-\(UUID().uuidString)")

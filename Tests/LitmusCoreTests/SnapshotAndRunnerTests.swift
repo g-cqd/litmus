@@ -22,7 +22,7 @@ private func fixture(_ source: String = "public func choice(_ value: Bool) -> In
     return root
 }
 
-@Test func `snapshot edits cannot change original and traversal is rejected`() async throws {
+@Test(.timeLimit(.minutes(10))) func `snapshot edits cannot change original and traversal is rejected`() async throws {
     let base = try fixture()
     defer { try? FileManager.default.removeItem(at: base) }
     let source = base.appendingPathComponent("input").path
@@ -39,7 +39,7 @@ private func fixture(_ source: String = "public func choice(_ value: Bool) -> In
     }
 }
 
-@Test func `snapshot leaves a symlink out, lists it, and never follows it`() async throws {
+@Test(.timeLimit(.minutes(10))) func `snapshot leaves a symlink out, lists it, and never follows it`() async throws {
     let base = try fixture()
     defer { try? FileManager.default.removeItem(at: base) }
     try FileManager.default.createDirectory(atPath: base.path + "/input/.claude", withIntermediateDirectories: true)
@@ -211,7 +211,8 @@ private func run(
     return (artifact, base)
 }
 
-@Test(arguments: [false, true]) func `a kill needs the mutant's own activation and a passing control`(
+@Test(.timeLimit(.minutes(10)), arguments: [false, true])
+func `a kill needs the mutant's own activation and a passing control`(
     swiftTestingOnly: Bool
 ) async throws {
     let executor = FakeExecutor(.init(swiftTestingOnly: swiftTestingOnly))
@@ -233,7 +234,9 @@ private func run(
     #expect(!journal.truncated)
 }
 
-@Test func `with no kill confirmation, the first failure after activation is the kill`() async throws {
+@Test(.timeLimit(.minutes(10))) func `with no kill confirmation, the first failure after activation is the kill`()
+    async throws
+{
     let executor = FakeExecutor()
     let base = try fixture()
     defer { try? FileManager.default.removeItem(at: base) }
@@ -248,7 +251,8 @@ private func run(
     #expect(executor.calls.withLock { $0.count } == 2)
 }
 
-@Test func `a mutant the control never reached is no coverage, and is not run`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a mutant the control never reached is no coverage, and is not run`() async throws
+{
     let executor = FakeExecutor(.init(reach: false))
     let (result, base) = try await run(executor)
     defer { try? FileManager.default.removeItem(at: base) }
@@ -257,7 +261,7 @@ private func run(
     #expect(result.score.percent == 0)
 }
 
-@Test func `a failure without activation is rerun and never counts as a kill`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a failure without activation is rerun and never counts as a kill`() async throws {
     let executor = FakeExecutor(.init(markActive: false))
     let (result, base) = try await run(executor)
     defer { try? FileManager.default.removeItem(at: base) }
@@ -266,7 +270,7 @@ private func run(
     #expect(!result.isSuccessfulExecution)
 }
 
-@Test func `a repeated crash after activation is a crash kill`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a repeated crash after activation is a crash kill`() async throws {
     let executor = FakeExecutor(.init(active: .crash))
     let (result, base) = try await run(executor)
     defer { try? FileManager.default.removeItem(at: base) }
@@ -274,7 +278,9 @@ private func run(
     #expect(result.score.percent == 100)
 }
 
-@Test func `timeouts are rerun alone, after the parallel pass, with twice the deadline`() async throws {
+@Test(.timeLimit(.minutes(10))) func `timeouts are rerun alone, after the parallel pass, with twice the deadline`()
+    async throws
+{
     let executor = FakeExecutor(.init(active: .hang))
     let (result, base) = try await run(executor, source: twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
@@ -293,7 +299,8 @@ private let twoSites = """
     public func b(_ y: Bool) -> Int { y ? 3 : 4 }
     """
 
-@Test func `a mutant that does not compile is isolated by its diagnostic; the others still run`() async throws {
+@Test(.timeLimit(.minutes(10)))
+func `a mutant that does not compile is isolated by its diagnostic; the others still run`() async throws {
     let executor = FakeExecutor(.init(poison: "!(y)"))
     let (result, base) = try await run(executor, source: twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
@@ -306,7 +313,9 @@ private let twoSites = """
     #expect(result.policy?.baselineBuild == "unmutated (the first schema did not build)")
 }
 
-@Test func `the unmutated baseline is still available, at one build and one suite run more`() async throws {
+@Test(.timeLimit(.minutes(10))) func `the unmutated baseline is still available, at one build and one suite run more`()
+    async throws
+{
     let executor = FakeExecutor()
     let (result, base) = try await run(executor) { $0.inactiveSchemaBaseline = false }
     defer { try? FileManager.default.removeItem(at: base) }
@@ -319,7 +328,8 @@ private let twoSites = """
     #expect(result.policy?.baselineBuild == "unmutated")
 }
 
-@Test func `a subject that does not build stops the run even when the schema is the baseline`() async throws {
+@Test(.timeLimit(.minutes(10)))
+func `a subject that does not build stops the run even when the schema is the baseline`() async throws {
     let executor = FakeExecutor(.init(poison: "choice"))
     let (base, driver) = try { () throws -> (URL, BuildDriver) in
         let base = try fixture()
@@ -339,7 +349,8 @@ private let twoSites = """
     #expect(checkpoint.results.map(\.verdict) == [.notRun])
 }
 
-@Test func `without a compiler error in the mutant's file, a failing build is not called unviable`() async throws {
+@Test(.timeLimit(.minutes(10)))
+func `without a compiler error in the mutant's file, a failing build is not called unviable`() async throws {
     let executor = FakeExecutor(.init(poison: "!(y)", poisonDiagnostic: false))
     let (result, base) = try await run(executor, source: twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
@@ -347,7 +358,7 @@ private let twoSites = """
     #expect(verdicts == ["x": .killed, "y": .infrastructureError])
 }
 
-@Test func `failed baseline preserves an incomplete checkpoint with no kills`() async throws {
+@Test(.timeLimit(.minutes(10))) func `failed baseline preserves an incomplete checkpoint with no kills`() async throws {
     let base = try fixture()
     defer { try? FileManager.default.removeItem(at: base) }
     let driver = try BuildDriver(root: base.path + "/input", scheme: nil, destination: nil)
@@ -364,7 +375,9 @@ private let twoSites = """
     #expect(!checkpoint.isSuccessfulExecution)
 }
 
-@Test func `a lone mutant whose error lands elsewhere in its own file is unviable`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a lone mutant whose error lands elsewhere in its own file is unviable`()
+    async throws
+{
     let executor = FakeExecutor(.init(poison: "!(y)", diagnosticOffset: 3))
     let (result, base) = try await run(executor, source: twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
@@ -372,7 +385,7 @@ private let twoSites = """
     #expect(verdicts == ["x": .killed, "y": .unviable])
 }
 
-@Test func `a directory is removed, and a missing one counts as removed`() throws {
+@Test(.timeLimit(.minutes(10))) func `a directory is removed, and a missing one counts as removed`() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-remove-\(UUID().uuidString)")
         .path
     try FileManager.default.createDirectory(atPath: directory + "/a/b", withIntermediateDirectories: true)
@@ -395,7 +408,9 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     ChangeScope(changed: ChangedLines(files: files), breadth: breadth, source: "test diff", digest: "d")
 }
 
-@Test func `a change that reaches no site ends before any copy, build or toolchain query`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a change that reaches no site ends before any copy, build or toolchain query`()
+    async throws
+{
     let executor = FakeExecutor()
     let (artifact, base) = try await run(executor, source: scopedSites) { options in
         options.scope = scope(["Sources/Example/F.swift": [4...4], "README.md": [1...3]])
@@ -414,7 +429,8 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(report.successfulExecution)
 }
 
-@Test func `a change runs the sites on its changed lines only, or its files with those lines first`() async throws {
+@Test(.timeLimit(.minutes(10)))
+func `a change runs the sites on its changed lines only, or its files with those lines first`() async throws {
     let (lines, base) = try await run(FakeExecutor(), source: scopedSites) { options in
         options.scope = scope(["Sources/Example/F.swift": [5...5]])
     }
@@ -430,7 +446,8 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(files.plan.scope?.onChangedLines == [files.plan.mutations[0].id])
 }
 
-@Test func `a scoped plan reads only the changed Swift files and notes stale or excluded ones`() async throws {
+@Test(.timeLimit(.minutes(10)))
+func `a scoped plan reads only the changed Swift files and notes stale or excluded ones`() async throws {
     let base = try fixture(scopedSites)
     defer { try? FileManager.default.removeItem(at: base) }
     let root = base.path + "/input"
@@ -446,7 +463,7 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(plan.notes.contains { $0.path == "Gone.swift" && $0.isDegraded })
 }
 
-@Test func `a multi-line site is in scope when any of its lines changed`() {
+@Test(.timeLimit(.minutes(10))) func `a multi-line site is in scope when any of its lines changed`() {
     let site = Mutation(
         id: "0000000000000001",
         path: "A.swift",
@@ -466,7 +483,9 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(scope(["B.swift": [10...10]], .files).priority(of: site) == nil)
 }
 
-@Test func `a run reports its own cost: builds, test runs, CPU, memory and disk`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a run reports its own cost: builds, test runs, CPU, memory and disk`()
+    async throws
+{
     let executor = FakeExecutor()
     let (artifact, base) = try await run(executor)
     defer { try? FileManager.default.removeItem(at: base) }
@@ -479,7 +498,9 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
 
 // MARK: - Reuse and budgets
 
-@Test func `a result store reuses every verdict of an unchanged subject without building`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a result store reuses every verdict of an unchanged subject without building`()
+    async throws
+{
     let base = try fixture(twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
     let driver = try BuildDriver(root: base.path + "/input", scheme: nil, destination: nil)
@@ -515,7 +536,8 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(changed.builds.withLock { $0 } > 0)
 }
 
-@Test func `a key changes with the closure, the options and the toolchain, and not with lines moving`() throws {
+@Test(.timeLimit(.minutes(10)))
+func `a key changes with the closure, the options and the toolchain, and not with lines moving`() throws {
     let base = try fixture(twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
     let root = base.path + "/input"
@@ -584,7 +606,8 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     )
 }
 
-@Test func `a store record that fails verification is a miss, never a verdict`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a store record that fails verification is a miss, never a verdict`() async throws
+{
     let base = try fixture()
     defer { try? FileManager.default.removeItem(at: base) }
     let mutation = try #require(try MutationPlanner.mutations(in: "let x = true ? 1 : 2", path: "A.swift").first)
@@ -633,7 +656,7 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     }
 }
 
-@Test func `a store past its limit evicts the least recently used records`() throws {
+@Test(.timeLimit(.minutes(10))) func `a store past its limit evicts the least recently used records`() throws {
     let base = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-evict-" + UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: base) }
     let mutation = try #require(try MutationPlanner.mutations(in: "let x = true ? 1 : 2", path: "A.swift").first)
@@ -645,7 +668,9 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(store.lookup("key0", mutation: mutation) == nil)
 }
 
-@Test func `max-mutants leaves the rest untested, and a resumed run decides only those`() async throws {
+@Test(.timeLimit(.minutes(10))) func `max-mutants leaves the rest untested, and a resumed run decides only those`()
+    async throws
+{
     let base = try fixture(twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
     let driver = try BuildDriver(root: base.path + "/input", scheme: nil, destination: nil)
@@ -679,7 +704,9 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     )
 }
 
-@Test func `only-id runs just the selected mutant and never reuses its earlier verdict`() async throws {
+@Test(.timeLimit(.minutes(10))) func `only-id runs just the selected mutant and never reuses its earlier verdict`()
+    async throws
+{
     let base = try fixture(twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
     let driver = try BuildDriver(root: base.path + "/input", scheme: nil, destination: nil)
@@ -704,7 +731,8 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(executor.calls.withLock { $0.map(activeID(in:)) }.contains(target.id))
 }
 
-@Test func `an accepted mutant is not run; verify-accepted runs it and reports a stale acceptance`() async throws {
+@Test(.timeLimit(.minutes(10)))
+func `an accepted mutant is not run; verify-accepted runs it and reports a stale acceptance`() async throws {
     let base = try fixture(twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
     let root = base.path + "/input"
@@ -769,7 +797,8 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(try !AcceptedMutants.unaccept(target.id, root: root))
 }
 
-@Test func `an acceptance whose code is gone is reported stale; one of an unread file is not judged`() throws {
+@Test(.timeLimit(.minutes(10)))
+func `an acceptance whose code is gone is reported stale; one of an unread file is not judged`() throws {
     let base = try fixture(twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
     let root = SourcePath.canonical(base.path + "/input")
@@ -807,7 +836,8 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(verified.mutations.count == sites.count && verified.acceptance?.verifying == true)
 }
 
-@Test func `the agent report lists each survivor with its code, a verify command and the summary`() async throws {
+@Test(.timeLimit(.minutes(10)))
+func `the agent report lists each survivor with its code, a verify command and the summary`() async throws {
     let (result, base) = try await run(FakeExecutor(.init(active: .pass)), source: twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
     let document = AgentReport.make(result, root: base.path + "/input", domain: .logic)
@@ -824,7 +854,8 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(AgentReport.shellQuoted("it's") == #"'it'\''s'"#)
 }
 
-@Test func `clean removes a finished run's workspace and build products and keeps its evidence`() async throws {
+@Test(.timeLimit(.minutes(10)))
+func `clean removes a finished run's workspace and build products and keeps its evidence`() async throws {
     let (result, base) = try await run(FakeExecutor()) { $0.keepWorkspace = true }
     defer { try? FileManager.default.removeItem(at: base) }
     #expect(result.complete)
@@ -840,7 +871,7 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(FileManager.default.fileExists(atPath: run + "/run.json"))
 }
 
-@Test func `a time budget stops starting work and reports what did not run`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a time budget stops starting work and reports what did not run`() async throws {
     let executor = FakeExecutor(.init(buildDelay: .milliseconds(1_200)))
     let (result, base) = try await run(executor, source: twoSites) { $0.budgetSeconds = 1 }
     defer { try? FileManager.default.removeItem(at: base) }
@@ -853,7 +884,8 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
 
 // MARK: - Workspaces
 
-@Test func `in place, originals are backed up before a rewrite and restored, also by a later start`() throws {
+@Test(.timeLimit(.minutes(10)))
+func `in place, originals are backed up before a rewrite and restored, also by a later start`() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-inplace-" + UUID().uuidString).path
     defer { try? FileManager.default.removeItem(atPath: root) }
     try FileManager.default.createDirectory(atPath: root + "/Sources", withIntermediateDirectories: true)
@@ -887,7 +919,9 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(!FileManager.default.fileExists(atPath: root + "/.litmus"))
 }
 
-@Test func `an in-place run decides the same verdicts and leaves the subject as it was`() async throws {
+@Test(.timeLimit(.minutes(10))) func `an in-place run decides the same verdicts and leaves the subject as it was`()
+    async throws
+{
     let base = try fixture(twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
     let root = base.path + "/input"
@@ -900,7 +934,8 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(result.notes.contains { $0.hasPrefix("in place: 1 mutated file(s) restored and verified") })
 }
 
-@Test func `an in-place run that fails restores the subject before it reports`() async throws {
+@Test(.timeLimit(.minutes(10))) func `an in-place run that fails restores the subject before it reports`() async throws
+{
     let base = try fixture(twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
     let root = base.path + "/input"
@@ -918,8 +953,8 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     #expect(!FileManager.default.fileExists(atPath: root + "/.litmus"))
 }
 
-@Test func `a persistent workspace is synchronised by manifest, verified, and refused when not Litmus's`() async throws
-{
+@Test(.timeLimit(.minutes(10)))
+func `a persistent workspace is synchronised by manifest, verified, and refused when not Litmus's`() async throws {
     let base = try fixture(twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
     let source = base.path + "/input", directory = base.path + "/persistent"
@@ -958,7 +993,7 @@ private func scope(_ files: [String: [ClosedRange<Int>]], _ breadth: ChangeScope
     lock.release()
 }
 
-@Test func `a persistent run keeps its workspace and the next run reuses it`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a persistent run keeps its workspace and the next run reuses it`() async throws {
     let base = try fixture(twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
     let directory = base.path + "/persistent"
@@ -988,7 +1023,8 @@ private func runIn(
 
 // MARK: - Gate and reports
 
-@Test func `a baseline of anchored fingerprints gates only new survivors, and a change scopes the findings`()
+@Test(.timeLimit(.minutes(10)))
+func `a baseline of anchored fingerprints gates only new survivors, and a change scopes the findings`()
     async throws
 {
     let (artifact, base) = try await run(FakeExecutor(.init(active: .pass)), source: twoSites)
@@ -1011,7 +1047,9 @@ private func runIn(
     #expect(scoped.findings.map(\.line) == [2] && scoped.outOfScope.count == 1)
 }
 
-@Test func `Stryker's report schema and a Markdown summary are rendered from a run`() async throws {
+@Test(.timeLimit(.minutes(10))) func `Stryker's report schema and a Markdown summary are rendered from a run`()
+    async throws
+{
     let (artifact, base) = try await run(FakeExecutor(), source: twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
     let root = base.path + "/input"
@@ -1036,7 +1074,7 @@ private func runIn(
 
 // MARK: - Sharding
 
-@Test func `shards partition by module unit, deterministically and disjointly`() throws {
+@Test(.timeLimit(.minutes(10))) func `shards partition by module unit, deterministically and disjointly`() throws {
     func site(_ path: String, _ n: Int) -> Mutation {
         Mutation(
             id: String(repeating: "0", count: 15) + String(n, radix: 16),
@@ -1065,7 +1103,8 @@ private func runIn(
     #expect(throws: LitmusFailure.self) { try ShardSelection(parsing: "1") }
 }
 
-@Test func `two shards merged decide what one run decides, and mismatched shards are refused`() async throws {
+@Test(.timeLimit(.minutes(10)))
+func `two shards merged decide what one run decides, and mismatched shards are refused`() async throws {
     let base = try fixture(twoSites)
     defer { try? FileManager.default.removeItem(at: base) }
     let root = base.path + "/input"
@@ -1099,7 +1138,7 @@ private func runIn(
     }
 }
 
-@Test func `a path that does not exist yet is spelled as it will be once it does`() throws {
+@Test(.timeLimit(.minutes(10))) func `a path that does not exist yet is spelled as it will be once it does`() throws {
     let parent = "/private/tmp/litmus-canonical-" + UUID().uuidString
     try FileManager.default.createDirectory(atPath: parent, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(atPath: parent) }
@@ -1109,7 +1148,7 @@ private func runIn(
     #expect(!future.hasPrefix("/private/"))
 }
 
-@Test func `in place, a package depending on one outside the root is never reused`() throws {
+@Test(.timeLimit(.minutes(10))) func `in place, a package depending on one outside the root is never reused`() throws {
     let base = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-outside-" + UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: base) }
     let root = base.path + "/App"
@@ -1167,7 +1206,7 @@ private let fourConditions = """
     }
     """
 
-@Test func `a control that differs once is retried and its verdicts stand`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a control that differs once is retried and its verdicts stand`() async throws {
     // The unmutated baseline runs first; the schema's control then fails once and passes on its retry.
     let executor = FakeExecutor(.init(controlFailures: 1))
     let (result, base) = try await run(executor, source: fourConditions) { $0.inactiveSchemaBaseline = false }
@@ -1178,7 +1217,9 @@ private let fourConditions = """
     #expect(!result.notes.contains { $0.contains("bisecting") })
 }
 
-@Test func `a control that keeps differing is bisected to the mutant that breaks it`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a control that keeps differing is bisected to the mutant that breaks it`()
+    async throws
+{
     let executor = FakeExecutor(.init(controlPoison: "!(c)"))
     let (result, base) = try await run(executor, source: fourConditions) { $0.inactiveSchemaBaseline = false }
     defer { try? FileManager.default.removeItem(at: base) }
@@ -1192,7 +1233,9 @@ private let fourConditions = """
     #expect(!result.isSuccessfulExecution, "an unresolved mutant still blocks a green run")
 }
 
-@Test func `bisection is bounded: a control that always differs does not build forever`() async throws {
+@Test(.timeLimit(.minutes(10))) func `bisection is bounded: a control that always differs does not build forever`()
+    async throws
+{
     let executor = FakeExecutor(.init(controlPoison: "_reach("))
     let (result, base) = try await run(executor, source: fourConditions) { $0.inactiveSchemaBaseline = false }
     defer { try? FileManager.default.removeItem(at: base) }
@@ -1200,7 +1243,8 @@ private let fourConditions = """
     #expect(executor.builds.withLock { $0 } <= 1 + 2 * 4 + 1, "builds: \(executor.builds.withLock { $0 })")
 }
 
-@Test func `run preserves skipped view-builder counts from clonePlan into RunArtifact and MarkdownReport`()
+@Test(.timeLimit(.minutes(10)))
+func `run preserves skipped view-builder counts from clonePlan into RunArtifact and MarkdownReport`()
     async throws
 {
     let source = """

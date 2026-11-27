@@ -88,7 +88,7 @@ import Testing
             return (directory, directory + "/driver", sites)
         }
 
-        @Test(arguments: [false, true])
+        @Test(.timeLimit(.minutes(10)), arguments: [false, true])
         func `one process runs mutant after mutant from the page, and counts evaluations`(strict: Bool) throws {
             let (directory, binary, sites) = try build(strict: strict)
             defer { try? FileManager.default.removeItem(atPath: directory) }
@@ -123,7 +123,7 @@ import Testing
             #expect(page.evaluations() == second)
         }
 
-        @Test func `without a valid page the process keeps LITMUS_ACTIVE_ID`() throws {
+        @Test(.timeLimit(.minutes(10))) func `without a valid page the process keeps LITMUS_ACTIVE_ID`() throws {
             let (directory, binary, sites) = try build(strict: false)
             defer { try? FileManager.default.removeItem(atPath: directory) }
             let site = try #require(sites.first)

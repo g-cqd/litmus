@@ -31,21 +31,25 @@ private func gone(_ pid: pid_t) async throws -> Bool {
     return false
 }
 
-@Test func `a child that left the process group does not outlive a command that exited`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a child that left the process group does not outlive a command that exited`()
+    async throws
+{
     let (pid, output) = try await escapedChild(shellTail: "sleep 1; exit 0", timeout: 30)
     #expect(output.exitStatus == 0)
     #expect(pid > 1)
     #expect(try await gone(pid))
 }
 
-@Test func `a child that left the process group does not outlive a command that timed out`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a child that left the process group does not outlive a command that timed out`()
+    async throws
+{
     let (pid, output) = try await escapedChild(shellTail: "sleep 600", timeout: 2)
     #expect(output.timedOut)
     #expect(pid > 1)
     #expect(try await gone(pid))
 }
 
-@Test func `arguments pass through unchanged`() async throws {
+@Test(.timeLimit(.minutes(10))) func `arguments pass through unchanged`() async throws {
     let arguments = ["plain", "with space", "", "quote's \"double\"", "$HOME", "-c", "*"]
     let output = try await BoundedExecutor().execute(
         ToolCommand(executable: "/usr/bin/printf", arguments: ["%s\\n"] + arguments),
@@ -57,7 +61,7 @@ private func gone(_ pid: pid_t) async throws -> Bool {
     #expect(String(decoding: output.stdout, as: UTF8.self) == arguments.map { $0 + "\n" }.joined())
 }
 
-@Test func `a missing executable is an error`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a missing executable is an error`() async throws {
     await #expect(throws: LitmusFailure.self) {
         try await BoundedExecutor().execute(
             ToolCommand(executable: "/nonexistent/litmus-tool", arguments: []),
@@ -71,7 +75,7 @@ private func gone(_ pid: pid_t) async throws -> Bool {
 /// An executable outside SIP (`/usr/bin/env` is protected, so dyld would strip DYLD_* from it whatever the shell did).
 private let unprotectedPython = "/Applications/Xcode.app/Contents/Developer/usr/bin/python3"
 
-@Test(.enabled(if: FileManager.default.isExecutableFile(atPath: unprotectedPython)))
+@Test(.timeLimit(.minutes(10)), .enabled(if: FileManager.default.isExecutableFile(atPath: unprotectedPython)))
 func `DYLD variables reach a command outside SIP`() async throws {
     let output = try await BoundedExecutor().execute(
         ToolCommand(
@@ -88,7 +92,7 @@ func `DYLD variables reach a command outside SIP`() async throws {
     #expect(!lines.contains { $0.hasPrefix("LITMUS_TRAMPOLINE_") })
 }
 
-@Test func `a monitor stops the command and its reason is kept`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a monitor stops the command and its reason is kept`() async throws {
     var supervision = Supervision()
     supervision.monitor = { stop in
         try? await Task.sleep(for: .milliseconds(150))
@@ -105,7 +109,7 @@ func `DYLD variables reach a command outside SIP`() async throws {
     #expect(output.terminationSignal == SIGTERM)
 }
 
-@Test func `a command past the memory limit is stopped and says so`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a command past the memory limit is stopped and says so`() async throws {
     var supervision = Supervision()
     supervision.memoryLimitBytes = 64 << 20
     supervision.sampling = .milliseconds(25)
@@ -121,7 +125,7 @@ func `DYLD variables reach a command outside SIP`() async throws {
     #expect(abnormalEnd(output, "XCTest").contains("memory limit"))
 }
 
-@Test func `a crash is told by its signal`() async throws {
+@Test(.timeLimit(.minutes(10))) func `a crash is told by its signal`() async throws {
     let output = try await BoundedExecutor().execute(
         ToolCommand(executable: "/bin/sh", arguments: ["-c", "kill -ABRT $$"]),
         directory: "/",

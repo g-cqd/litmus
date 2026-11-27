@@ -3,7 +3,8 @@ import Testing
 
 @testable import LitmusCore
 
-@Test func `nested packages retain the snapshot root but execute inside the package`() throws {
+@Test(.timeLimit(.minutes(10))) func `nested packages retain the snapshot root but execute inside the package`() throws
+{
     let driver = try BuildDriver(
         root: "/repo",
         packagePath: "Modules/Library",
@@ -19,7 +20,8 @@ import Testing
     #expect(try ArtifactCodec.decode(BuildDriver.self, bytes: ArtifactCodec.json(driver)) == driver)
 }
 
-@Test func `package paths reject traversal absolute paths and conflicting project selection`() {
+@Test(.timeLimit(.minutes(10))) func `package paths reject traversal absolute paths and conflicting project selection`()
+{
     for path in ["/outside", "../outside", "A/../../outside", ".", ""] {
         #expect(throws: (any Error).self) {
             try BuildDriver(root: "/repo", packagePath: path, scheme: nil, destination: nil)
@@ -36,7 +38,7 @@ import Testing
     }
 }
 
-@Test func `empty xctestrun explains scheme plan and corrective action`() throws {
+@Test(.timeLimit(.minutes(10))) func `empty xctestrun explains scheme plan and corrective action`() throws {
     let plist: [String: Any] = [
         "ContainerInfo": ["SchemeName": "Library"], "TestPlan": ["Name": "UnitTests"], "TestConfigurations": [Any](),
     ]
@@ -53,7 +55,8 @@ import Testing
     }
 }
 
-@Test func `test plan validates container paths relative to the execution directory`() throws {
+@Test(.timeLimit(.minutes(10))) func `test plan validates container paths relative to the execution directory`() throws
+{
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
     try FileManager.default.createDirectory(atPath: root + "/Pkg", withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(atPath: root) }
@@ -96,8 +99,8 @@ private func configurationFixture() throws -> String {
     return root
 }
 
-@Test func `nested package scope excludes sibling mutations and preserves repository relative identities`() async throws
-{
+@Test(.timeLimit(.minutes(10)))
+func `nested package scope excludes sibling mutations and preserves repository relative identities`() async throws {
     let root = try configurationFixture()
     defer { try? FileManager.default.removeItem(atPath: root) }
     let plan = try await MutationPlanner.plan(root: root, packagePath: "Pkg")
@@ -113,7 +116,8 @@ private func configurationFixture() throws -> String {
     #expect(changed.mutations.isEmpty)
 }
 
-@Test func `shared schemes fail preflight on absent targets missing plans and invalid container paths`() throws {
+@Test(.timeLimit(.minutes(10)))
+func `shared schemes fail preflight on absent targets missing plans and invalid container paths`() throws {
     let root = try configurationFixture()
     defer { try? FileManager.default.removeItem(atPath: root) }
     let path = root + "/Pkg/.swiftpm/xcode/xcshareddata/xcschemes/Library.xcscheme"
@@ -131,7 +135,7 @@ private func configurationFixture() throws -> String {
     try XcodeTestConfiguration.preflight(driver: driver, workspace: root)
 }
 
-@Test func `package validation refuses missing manifests and symlink escape`() throws {
+@Test(.timeLimit(.minutes(10))) func `package validation refuses missing manifests and symlink escape`() throws {
     let root = try configurationFixture()
     defer { try? FileManager.default.removeItem(atPath: root) }
     let valid = try BuildDriver(root: root, packagePath: "Pkg", scheme: nil, destination: nil)
@@ -156,7 +160,8 @@ private struct NoExecution: ProcessExecutor {
     }
 }
 
-@Test func `existing output is rejected before executing or changing its files`() async throws {
+@Test(.timeLimit(.minutes(10))) func `existing output is rejected before executing or changing its files`() async throws
+{
     let root = try configurationFixture()
     defer { try? FileManager.default.removeItem(atPath: root) }
     let driver = try BuildDriver(root: root + "/Pkg", scheme: nil, destination: nil)
@@ -175,7 +180,7 @@ private struct NoExecution: ProcessExecutor {
     #expect(try String(contentsOfFile: output + "/evidence", encoding: .utf8) == "keep")
 }
 
-@Test func `valid nonempty xctestrun is accepted and excessive nesting is refused`() throws {
+@Test(.timeLimit(.minutes(10))) func `valid nonempty xctestrun is accepted and excessive nesting is refused`() throws {
     let valid: [String: Any] = [
         "TestConfigurations": [["TestTargets": [["TestBundlePath": "__TESTROOT__/Library.xctest"]]]]
     ]
@@ -189,7 +194,7 @@ private struct NoExecution: ProcessExecutor {
     #expect(throws: (any Error).self) { try XcodeTestConfiguration.validateTestRun(bytes, path: "deep.xctestrun") }
 }
 
-@Test func `explicit test plan is passed to Xcode and requires a scheme`() throws {
+@Test(.timeLimit(.minutes(10))) func `explicit test plan is passed to Xcode and requires a scheme`() throws {
     var driver = try BuildDriver(root: "/repo", scheme: "Library", destination: "macOS")
     driver.testPlan = "Focused"
     let arguments = driver.buildCommand(workspace: "/copy", artifacts: "/artifacts").arguments
@@ -197,7 +202,8 @@ private struct NoExecution: ProcessExecutor {
     #expect(arguments.contains("Focused"))
 }
 
-@Test func `explicit plan selection rejects unknown plans and validates only the selected plan`() throws {
+@Test(.timeLimit(.minutes(10)))
+func `explicit plan selection rejects unknown plans and validates only the selected plan`() throws {
     let root = try configurationFixture()
     defer { try? FileManager.default.removeItem(atPath: root) }
     let schemePath = root + "/Pkg/.swiftpm/xcode/xcshareddata/xcschemes/Library.xcscheme"
@@ -215,7 +221,8 @@ private struct NoExecution: ProcessExecutor {
     #expect(throws: (any Error).self) { try XcodeTestConfiguration.preflight(driver: driver, workspace: root) }
 }
 
-@Test func `disabled targets malformed plans and corrupt artifacts cannot pass configuration checks`() throws {
+@Test(.timeLimit(.minutes(10)))
+func `disabled targets malformed plans and corrupt artifacts cannot pass configuration checks`() throws {
     let disabled = Array(
         #"{"testTargets":[{"enabled":false,"target":{"containerPath":"container:","name":"LibraryTests"}}]}"#.utf8
     )
@@ -230,7 +237,8 @@ private struct NoExecution: ProcessExecutor {
     }
 }
 
-@Test func `legacy build driver artifacts decode without nested package or selected plan fields`() throws {
+@Test(.timeLimit(.minutes(10)))
+func `legacy build driver artifacts decode without nested package or selected plan fields`() throws {
     let bytes = Array(#"{"root":"/repo","xcodebuildArguments":[]}"#.utf8)
     let driver = try ArtifactCodec.decode(BuildDriver.self, bytes: bytes)
     #expect(driver.packagePath == nil)
@@ -238,7 +246,7 @@ private struct NoExecution: ProcessExecutor {
     #expect(driver.executionDirectory(workspace: "/copy") == "/copy")
 }
 
-@Test func `snapshot preserves package shared schemes and plan context`() async throws {
+@Test(.timeLimit(.minutes(10))) func `snapshot preserves package shared schemes and plan context`() async throws {
     let root = try configurationFixture()
     defer { try? FileManager.default.removeItem(atPath: root) }
     let file = "Pkg/.swiftpm/xcode/xcshareddata/xcschemes/Library.xcscheme"
@@ -250,7 +258,9 @@ private struct NoExecution: ProcessExecutor {
     #expect(FileManager.default.fileExists(atPath: copy + "/" + file))
 }
 
-@Test func `default test plan is checked without rejecting an unselected missing plan`() throws {
+@Test(.timeLimit(.minutes(10))) func `default test plan is checked without rejecting an unselected missing plan`()
+    throws
+{
     let root = try configurationFixture()
     defer { try? FileManager.default.removeItem(atPath: root) }
     let scheme = root + "/Pkg/.swiftpm/xcode/xcshareddata/xcschemes/Library.xcscheme"
@@ -265,7 +275,9 @@ private struct NoExecution: ProcessExecutor {
     try XcodeTestConfiguration.preflight(driver: driver, workspace: root)
 }
 
-@Test func `explicit project scheme takes precedence over a same-named package scheme`() throws {
+@Test(.timeLimit(.minutes(10))) func `explicit project scheme takes precedence over a same-named package scheme`()
+    throws
+{
     let root = try configurationFixture()
     defer { try? FileManager.default.removeItem(atPath: root) }
     let project = root + "/App.xcodeproj/xcshareddata/xcschemes"
@@ -280,7 +292,7 @@ private struct NoExecution: ProcessExecutor {
     #expect(throws: (any Error).self) { try XcodeTestConfiguration.preflight(driver: driver, workspace: root) }
 }
 
-@Test func `xcodebuild arguments that select tests keep the run on xcodebuild`() throws {
+@Test(.timeLimit(.minutes(10))) func `xcodebuild arguments that select tests keep the run on xcodebuild`() throws {
     var driver = try BuildDriver(root: "/repo", scheme: "Library", destination: "platform=iOS Simulator,id=ABC")
     #expect(!driver.xcodebuildArgumentsSelectTests)
     driver.xcodebuildArguments = ["-skipMacroValidation", "-parallel-testing-enabled", "NO"]

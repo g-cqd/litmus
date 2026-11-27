@@ -7,7 +7,8 @@ private func finished(_ test: String, _ status: String) -> String {
     #"{"_type":{"_name":"StreamedEvent"},"name":{"_type":{"_name":"String"},"_value":"testFinished"},"structuredPayload":{"test":{"identifier":{"_type":{"_name":"String"},"_value":"\#(test)"},"testStatus":{"_type":{"_name":"String"},"_value":"\#(status)"}}}}"#
 }
 
-@Test func `the result stream shows a failed test and leaves a partial line for the next scan`() {
+@Test(.timeLimit(.minutes(10)))
+func `the result stream shows a failed test and leaves a partial line for the next scan`() {
     let started = #"{"name":{"_value":"testStarted"}}"#
     let text = [started, finished("a()", "Success"), finished("b()", "Failure"), finished("c()", "Failure")].joined(
         separator: "\n"
@@ -22,12 +23,13 @@ private func finished(_ test: String, _ status: String) -> String {
     #expect(!XcodeResultStream.scan([]).failed)
 }
 
-@Test func `a stream line of another shape is skipped, not misread`() {
+@Test(.timeLimit(.minutes(10))) func `a stream line of another shape is skipped, not misread`() {
     let odd = #"{"name":{"_value":"testFinished"},"x":"testStatus Failure"}"#
     #expect(!XcodeResultStream.scan(Array((odd + "\n").utf8)).failed)
 }
 
-@Test func `an Xcode test command names its worker's device, derived data and stream`() throws {
+@Test(.timeLimit(.minutes(10))) func `an Xcode test command names its worker's device, derived data and stream`() throws
+{
     let driver = try BuildDriver(
         root: "/repo",
         scheme: "App",
@@ -56,7 +58,7 @@ private func finished(_ test: String, _ status: String) -> String {
     #expect(arguments[stream + 1] == "/logs/s.jsonl")
 }
 
-@Test func `a simulator build pins the architecture unless the user chose one`() throws {
+@Test(.timeLimit(.minutes(10))) func `a simulator build pins the architecture unless the user chose one`() throws {
     let simulator = BuildDriver.simulatorArchitectureSettings(for: [], destination: "platform=iOS Simulator,id=X")
     #expect(simulator.count == 2 && simulator.contains("ONLY_ACTIVE_ARCH=YES") && simulator[0].hasPrefix("ARCHS="))
     #expect(BuildDriver.simulatorArchitectureSettings(for: [], destination: "platform=macOS").isEmpty)
@@ -70,7 +72,8 @@ private func finished(_ test: String, _ status: String) -> String {
     #expect(driver.buildCommand(workspace: "/w", artifacts: "/a").arguments.contains("ONLY_ACTIVE_ARCH=YES"))
 }
 
-@Test func `xcode builds and tests disable code coverage unless the caller passed it`() throws {
+@Test(.timeLimit(.minutes(10))) func `xcode builds and tests disable code coverage unless the caller passed it`() throws
+{
     let driver = try BuildDriver(root: "/r", scheme: "App", destination: "platform=iOS Simulator,id=X")
     let build = driver.buildCommand(workspace: "/w", artifacts: "/a").arguments
     let test = try driver.testCommand(workspace: "/w", artifacts: "/a", result: "/r", xctestrun: "/x.xctestrun")
@@ -84,11 +87,12 @@ private func finished(_ test: String, _ status: String) -> String {
     #expect(explicitBuild.contains("YES"))
 }
 
-@Test func `snapshot skips Finder metadata so .DS_Store cannot make evidence stale`() {
+@Test(.timeLimit(.minutes(10))) func `snapshot skips Finder metadata so .DS_Store cannot make evidence stale`() {
     #expect(WorkspaceSnapshot.limits.skippedNames.contains(".DS_Store"))
 }
 
-@Test func `simulator direct harness strips xcode injection vars and exposes app-hosted dyld paths`() {
+@Test(.timeLimit(.minutes(10)))
+func `simulator direct harness strips xcode injection vars and exposes app-hosted dyld paths`() {
     let harness = SimulatorDirectHarness(
         executor: BoundedExecutor(),
         fleet: .single(udid: "U", directory: "/w"),
