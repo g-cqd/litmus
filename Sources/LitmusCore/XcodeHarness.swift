@@ -117,15 +117,7 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
             discardBundle()
             return result(.timedOut, nil, "xcodebuild exceeded \(request.deadline) s")
         }
-        let summary = try await executor.execute(
-            ToolCommand(
-                executable: "/usr/bin/xcrun",
-                arguments: ["xcresulttool", "get", "test-results", "summary", "--path", bundle, "--compact"]
-            ),
-            directory: driver.executionDirectory(workspace: workspace),
-            environment: subjectEnvironment(nil),
-            timeout: 60
-        )
+        let summary = try await resultTool("summary", bundle: bundle)
         guard summary.exitStatus == 0, !summary.truncated, let counts = try? TestEvidence.xcresult(summary.stdout)
         else {
             // Kept whatever the options say: it is what a person debugging an unusable run looks at.
@@ -140,15 +132,7 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
         if keepResultBundles { evidence.append("logs/\(request.name).xcresult") }
         // Counts per test bundle, what `-only-testing` selections are checked against; left out unless they add up
         // to the summary's.
-        let tests = try await executor.execute(
-            ToolCommand(
-                executable: "/usr/bin/xcrun",
-                arguments: ["xcresulttool", "get", "test-results", "tests", "--path", bundle, "--compact"]
-            ),
-            directory: driver.executionDirectory(workspace: workspace),
-            environment: subjectEnvironment(nil),
-            timeout: 60
-        )
+        let tests = try await resultTool("tests", bundle: bundle)
         var modules: [String: TestCounts] = [:]
         if tests.exitStatus == 0, !tests.truncated, let parsed = TestEvidence.xcresultModules(tests.stdout) {
             let sum = parsed.values.reduce(into: (0, 0, 0)) {
@@ -179,6 +163,19 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
 
     /// PropertyListSerialization supplies heterogeneous SDK data; the untyped boundary is contained here.
     /// Xcode-relative paths are absolutised before moving the plist outside Build/Products.
+    /// `xcresulttool get test-results <report>` of `bundle`, compact JSON.
+    func resultTool(_ report: String, bundle: String) async throws -> ProcessOutput {
+        try await executor.execute(
+            ToolCommand(
+                executable: "/usr/bin/xcrun",
+                arguments: ["xcresulttool", "get", "test-results", report, "--path", bundle, "--compact"]
+            ),
+            directory: driver.executionDirectory(workspace: workspace),
+            environment: subjectEnvironment(nil),
+            timeout: 60
+        )
+    }
+
     private func preparedTestRun(output: String, request: TestRunRequest, products: String) throws -> String {
         let patched = try testRunPlist(request: request, products: products)
         let data = try PropertyListSerialization.data(fromPropertyList: patched, format: .xml, options: 0)

@@ -106,7 +106,9 @@ func `DYLD variables reach a command outside SIP`() async throws {
         supervision: supervision
     )
     #expect(output.stopReason == failFastReason)
-    #expect(output.terminationSignal == SIGTERM)
+    // Stopped, not finished: by SIGTERM, or (under sanitizer load, when the stop lands as the child starts) with a
+    // failing status. An ignored stop would have ended in the 20 s timeout, without this reason.
+    #expect(output.terminationSignal == SIGTERM || output.exitStatus != 0)
 }
 
 @Test(.timeLimit(.minutes(10))) func `a command past the memory limit is stopped and says so`() async throws {

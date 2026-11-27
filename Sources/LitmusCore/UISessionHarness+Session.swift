@@ -49,15 +49,7 @@ extension UISessionHarness {
         )
         try writeLog(output, path: "\(inner.logs)/\(name).log")
         guard !output.timedOut, output.stopReason == nil else { return }
-        let tests = try await inner.executor.execute(
-            ToolCommand(
-                executable: "/usr/bin/xcrun",
-                arguments: ["xcresulttool", "get", "test-results", "tests", "--path", bundle, "--compact"]
-            ),
-            directory: inner.driver.executionDirectory(workspace: inner.workspace),
-            environment: subjectEnvironment(nil),
-            timeout: 60
-        )
+        let tests = try await inner.resultTool("tests", bundle: bundle)
         guard tests.exitStatus == 0, !tests.truncated, let results = XcodeConfigurations.counts(tests.stdout) else {
             return
         }

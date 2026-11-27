@@ -66,7 +66,8 @@ extension MutationRunner {
         return false
     }
 
-    /// In place, each original is made recoverable through `journal` before its file is rewritten.
+    /// Writes one batch's schemas into the snapshot, keeping the originals to restore. In place, each original is made
+    /// recoverable through `journal` before its file is rewritten.
     func install(_ group: [Mutation], in snapshot: WorkspaceSnapshot, journal: InPlaceJournal?, token: String) throws
         -> InstalledSchema
     {

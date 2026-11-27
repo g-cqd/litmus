@@ -231,11 +231,7 @@ extension RunSession {
             token: options.environmentToken,
             mode: options.sharedProcess
         )
-        let quarantinedNow = run.judge.quarantined
-        run.harness = shared
-        let made = try makeJudge(for: shared)
-        (run.allowedWorkers, run.pool, run.judge) = (made.allowedWorkers, made.pool, made.judge)
-        run.judge.quarantined = quarantinedNow
+        try adopt(shared, into: &run)
     }
 
     /// `xcodebuild` on one destination with UI test bundles: a batch's UI-test first runs share one session, one
@@ -244,10 +240,14 @@ extension RunSession {
         guard options.sharedProcess != .off, let xcode = run.harness as? XcodeHarness<Executor>, xcode.fleet == nil,
             try UISessionHarness<Executor>.hasUITests(products: artifacts + "/DerivedData/Build/Products")
         else { return }
+        try adopt(UISessionHarness(inner: xcode), into: &run)
+    }
+
+    /// `harness` replaces the baseline's, with a judge over it that keeps the quarantined targets.
+    func adopt(_ harness: any TestHarness, into run: inout BaselineRun) throws {
         let quarantinedNow = run.judge.quarantined
-        let shared = UISessionHarness(inner: xcode)
-        run.harness = shared
-        let made = try makeJudge(for: shared)
+        run.harness = harness
+        let made = try makeJudge(for: harness)
         (run.allowedWorkers, run.pool, run.judge) = (made.allowedWorkers, made.pool, made.judge)
         run.judge.quarantined = quarantinedNow
     }

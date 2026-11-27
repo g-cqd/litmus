@@ -121,9 +121,8 @@ extension MutationRunner {
         )
     }
 
-    /// Writes one batch's schemas into the snapshot, keeping the originals to restore.
-    /// The direct simulator harness when every test target is hostless and the helper runs on the booted simulator
-    ///; nil, with a note, to use `xcodebuild`.
+    /// The direct simulator harness when every test target is hostless and the helper runs on the booted simulator;
+    /// nil, with a note, to use `xcodebuild`.
     func simulatorHarness(
         udid: String,
         fleet: SimulatorFleet,
