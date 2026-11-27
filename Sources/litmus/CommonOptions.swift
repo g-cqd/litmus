@@ -98,7 +98,7 @@ struct ChangeOptions: ParsableArguments {
             return nil
         }
         guard includeTestChanges else { return scope }
-        let artifact = try reach.map { try ArtifactCodec.read(RunArtifact.self, path: $0) }
+        let artifact = try reach.map { try readRunArtifact($0, option: "--reach-from") }
         return scope.includingTestChanges(root: root, reach: artifact)
     }
 
@@ -166,6 +166,24 @@ struct BuildSelectionOptions: ParsableArguments {
     }
 }
 
+/// The run artifact `path` names: the file itself, or the `run.json` (else `run.pb`) of a run directory.
+func runArtifactPath(_ path: String) -> String {
+    let type = (try? FileManager.default.attributesOfItem(atPath: path))?[.type] as? FileAttributeType
+    guard type == .typeDirectory else { return path }
+    let json = (path as NSString).appendingPathComponent("run.json")
+    let protobuf = (path as NSString).appendingPathComponent("run.pb")
+    return FileManager.default.fileExists(atPath: json) || !FileManager.default.fileExists(atPath: protobuf)
+        ? json : protobuf
+}
+
+/// The run artifact at `path` (a file or a run directory); a failure names the option and the path.
+func readRunArtifact(_ path: String, option: String) throws -> RunArtifact {
+    let file = runArtifactPath(path)
+    do { return try ArtifactCodec.read(RunArtifact.self, path: file) } catch {
+        throw LitmusFailure("\(option) \(file): \(error)")
+    }
+}
+
 func stderr(_ text: String) { FileHandle.standardError.write(Data((text + "\n").utf8)) }
 func fail(_ error: any Error, code: ExitStatus) throws -> Never {
     stderr("litmus: error: \(error)")
@@ -177,7 +195,7 @@ struct GateOptions: ParsableArguments {
     @Option(help: "Fail when the mutation score is below this percentage (0...100).") var minimumScore: Double?
     @Option(help: "Fail when the score fell by more than this many percentage points from --baseline-run.")
     var maximumScoreDrop: Double?
-    @Option(help: "An earlier run (.json or .pb) the score drop is measured against; both must be whole-subject runs.")
+    @Option(help: "An earlier run (.json, .pb or its directory) the score drop is measured from; both whole-subject.")
     var baselineRun: String?
 
     func validate() throws {
@@ -193,7 +211,7 @@ struct GateOptions: ParsableArguments {
     func gate() throws -> QualityGate {
         var baseline: RunArtifact?
         if let baselineRun {
-            do { baseline = try ArtifactCodec.read(RunArtifact.self, path: baselineRun) } catch {
+            do { baseline = try readRunArtifact(baselineRun, option: "--baseline-run") } catch {
                 try fail(error, code: .badConfiguration)
             }
         }

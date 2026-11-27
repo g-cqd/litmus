@@ -105,7 +105,10 @@ struct Run: AsyncParsableCommand {
     var reuse: String = "closure"
     @Option(help: "Reuse the decided verdicts of an earlier run directory whose keys still match.")
     var resume: String?
-    @Option(help: "A nightly run artifact: its flaky tests (probe skipped) and, where keys match, its per-test reach.")
+    @Option(
+        help:
+            "A nightly run (its run.json, or its directory): its flaky tests and, where keys match, its per-test reach."
+    )
     var reachFrom: String?
     @Option(help: "Run shard k of n (k/n): whole module units; put the shards together with `litmus merge`.")
     var shard: String?
@@ -171,7 +174,7 @@ struct Run: AsyncParsableCommand {
         options.storeReadOnly = storeReadOnly
         options.storeLimitMiB = storeLimit
         options.resume = resume
-        options.reachFrom = reachFrom
+        options.reachFrom = reachFrom.map(runArtifactPath)
         options.simulatorHarness = !noSimulatorHelper
         options.allTestTargets = build.allTestTargets
         options.includeUITests = build.includeUITests
