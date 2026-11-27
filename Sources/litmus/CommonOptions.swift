@@ -29,8 +29,11 @@ struct SubjectOptions: ParsableArguments {
     @Option(help: "Explicit index store path for type-directed operators (default: auto-discovered when needed).")
     var indexStorePath: String?
     @Option(
-        help:
-            "Operators to mutate, comma-separated rule ids (default: the stable tier). Known: negate-condition, swap-ternary, replace-logical, replace-relational, flip-boolean, replace-arithmetic, replace-range, remove-negation, replace-nil-coalescing, remove-call, remove-view-element, replace-stdlib-semantic, remove-normalization, replace-optional-chain, return-boundary, return-constant, empty-body, empty-closure-body, remove-switch-case."
+        help: ArgumentHelp(
+            "Operators to mutate, comma-separated rule ids (default: the stable tier), or the groups all (every logic "
+                + "operator), ui and fault. Known: "
+                + MutationOperator.allCases.map(\.rawValue).joined(separator: ", ") + "."
+        )
     )
     var operators: String?
     @Option(
