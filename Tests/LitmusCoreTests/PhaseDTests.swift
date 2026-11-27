@@ -374,6 +374,13 @@ struct PhaseDTests {
         let outside = scope(["Tests/ATests/ATests.swift": [11...11]]).includingTestChanges(root: root, reach: artifact)
         #expect(outside.testDriven?.wholeFiles == ["Sources/A/A.swift"])
         #expect(outside.testDriven?.mutants == [])
+
+        // A test the nightly never ran (new since, or without reach) reached nothing it knows: widened, not narrowed
+        // to nothing.
+        artifact.perTestReach = [reached.id: ["ATests.ATests/first()"]]
+        let unknown = scope(["Tests/ATests/ATests.swift": [8...8]]).includingTestChanges(root: root, reach: artifact)
+        #expect(unknown.testDriven?.wholeFiles == ["Sources/A/A.swift"])
+        #expect(unknown.testDriven?.mutants == [])
     }
 
     // MARK: - D4 Scheme synthesis
