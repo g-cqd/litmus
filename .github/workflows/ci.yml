@@ -17,12 +17,21 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request or branch cancels the run in progress: its macOS minutes would test a commit
+# nobody waits for any more. Runs for main and for tags are never cancelled (main's history and releases stay whole).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/') && github.ref != 'refs/heads/main') }}
+
 jobs:
   ci:
     name: Checks
     uses: g-cqd/swift-ci/.github/workflows/swift-ci.yml@07936b09eef98d5fcef4eac36a7c3f97de133e19 # swift-ci 07936b0
     permissions:
       contents: write # only used to publish a tag
+    with:
+      # The tests take ~11 min on a macOS runner; a hang now costs 25 min instead of 60.
+      timeout-minutes: 25
     secrets:
       DEVELOPER_ID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
       DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}

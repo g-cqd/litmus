@@ -25,14 +25,19 @@ on:
         description: Seconds before a step is ended regardless
         default: "7200"
       max-parallel:
-        description: Cells running at once
-        default: "12"
+        description: Cells running at once (macOS runners are shared with CI; more only queue)
+        default: "3"
       runner:
         description: macOS runner label
         default: macos-26
 
 permissions:
   contents: read
+
+# One benchmark at a time: a second one would only queue for the same macOS runners.
+concurrency:
+  group: bench
+  cancel-in-progress: false
 
 jobs:
   plan:
@@ -58,7 +63,7 @@ jobs:
           SCENARIOS: ${{ inputs.scenarios || 'all' }}
           IDLE: ${{ inputs.idle-timeout || '900' }}
           HARD: ${{ inputs.hard-timeout || '7200' }}
-          PARALLEL: ${{ inputs.max-parallel || '12' }}
+          PARALLEL: ${{ inputs.max-parallel || '3' }}
           RUNNER: ${{ inputs.runner || 'macos-26' }}
         run: |
           {
@@ -124,7 +129,8 @@ jobs:
       max-parallel: ${{ fromJSON(needs.plan.outputs.max-parallel) }}
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ needs.plan.outputs.runner }}
-    timeout-minutes: 300
+    # Above the default hard timeout (120 min) and setup; a cell that still runs past it is stuck.
+    timeout-minutes: 180
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
