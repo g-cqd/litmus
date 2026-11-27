@@ -582,21 +582,50 @@ private final class Sites: SyntaxVisitor {
         context.anchors.pop()
     }
     override func visit(_ node: InitializerDeclSyntax) -> SyntaxVisitorContinueKind {
-        enter(
+        returnTypes.append(nil)
+        return enter(
             signature("init" + (node.optionalMark?.text ?? ""), node.signature.parameterClause.parameters),
             node,
             body: true
         )
     }
-    override func visitPost(_ node: InitializerDeclSyntax) { context.anchors.pop() }
+    override func visitPost(_ node: InitializerDeclSyntax) {
+        _ = returnTypes.popLast()
+        context.anchors.pop()
+    }
     override func visit(_ node: DeinitializerDeclSyntax) -> SyntaxVisitorContinueKind {
-        enter("deinit", node, body: true)
+        returnTypes.append(nil)
+        return enter("deinit", node, body: true)
     }
-    override func visitPost(_ node: DeinitializerDeclSyntax) { context.anchors.pop() }
+    override func visitPost(_ node: DeinitializerDeclSyntax) {
+        _ = returnTypes.popLast()
+        context.anchors.pop()
+    }
     override func visit(_ node: SubscriptDeclSyntax) -> SyntaxVisitorContinueKind {
-        enter(signature("subscript", node.parameterClause.parameters), node, body: true)
+        let returnType = normalized(node.returnClause.type.trimmedDescription)
+        returnTypes.append(returnType)
+        _ = enter(signature("subscript", node.parameterClause.parameters), node, body: true)
+        if builderDepth == 0,
+            case .getter(let items) = node.accessorBlock?.accessors,
+            items.count == 1,
+            let expr = items.first?.item.as(ExprSyntax.self)
+        {
+            addReturnMutations(expr: expr, returnType: returnType)
+        }
+        return .visitChildren
     }
-    override func visitPost(_ node: SubscriptDeclSyntax) { context.anchors.pop() }
+    override func visitPost(_ node: SubscriptDeclSyntax) {
+        _ = returnTypes.popLast()
+        context.anchors.pop()
+    }
+    override func visit(_ node: ClosureExprSyntax) -> SyntaxVisitorContinueKind {
+        let returnType = node.signature?.returnClause.map { normalized($0.type.trimmedDescription) }
+        returnTypes.append(returnType)
+        return .visitChildren
+    }
+    override func visitPost(_ node: ClosureExprSyntax) {
+        _ = returnTypes.popLast()
+    }
     override func visit(_ node: VariableDeclSyntax) -> SyntaxVisitorContinueKind {
         let names = node.bindings.map { normalized($0.pattern.trimmedDescription) }.joined(separator: ",")
         adjustBuilderDepth(node, by: 1)
@@ -606,10 +635,42 @@ private final class Sites: SyntaxVisitor {
         adjustBuilderDepth(node, by: -1)
         context.anchors.pop()
     }
-    override func visit(_ node: AccessorDeclSyntax) -> SyntaxVisitorContinueKind {
-        enter(node.accessorSpecifier.text, node, body: true)
+    override func visit(_ node: PatternBindingSyntax) -> SyntaxVisitorContinueKind {
+        guard node.accessorBlock != nil else { return .visitChildren }
+        let returnType = node.typeAnnotation.map { normalized($0.type.trimmedDescription) }
+        returnTypes.append(returnType)
+        if builderDepth == 0,
+            let returnType,
+            case .getter(let items) = node.accessorBlock?.accessors,
+            items.count == 1,
+            let expr = items.first?.item.as(ExprSyntax.self)
+        {
+            addReturnMutations(expr: expr, returnType: returnType)
+        }
+        return .visitChildren
     }
-    override func visitPost(_ node: AccessorDeclSyntax) { context.anchors.pop() }
+    override func visitPost(_ node: PatternBindingSyntax) {
+        if node.accessorBlock != nil { _ = returnTypes.popLast() }
+    }
+    override func visit(_ node: AccessorDeclSyntax) -> SyntaxVisitorContinueKind {
+        let isGetter = node.accessorSpecifier.tokenKind == .keyword(.get)
+        let getterType = isGetter ? (returnTypes.last ?? nil) : nil
+        returnTypes.append(getterType)
+        _ = enter(node.accessorSpecifier.text, node, body: true)
+        if builderDepth == 0,
+            let getterType,
+            let body = node.body,
+            body.statements.count == 1,
+            let expr = body.statements.first?.item.as(ExprSyntax.self)
+        {
+            addReturnMutations(expr: expr, returnType: getterType)
+        }
+        return .visitChildren
+    }
+    override func visitPost(_ node: AccessorDeclSyntax) {
+        _ = returnTypes.popLast()
+        context.anchors.pop()
+    }
 
     private func enter(_ name: String, _ node: some SyntaxProtocol, body: Bool = false) -> SyntaxVisitorContinueKind {
         context.anchors.push(name, isBody: body, node)
@@ -630,8 +691,26 @@ private final class Sites: SyntaxVisitor {
     }
     private func conditions(_ list: ConditionElementListSyntax) {
         for condition in list {
-            if case .expression(let expr) = condition.condition {
+            switch condition.condition {
+            case .expression(let expr):
                 add(expr, operatorID: .negateCondition, replacement: "!(\(expr.trimmedDescription))")
+            case .optionalBinding(let binding) where context.operators.contains(.nullifyOptionalBinding):
+                if let initClause = binding.initializer {
+                    let inner = CallRemoval.unwrapTryAwait(initClause.value)
+                    if inner.trimmedDescription != "nil", !Self.isNeverCall(inner) {
+                        add(inner, operatorID: .nullifyOptionalBinding, replacement: "nil")
+                    }
+                } else if binding.bindingSpecifier.tokenKind == .keyword(.let)
+                    || binding.bindingSpecifier.tokenKind == .keyword(.var),
+                    let ident = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text
+                {
+                    // Shorthand `if let x` / `guard let self`: expand to an explicit conditional binding via clause guard.
+                    let replacement =
+                        "\(binding.trimmedDescription) = \(SchemaWriter.clauseGuardPlaceholder) ? \(ident) : nil"
+                    add(binding, operatorID: .nullifyOptionalBinding, replacement: replacement)
+                }
+            default:
+                break
             }
         }
     }
@@ -681,13 +760,21 @@ private final class Sites: SyntaxVisitor {
         } else if symbol == "??", !Self.isNeverCall(node.rightOperand) {
             // `a ?? fatalError()` has a `Never` fallback that cannot balance the ternary schema's branches.
             add(node, operatorID: .replaceNilCoalescing, replacement: node.rightOperand.trimmedDescription)
+        } else if let replacement = Self.bitwise[symbol] {
+            add(node, operatorID: .replaceBitwise, replacement: swapping(op, in: node, for: replacement))
         }
         return .visitChildren
     }
 
     override func visit(_ node: PrefixOperatorExprSyntax) -> SyntaxVisitorContinueKind {
-        if node.operator.text == "!", !Self.isDirectCondition(node) {
+        if node.operator.text == "!", !Self.isDirectCondition(ExprSyntax(node)) {
             add(node, operatorID: .removeNegation, replacement: node.expression.trimmedDescription)
+        } else if node.operator.text == "-",
+            !node.expression.is(IntegerLiteralExprSyntax.self),
+            !node.expression.is(FloatLiteralExprSyntax.self),
+            !node.hasAncestor(SwitchCaseItemSyntax.self)
+        {
+            add(node, operatorID: .removeUnaryMinus, replacement: node.expression.trimmedDescription)
         }
         return .visitChildren
     }
@@ -698,6 +785,9 @@ private final class Sites: SyntaxVisitor {
     ]
     static let arithmetic: [String: String] = ["+": "-", "-": "+", "*": "/", "/": "*", "%": "*"]
     static let compoundAssignment: [String: String] = ["+=": "-=", "-=": "+=", "*=": "/=", "/=": "*=", "%=": "*="]
+    static let bitwise: [String: String] = [
+        "&": "|", "|": "&", "^": "&", "<<": ">>", ">>": "<<", "&=": "|=", "|=": "&=", "^=": "&=",
+    ]
 
     private static func isStringLiteral(_ expression: ExprSyntax) -> Bool {
         expression.is(StringLiteralExprSyntax.self)
@@ -747,9 +837,9 @@ private final class Sites: SyntaxVisitor {
         return ["fatalError", "preconditionFailure", "assertionFailure", "swift_unreachable"].contains(last)
     }
 
-    /// True when `!x` is the whole expression of an `if`/`guard`/`while` condition or ternary predicate, where
+    /// True when `node` is the whole expression of an `if`/`guard`/`while` condition or ternary predicate, where
     /// `negate-condition` or `swap-ternary` already emits the identical mutation.
-    private static func isDirectCondition(_ node: PrefixOperatorExprSyntax) -> Bool {
+    private static func isDirectCondition(_ node: ExprSyntax) -> Bool {
         guard let parent = node.parent else { return false }
         if parent.is(ConditionElementSyntax.self) { return true }
         if let ternary = parent.as(TernaryExprSyntax.self), ternary.condition.id == node.id { return true }
@@ -870,7 +960,8 @@ private final class Sites: SyntaxVisitor {
     }
 
     override func visit(_ node: ReturnStmtSyntax) -> SyntaxVisitorContinueKind {
-        guard let expr = node.expression,
+        guard builderDepth == 0,
+            let expr = node.expression,
             let returnType = returnTypes.last ?? nil
         else { return .visitChildren }
         addReturnMutations(expr: expr, returnType: returnType)
@@ -921,6 +1012,96 @@ private final class Sites: SyntaxVisitor {
                 add(expr, operatorID: .returnConstant, replacement: trimmed == "0" ? "1" : "0")
             }
         }
+    }
+
+    override func visit(_ node: MemberAccessExprSyntax) -> SyntaxVisitorContinueKind {
+        if context.operators.contains(.negateIsEmpty),
+            node.declName.baseName.text == "isEmpty",
+            let base = node.base,
+            !Self.chainHasOptionalChaining(base),
+            node.parent?.as(FunctionCallExprSyntax.self)?.calledExpression.id != Syntax(node).id,
+            !(node.parent?.as(PrefixOperatorExprSyntax.self)?.operator.text == "!"),
+            !Self.isDirectCondition(ExprSyntax(node))
+        {
+            add(node, operatorID: .negateIsEmpty, replacement: "!(\(node.trimmedDescription))")
+        }
+        return .visitChildren
+    }
+
+    /// True if `base` propagates an unparenthesized optional chain (`a?.b` -> `.isEmpty` has type `Bool?`).
+    private static func chainHasOptionalChaining(_ expr: ExprSyntax) -> Bool {
+        if expr.is(OptionalChainingExprSyntax.self) { return true }
+        if let member = expr.as(MemberAccessExprSyntax.self), let inner = member.base {
+            return chainHasOptionalChaining(inner)
+        }
+        if let call = expr.as(FunctionCallExprSyntax.self) {
+            return chainHasOptionalChaining(call.calledExpression)
+        }
+        if let sub = expr.as(SubscriptCallExprSyntax.self) {
+            return chainHasOptionalChaining(sub.calledExpression)
+        }
+        return false
+    }
+
+    override func visit(_ node: ForStmtSyntax) -> SyntaxVisitorContinueKind {
+        if context.operators.contains(.skipLoop) {
+            if let whereClause = node.whereClause {
+                let cond = whereClause.condition.trimmedDescription
+                add(
+                    whereClause,
+                    operatorID: .skipLoop,
+                    replacement: "where (\(cond)) && \(SchemaWriter.clauseGuardPlaceholder)"
+                )
+            } else {
+                add(
+                    node.sequence,
+                    operatorID: .skipLoop,
+                    replacement: "\(node.sequence.trimmedDescription) where \(SchemaWriter.clauseGuardPlaceholder)"
+                )
+            }
+        }
+        return .visitChildren
+    }
+
+    override func visit(_ node: BreakStmtSyntax) -> SyntaxVisitorContinueKind {
+        if node.label == nil, Self.isInsideLoopInCurrentFunction(node) {
+            addLoopJumpSwap(node, original: "break", swapped: "continue")
+        }
+        return .visitChildren
+    }
+
+    override func visit(_ node: ContinueStmtSyntax) -> SyntaxVisitorContinueKind {
+        if node.label == nil { addLoopJumpSwap(node, original: "continue", swapped: "break") }
+        return .visitChildren
+    }
+
+    private func addLoopJumpSwap(_ node: some SyntaxProtocol, original: String, swapped: String) {
+        guard context.operators.contains(.swapBreakContinue),
+            builderDepth == 0,
+            node.parent?.is(CodeBlockItemSyntax.self) == true
+        else { return }
+        add(
+            node,
+            operatorID: .swapBreakContinue,
+            replacement: "if \(SchemaWriter.clauseGuardPlaceholder) { \(original) } else { \(swapped) }"
+        )
+    }
+
+    /// True if `node` is enclosed by a `for`, `while` or `repeat` loop without crossing a function/closure/accessor.
+    private static func isInsideLoopInCurrentFunction(_ node: some SyntaxProtocol) -> Bool {
+        var current = node.parent
+        while let cur = current {
+            if cur.is(ForStmtSyntax.self) || cur.is(WhileStmtSyntax.self) || cur.is(RepeatStmtSyntax.self) {
+                return true
+            }
+            if cur.is(FunctionDeclSyntax.self) || cur.is(ClosureExprSyntax.self) || cur.is(AccessorDeclSyntax.self)
+                || cur.is(InitializerDeclSyntax.self) || cur.is(SubscriptDeclSyntax.self)
+            {
+                return false
+            }
+            current = cur.parent
+        }
+        return false
     }
 
     override func visit(_ node: SwitchExprSyntax) -> SyntaxVisitorContinueKind {

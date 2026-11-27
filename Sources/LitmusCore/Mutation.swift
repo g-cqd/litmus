@@ -43,12 +43,18 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
     case emptyBody = "empty-body"
     case emptyClosureBody = "empty-closure-body"
     case removeSwitchCase = "remove-switch-case"
+    case nullifyOptionalBinding = "nullify-optional-binding"
+    case negateIsEmpty = "negate-is-empty"
+    case skipLoop = "skip-loop"
+    case swapBreakContinue = "swap-break-continue"
+    case replaceBitwise = "replace-bitwise"
+    case removeUnaryMinus = "remove-unary-minus"
 
     /// The kind of edit it makes, which decides how its schema is written.
     public var shape: SchemaShape {
         switch self {
         case .removeCall, .removeViewElement, .emptyBody, .emptyClosureBody: .statement
-        case .removeSwitchCase: .clause
+        case .removeSwitchCase, .skipLoop, .swapBreakContinue: .clause
         default: .expression
         }
     }
@@ -60,7 +66,9 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
             .replaceNilCoalescing:
             .standard
         case .removeCall, .removeViewElement, .replaceStdlibSemantic, .removeNormalization, .replaceOptionalChain,
-            .returnBoundary, .returnConstant, .emptyBody, .emptyClosureBody, .removeSwitchCase:
+            .returnBoundary, .returnConstant, .emptyBody, .emptyClosureBody, .removeSwitchCase,
+            .nullifyOptionalBinding, .negateIsEmpty, .skipLoop, .swapBreakContinue, .replaceBitwise,
+            .removeUnaryMinus:
             .experimental
         }
     }
@@ -82,7 +90,9 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
             .replaceRange, .removeNegation, .replaceNilCoalescing, .removeCall:
             true
         case .removeViewElement, .replaceStdlibSemantic, .removeNormalization, .replaceOptionalChain, .returnBoundary,
-            .returnConstant, .emptyBody, .emptyClosureBody, .removeSwitchCase:
+            .returnConstant, .emptyBody, .emptyClosureBody, .removeSwitchCase,
+            .nullifyOptionalBinding, .negateIsEmpty, .skipLoop, .swapBreakContinue, .replaceBitwise,
+            .removeUnaryMinus:
             false
         }
     }
@@ -111,6 +121,12 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
         case .emptyBody: "skip the body of a Void-returning function or method"
         case .emptyClosureBody: "skip the body of a trailing Void closure (excluding lock/sync wrappers)"
         case .removeSwitchCase: "guard a non-default switch case so it falls through to default"
+        case .nullifyOptionalBinding: "force an if/guard/while optional binding to evaluate to nil"
+        case .negateIsEmpty: "negate a non-optional .isEmpty check"
+        case .skipLoop: "guard a for-in loop with a where clause so its body runs zero times"
+        case .swapBreakContinue: "swap unlabeled break and continue inside a loop"
+        case .replaceBitwise: "exchange bitwise and shift operators (& | ^ << >> &= |= ^=)"
+        case .removeUnaryMinus: "remove unary negation (-x to x) on non-literal expressions"
         }
     }
 
@@ -186,6 +202,12 @@ public struct Mutation: Codable, Equatable, Sendable {
 
     /// The last line of the mutated expression.
     public var endLine: Int { line + original.count(where: { $0 == "\n" }) }
+
+    /// How `SchemaWriter` splices this site: clause replacements carry `SchemaWriter.clauseGuardPlaceholder` (e.g.
+    /// shorthand `if let x`), while initialized `if let x = expr` sites use `.expression` so inner sites nest.
+    public var effectiveShape: SchemaShape {
+        replacement.contains(SchemaWriter.clauseGuardPlaceholder) ? .clause : operatorID.shape
+    }
 }
 
 /// A file intentionally left out, or a file that could not be planned. Neither disappears silently.

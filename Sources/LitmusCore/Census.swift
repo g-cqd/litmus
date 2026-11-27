@@ -49,6 +49,12 @@ extension CensusEntry {
             .returnConstant
         case "return-early-void": .emptyBody
         case "switch-case-skip (to default)": .removeSwitchCase
+        case "optional-binding-to-nil": .nullifyOptionalBinding
+        case "isEmpty-negation": .negateIsEmpty
+        case "loop-skip (for … where)": .skipLoop
+        case "break-continue-swap": .swapBreakContinue
+        case "bitwise-replace": .replaceBitwise
+        case "unary-minus-removal": .removeUnaryMinus
         default: nil
         }
     }

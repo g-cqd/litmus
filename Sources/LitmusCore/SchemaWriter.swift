@@ -165,7 +165,7 @@ public enum SchemaWriter {
             let sameRange = (other.start, other.end) == (candidate.start, candidate.end)
             if sameRange {
                 // Only pure expression replacements may chain on the exact same byte range.
-                if candidate.operatorID.shape != .expression || other.operatorID.shape != .expression {
+                if candidate.effectiveShape != .expression || other.effectiveShape != .expression {
                     return false
                 }
                 continue
@@ -173,7 +173,7 @@ public enum SchemaWriter {
             let disjoint = other.end <= candidate.start || candidate.end <= other.start
             if disjoint { continue }
             // A clause site (`case .x:` gaining `where !m`) must not nest with another site inside its pattern.
-            if candidate.operatorID.shape == .clause || other.operatorID.shape == .clause {
+            if candidate.effectiveShape == .clause || other.effectiveShape == .clause {
                 return false
             }
             let otherContainsCandidate = other.start <= candidate.start && candidate.end <= other.end
@@ -321,7 +321,7 @@ public enum SchemaWriter {
     ) {
         let first = node.mutations[0]
         let start = output.count
-        switch first.operatorID.shape {
+        switch first.effectiveShape {
         case .statement:
             // A statement (or body) is skipped when its mutant is active: `if !m { original-with-inner-switches }`.
             output.append(contentsOf: "if !\(symbol)_\(first.id) { ".utf8)
@@ -544,7 +544,7 @@ public enum SchemaWriter {
             var nodes: [RegionNode] = []
             for range in sortedRanges {
                 let items = (groups[range] ?? []).sorted { $0.id < $1.id }
-                if items.count > 1, items.contains(where: { $0.operatorID.shape != .expression }) {
+                if items.count > 1, items.contains(where: { $0.effectiveShape != .expression }) {
                     throw LitmusFailure("a statement site shares its range: \(items[0].id)")
                 }
                 nodes.append(RegionNode(range: range, mutations: items))
@@ -562,7 +562,7 @@ public enum SchemaWriter {
                     stack.removeLast()
                 }
                 if let parent = stack.last {
-                    if parent.mutations[0].operatorID.shape == .clause {
+                    if parent.mutations[0].effectiveShape == .clause {
                         throw LitmusFailure("a clause site cannot contain inner mutants: \(parent.mutations[0].id)")
                     }
                     parent.children.append(node)
