@@ -65,8 +65,7 @@ public final class TypeOracle: Sendable {
         TypeOracle(indexedRoot: root, storePath: nil, diagnostic: nil)
     }
 
-    /// Opens an index store for `analyzedRelativePaths` under `indexedRoot`.
-    /// - Throws: `LitmusFailure` only when `explicitStorePath` is non-nil and invalid/unreadable.
+    /// Opens an index store for `analyzedRelativePaths` under `indexedRoot`; throws only when `explicitStorePath` is invalid.
     public static func open(
         indexedRoot: String,
         analyzedRelativePaths: [String],
