@@ -1,0 +1,187 @@
+name: Benchmark
+
+# The mutation-testing benchmark (docs/benchmark.md), one job per tool x scenario cell, all in parallel:
+#   plan     lists the applicable cells (bench/run.py --matrix);
+#   prepare  builds Litmus and installs the other tools once, for every cell;
+#   cell     runs one cell on its own macOS runner (so simulator cells never share a simulator);
+#   summary  merges every cell's results into the run's summary.
+# Weekly (Monday 04:17 UTC, every tool and scenario) and on demand: a full matrix is many hours of macOS runner time,
+# spread over parallel runners.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      tools:
+        description: Comma-separated tool ids (litmus, smt, mutest, muter)
+        default: litmus,smt,mutest,muter
+      scenarios:
+        description: Comma-separated scenario ids, or all (python3 bench/run.py --list)
+        default: all
+      idle-timeout:
+        description: Seconds without output, CPU or file activity before a step is ended
+        default: "900"
+      hard-timeout:
+        description: Seconds before a step is ended regardless
+        default: "7200"
+      max-parallel:
+        description: Cells running at once
+        default: "12"
+      runner:
+        description: macOS runner label
+        default: macos-26
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Bench · Plan
+    runs-on: ubuntu-latest
+    # A scheduled run has no inputs: every setting resolves here, to the input or its default, for the other jobs.
+    outputs:
+      matrix: ${{ steps.cells.outputs.matrix }}
+      tools: ${{ steps.settings.outputs.tools }}
+      idle-timeout: ${{ steps.settings.outputs.idle-timeout }}
+      hard-timeout: ${{ steps.settings.outputs.hard-timeout }}
+      max-parallel: ${{ steps.settings.outputs.max-parallel }}
+      runner: ${{ steps.settings.outputs.runner }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Settings
+        id: settings
+        env:
+          TOOLS: ${{ inputs.tools || 'litmus,smt,mutest,muter' }}
+          SCENARIOS: ${{ inputs.scenarios || 'all' }}
+          IDLE: ${{ inputs.idle-timeout || '900' }}
+          HARD: ${{ inputs.hard-timeout || '7200' }}
+          PARALLEL: ${{ inputs.max-parallel || '12' }}
+          RUNNER: ${{ inputs.runner || 'macos-26' }}
+        run: |
+          {
+            echo "tools=$TOOLS"
+            echo "scenarios=$SCENARIOS"
+            echo "idle-timeout=$IDLE"
+            echo "hard-timeout=$HARD"
+            echo "max-parallel=$PARALLEL"
+            echo "runner=$RUNNER"
+          } | tee -a "$GITHUB_OUTPUT"
+      - name: Cells
+        id: cells
+        env:
+          TOOLS: ${{ steps.settings.outputs.tools }}
+          SCENARIOS: ${{ steps.settings.outputs.scenarios }}
+        run: |
+          matrix="$(python3 bench/run.py --matrix --tools "$TOOLS" --scenarios "$SCENARIOS")"
+          echo "$matrix" | python3 -m json.tool
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  prepare:
+    name: Bench · Prepare tools
+    needs: plan
+    runs-on: ${{ needs.plan.outputs.runner }}
+    timeout-minutes: 60
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build Litmus
+        if: contains(format(',{0},', needs.plan.outputs.tools), ',litmus,')
+        run: |
+          swift build -c release --product litmus
+          mkdir -p "$RUNNER_TEMP/tools/litmus"
+          cp "$(swift build -c release --show-bin-path)/litmus" "$RUNNER_TEMP/tools/litmus/litmus"
+          echo "LITMUS_BIN=litmus/litmus" >> "$RUNNER_TEMP/tools/tools.env"
+      - name: Install the other tools
+        env:
+          TOOLS: ${{ needs.plan.outputs.tools }}
+        run: |
+          others="$(echo "$TOOLS" | tr ',' '\n' | grep -v '^litmus$' | paste -sd, - || true)"
+          if [ -n "$others" ]; then
+            # Paths relative to the tools directory: each cell extracts it elsewhere.
+            bench/install-tools.sh "$RUNNER_TEMP/tools" "$others" \
+              | sed -e 's/^export //' -e "s/'//g" -e "s|$RUNNER_TEMP/tools/||" >> "$RUNNER_TEMP/tools/tools.env"
+          fi
+          rm -rf "$RUNNER_TEMP/tools/src"
+          # Keep the executables only (artifacts drop file modes; the tarball keeps them).
+          find "$RUNNER_TEMP/tools" -path '*/.build/*' ! -path '*/.build/release/swift-mutation-testing' -delete 2> /dev/null || true
+          tar -czf tools.tgz -C "$RUNNER_TEMP/tools" .
+          cat "$RUNNER_TEMP/tools/tools.env"
+      - name: Upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench-tools
+          path: tools.tgz
+          retention-days: 3
+
+  cell:
+    name: Bench · ${{ matrix.tool }} · ${{ matrix.scenario }}
+    needs: [plan, prepare]
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(needs.plan.outputs.max-parallel) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ needs.plan.outputs.runner }}
+    timeout-minutes: 300
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download tools
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bench-tools
+      - name: Unpack tools
+        run: |
+          mkdir -p "$RUNNER_TEMP/tools"
+          tar -xzf tools.tgz -C "$RUNNER_TEMP/tools"
+          sed "s|=|=$RUNNER_TEMP/tools/|" "$RUNNER_TEMP/tools/tools.env" >> "$GITHUB_ENV"
+      - name: Run
+        env:
+          TOOL: ${{ matrix.tool }}
+          SCENARIO: ${{ matrix.scenario }}
+          IDLE: ${{ needs.plan.outputs.idle-timeout }}
+          HARD: ${{ needs.plan.outputs.hard-timeout }}
+        run: |
+          python3 bench/run.py --tools "$TOOL" --scenarios "$SCENARIO" \
+            --idle-timeout "$IDLE" --hard-timeout "$HARD" --output "bench-results/$TOOL-$SCENARIO"
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench-${{ matrix.tool }}-${{ matrix.scenario }}
+          path: bench-results/${{ matrix.tool }}-${{ matrix.scenario }}
+          if-no-files-found: warn
+
+  summary:
+    name: Bench · Summary
+    needs: cell
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bench-*-*
+          path: bench-results
+      - name: Merge
+        run: |
+          shopt -s nullglob
+          results=(bench-results/*/results.json)
+          if [ ${#results[@]} -eq 0 ]; then echo "No cell produced results." >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+          python3 bench/run.py --merge "${results[@]}" --output merged
+          cat merged/results.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench-summary
+          path: merged
