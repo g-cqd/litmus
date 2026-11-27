@@ -767,6 +767,24 @@ final class RunSession<Executor: ProcessExecutor> {
         else {
             throw LitmusFailure("unmutated suite did not pass with executed tests: \(baseline.result.reason)")
         }
+        // The simulator helper ran the baseline: its bundles can be served by shared workers too (the helper's serve
+        // mode), decided per batch like the macOS ones. Wrapped only now, once the helper is the harness that stays.
+        if options.sharedProcess != .off, let simulator = harness as? SimulatorDirectHarness<Executor> {
+            let scratch = artifacts + "/shared-process"
+            try FileManager.default.createDirectory(atPath: scratch, withIntermediateDirectories: true)
+            let helperPath = simulator.helper.helper
+            let shared = SharedProcessHarness(
+                direct: simulator,
+                helper: { helperPath },
+                scratch: scratch,
+                token: options.environmentToken,
+                mode: options.sharedProcess
+            )
+            let quarantinedNow = current.quarantined
+            harness = shared
+            (allowedWorkers, pool, current) = try makeJudge(for: shared)
+            current.quarantined = quarantinedNow
+        }
         var baselineByModule = baseline.result.moduleCounts
         // The Swift Testing test functions, from the baseline's event streams (for `perTestReach`).
         let testFunctions =
@@ -1186,7 +1204,7 @@ final class RunSession<Executor: ProcessExecutor> {
             }
             var judge = current.judge
             // Shared workers loaded the previous build: they end, and slots follow this batch's schema.
-            (judge.harness as? SharedProcessHarness<Executor>)?.prepare(batch: group)
+            (judge.harness as? any SharedProcessControl)?.prepare(batch: group)
             let deadline = current.deadline
             let workerCount = current.workerCount
             // Mutants only quarantined targets cover: no run can decide them, and the control never ran those targets.
@@ -1213,9 +1231,15 @@ final class RunSession<Executor: ProcessExecutor> {
                 )
             }
             let covered = group.filter { control.reached.contains($0.id) }
-            if let shared = judge.harness as? SharedProcessHarness<Executor> {
+            // The control ran every bundle once, fresh: its average per-bundle time bounds a narrowed run (at most one
+            // bundle's start + its tests) from the very first mutant, even when shared workers handle the fast ones.
+            if control.result.outcome == .passed, control.result.nanoseconds > 0 {
+                let perBundle = control.result.nanoseconds / Int64(max(1, judge.baselineByModule.count))
+                judge.timings.seed(nanoseconds: max(perBundle, 1), kind: "tests")
+            }
+            if let shared = judge.harness as? any SharedProcessControl {
                 // Per bundle: the control ran every module once, fresh; what its tests did not take is process start.
-                let bundles = Int64(max(1, shared.direct.bundles.count))
+                let bundles = Int64(max(1, shared.bundleCount))
                 let tests = control.result.testDurations.values.reduce(0, +)
                 let wall = control.result.nanoseconds
                 if let note = shared.decide(
@@ -1430,13 +1454,13 @@ final class RunSession<Executor: ProcessExecutor> {
                 cap: established?.deadline ?? options.timeoutCap
             )
         }
-        if let shared = established?.judge.harness as? SharedProcessHarness<Executor> {
+        if let shared = established?.judge.harness as? any SharedProcessControl {
             shared.shutdown()
             let statistics = shared.statistics
             guard shared.mode == .on || statistics.batchesEngaged > 0 else { return }
             artifact.notes.append(
-                "shared process: \(statistics.sharedKills) kill(s) decided in shared workers, "
-                    + "\(statistics.freshRuns) run(s) in fresh processes; \(statistics.workersStarted) worker(s) "
+                "shared process: \(statistics.sharedKills) kill(s) and \(statistics.sharedPasses) narrowed pass(es) "
+                    + "in shared workers, \(statistics.freshRuns) run(s) in fresh processes; \(statistics.workersStarted) worker(s) "
                     + "started, \(statistics.workersRetired) replaced; \(statistics.processCached.count) "
                     + "process-cached mutant(s) always run fresh"
             )

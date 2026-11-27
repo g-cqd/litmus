@@ -106,6 +106,8 @@ struct Judge: Sendable {
         request.collectPerTestReach = collectPerTestReach
         request.environmentToken = options.environmentToken
         request.skipModules = quarantined
+        request.alone = alone
+        request.rechecksNarrowedSurvivors = options.recheckSurvivors
         // A run alone decides a timeout: never at background priority.
         request.supervision = options.supervision(background: alone ? false : nil)
         if harness.selectsModules { request.onlyModules = only == nil ? modules : nil }
@@ -191,8 +193,11 @@ struct Judge: Sendable {
             modules: covering[site.id],
             alone: !suffix.isEmpty
         )
-        // A first run that ended on its own is a sample; a timeout or crash never lengthens the next deadline.
-        if suffix.isEmpty, execution.result.outcome == .passed || execution.result.outcome == .failed {
+        // A fresh first run that ended on its own is a sample; a shared worker's millisecond run or a timeout never
+        // sets the deadline of a fresh process.
+        if suffix.isEmpty, !execution.result.ranInSharedWorker,
+            execution.result.outcome == .passed || execution.result.outcome == .failed
+        {
             timings.record(execution.result.nanoseconds, kind: kind)
         }
         ledger.evidence += execution.result.evidence

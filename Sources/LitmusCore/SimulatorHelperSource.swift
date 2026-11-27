@@ -7,8 +7,11 @@ let simulatorHelperSource = #"""
     // an observer that writes one {"xctest":...} line per case to <XCTest file>. The events file may be a FIFO (per-test
     // reach), so the XCTest file is named on its own. Exit: 0 all passed, 1 a test failed, 64 and above a setup problem
     // (the caller then uses xcodebuild).
+    // `helper --serve <bundle binary> <subject log> <commands FIFO> <replies FIFO>` runs the shared-process serve loop
+    // (`helperServeSource`) instead.
     import XCTest
     \#(helperCommonSource)
+    \#(helperServeSource)
 
     /// One JSON line per finished XCTest case.
     final class Observer: NSObject, XCTestObservation {
@@ -39,6 +42,9 @@ let simulatorHelperSource = #"""
         /// services the main queue; XCTest then runs directly on the main thread.
         static func main() {
             let arguments = CommandLine.arguments
+            if arguments.count == 6, arguments[1] == "--serve" {
+                serve(bundle: arguments[2], subjectLog: arguments[3], commands: arguments[4], replies: arguments[5])
+            }
             guard arguments.count == 5 else {
                 fail("usage: helper <bundle binary> <events> <configuration JSON> <XCTest file>", 64)
             }

@@ -21,6 +21,14 @@ final class MutantTimings: Sendable {
         return "modules:" + (modules?.sorted().joined(separator: ",") ?? "*")
     }
 
+    /// Gives `kind` its initial samples when it has none yet (from the batch's fresh control run).
+    func seed(nanoseconds: Int64, kind: String) {
+        guard nanoseconds > 0 else { return }
+        samples.withLock { all in
+            if all[kind] == nil { all[kind] = Array(repeating: nanoseconds, count: Self.minimumSamples) }
+        }
+    }
+
     func record(_ nanoseconds: Int64, kind: String) {
         guard nanoseconds > 0 else { return }
         samples.withLock { $0[kind, default: []].append(nanoseconds) }

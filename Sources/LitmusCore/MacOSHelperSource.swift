@@ -3,80 +3,93 @@ internal import Foundation
 /// The source of the macOS shared-process helper (`SharedProcessHarness`), compiled once per toolchain into Litmus's
 /// cache. Kept in a raw string so `\(` in it stays Swift source.
 let macOSHelperSource = #"""
-    // Litmus shared-process helper. Usage: helper <test bundle binary> <subject output log>
-    // Loads the bundle once, then runs Swift Testing through its versioned ABI entry point once per command. Its own
-    // protocol uses private copies of the original stdin (commands) and stdout (replies), one JSON line each; the subject
-    // gets /dev/null as stdin and the log as stdout, so nothing a test prints can be read as a reply.
-    //   ready:   {"ready":true}                                  (after the bundle loaded)
-    //   command: {"configuration":{...},"events":"<file>"}      (Swift Testing's configuration JSON; events written there)
-    //   reply:   {"passed":true|false}
-    // End of stdin ends the helper. Exit 64 and above: a setup problem.
+    // Litmus shared-process helper for macOS test bundles: the serve loop of `helperServeSource`.
+    // Usage: helper <test bundle binary> <subject output log> <commands FIFO> <replies FIFO>
     \#(helperCommonSource)
+    \#(helperServeSource)
 
     @main enum Helper {
         static func main() {
-            let arguments = CommandLine.arguments
-            guard arguments.count == 3 else { fail("usage: helper <bundle binary> <subject output log>", 64) }
-            let commands = dup(0), replies = dup(1)
-            guard commands >= 0, replies >= 0 else { fail("dup failed", 65) }
-            let null = open("/dev/null", O_RDONLY)
-            let log = open(arguments[2], O_WRONLY | O_CREAT | O_APPEND, 0o644)
-            guard null >= 0, log >= 0, dup2(null, 0) >= 0, dup2(log, 1) >= 0 else { fail("redirect failed", 65) }
-            close(null)
-            close(log)
-            guard dlopen(arguments[1], RTLD_NOW) != nil else { fail("dlopen: \(String(cString: dlerror()))", 65) }
-            let entryPoint = swiftTestingEntryPoint()
-            let input = FileHandle(fileDescriptor: commands, closeOnDealloc: true)
-            let output = FileHandle(fileDescriptor: replies, closeOnDealloc: true)
-            reply(output, ["ready": true])
-            var pending: [UInt8] = []
-            while let line = nextLine(input, &pending) {
-                guard let command = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
-                    let configuration = command["configuration"],
-                    let configurationData = try? JSONSerialization.data(withJSONObject: configuration),
-                    let events = command["events"] as? String
-                else { fail("unreadable command", 66) }
-                FileManager.default.createFile(atPath: events, contents: nil)
-                guard let handle = FileHandle(forWritingAtPath: events) else { fail("cannot open \(events)", 66) }
-                let lines = Lines(handle)
-                nonisolated(unsafe) var passed = false
-                nonisolated(unsafe) var finished = false
-                Task.detached {
-                    do {
-                        passed = try await runEntryPoint(entryPoint, configurationData, lines)
-                    } catch {
-                        fail("Swift Testing: \(error)", 68)
-                    }
-                    DispatchQueue.main.async { finished = true }
-                }
-                // The main thread services the main queue (main-actor tests) until the run is done.
-                while !finished { RunLoop.main.run(mode: .default, before: .distantFuture) }
-                lines.close()
-                fflush(stdout)
-                reply(output, ["passed": passed])
+            let arguments = Array(CommandLine.arguments.dropFirst())
+            guard arguments.count == 4 else {
+                fail("usage: helper <bundle binary> <subject output log> <commands FIFO> <replies FIFO>", 64)
             }
-            exit(0)
+            serve(bundle: arguments[0], subjectLog: arguments[1], commands: arguments[2], replies: arguments[3])
         }
+    }
+    """#
 
-        /// The next line of `input` without its newline; nil at the end.
-        static func nextLine(_ input: FileHandle, _ pending: inout [UInt8]) -> [UInt8]? {
-            while true {
-                if let newline = pending.firstIndex(of: 0x0A) {
-                    let line = Array(pending[..<newline])
-                    pending.removeSubrange(...newline)
-                    return line
+/// The serve loop of the shared-process helpers (macOS and simulator), at file scope: loads a test bundle once, then
+/// runs Swift Testing through its versioned ABI entry point once per command. Commands and replies, one JSON line each,
+/// go through two FIFOs the host made, so the protocol works the same through `simctl spawn`. The subject gets
+/// /dev/null as stdin and the log as stdout, so nothing a test prints can be read as a reply.
+///   ready:   {"ready":true}                                  (after the bundle loaded)
+///   command: {"configuration":{...},"events":"<file>"}      (Swift Testing's configuration JSON; events written there)
+///   reply:   {"passed":true|false}
+/// The end of the commands FIFO ends the helper. Exit 64 and above: a setup problem.
+let helperServeSource = #"""
+    func serve(bundle: String, subjectLog: String, commands commandsPath: String, replies repliesPath: String) -> Never {
+        // The host opens the commands FIFO for writing first, then the replies FIFO for reading: the same order here.
+        let commands = open(commandsPath, O_RDONLY)
+        let replies = open(repliesPath, O_WRONLY)
+        guard commands >= 0, replies >= 0 else { fail("cannot open the command FIFOs", 65) }
+        let null = open("/dev/null", O_RDONLY)
+        let log = open(subjectLog, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+        guard null >= 0, log >= 0, dup2(null, 0) >= 0, dup2(log, 1) >= 0 else { fail("redirect failed", 65) }
+        close(null)
+        close(log)
+        guard dlopen(bundle, RTLD_NOW) != nil else { fail("dlopen: \(String(cString: dlerror()))", 65) }
+        let entryPoint = swiftTestingEntryPoint()
+        let input = FileHandle(fileDescriptor: commands, closeOnDealloc: true)
+        let output = FileHandle(fileDescriptor: replies, closeOnDealloc: true)
+        // Its own process ID, so the host ends a hung helper inside a simulator (`simctl spawn` is a separate process).
+        serveReply(output, ["ready": true, "pid": Int(getpid())])
+        var pending: [UInt8] = []
+        while let line = serveNextLine(input, &pending) {
+            guard let command = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                let configuration = command["configuration"],
+                let configurationData = try? JSONSerialization.data(withJSONObject: configuration),
+                let events = command["events"] as? String
+            else { fail("unreadable command", 66) }
+            FileManager.default.createFile(atPath: events, contents: nil)
+            guard let handle = FileHandle(forWritingAtPath: events) else { fail("cannot open \(events)", 66) }
+            let lines = Lines(handle)
+            nonisolated(unsafe) var passed = false
+            nonisolated(unsafe) var finished = false
+            Task.detached {
+                do {
+                    passed = try await runEntryPoint(entryPoint, configurationData, lines)
+                } catch {
+                    fail("Swift Testing: \(error)", 68)
                 }
-                let chunk = input.availableData
-                if chunk.isEmpty { return nil }
-                pending += chunk
+                DispatchQueue.main.async { finished = true }
             }
+            // The main thread services the main queue (main-actor tests) until the run is done.
+            while !finished { RunLoop.main.run(mode: .default, before: .distantFuture) }
+            lines.close()
+            fflush(stdout)
+            serveReply(output, ["passed": passed])
         }
+        exit(0)
+    }
 
-        static func reply(_ output: FileHandle, _ object: [String: Any]) {
-            guard let data = try? JSONSerialization.data(withJSONObject: object) else { fail("cannot encode", 66) }
-            output.write(data + Data([0x0A]))
+    /// The next line of `input` without its newline; nil at the end.
+    func serveNextLine(_ input: FileHandle, _ pending: inout [UInt8]) -> [UInt8]? {
+        while true {
+            if let newline = pending.firstIndex(of: 0x0A) {
+                let line = Array(pending[..<newline])
+                pending.removeSubrange(...newline)
+                return line
+            }
+            let chunk = input.availableData
+            if chunk.isEmpty { return nil }
+            pending += chunk
         }
+    }
 
+    func serveReply(_ output: FileHandle, _ object: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: object) else { fail("cannot encode", 66) }
+        output.write(data + Data([0x0A]))
     }
     """#
 

@@ -91,7 +91,7 @@ import Testing
     let second: Int64 = 1_000_000_000
     // Fewer than 8 covered mutants: never.
     #expect(
-        !SharedProcessHarness<BoundedExecutor>.breaksEven(
+        !SharedProcessHarness<SwiftPMDirectHarness<BoundedExecutor>>.breaksEven(
             covered: 7,
             workers: 1,
             suiteNanoseconds: 0,
@@ -100,7 +100,7 @@ import Testing
     )
     // A start under 0.25 s: never, however many mutants.
     #expect(
-        !SharedProcessHarness<BoundedExecutor>.breaksEven(
+        !SharedProcessHarness<SwiftPMDirectHarness<BoundedExecutor>>.breaksEven(
             covered: 500,
             workers: 1,
             suiteNanoseconds: 0,
@@ -109,7 +109,7 @@ import Testing
     )
     // 20 mutants × 0.4 s saved = 8 s > 4 workers × (2 × 0.5 s + 0.4 s) = 5.6 s.
     #expect(
-        SharedProcessHarness<BoundedExecutor>.breaksEven(
+        SharedProcessHarness<SwiftPMDirectHarness<BoundedExecutor>>.breaksEven(
             covered: 20,
             workers: 4,
             suiteNanoseconds: second / 2,
@@ -118,7 +118,7 @@ import Testing
     )
     // A slow suite: 20 × 0.4 s = 8 s < 4 × (2 × 3 s + 0.4 s) = 25.6 s.
     #expect(
-        !SharedProcessHarness<BoundedExecutor>.breaksEven(
+        !SharedProcessHarness<SwiftPMDirectHarness<BoundedExecutor>>.breaksEven(
             covered: 20,
             workers: 4,
             suiteNanoseconds: 3 * second,
@@ -127,7 +127,7 @@ import Testing
     )
     // Nothing to save when a start costs nothing.
     #expect(
-        !SharedProcessHarness<BoundedExecutor>.breaksEven(
+        !SharedProcessHarness<SwiftPMDirectHarness<BoundedExecutor>>.breaksEven(
             covered: 500,
             workers: 1,
             suiteNanoseconds: 0,

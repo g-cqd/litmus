@@ -7,7 +7,7 @@
 3. Rewrite each batch into a schema with individually activated mutations.
 4. Build the schema. Isolate build failures by diagnostics and subdivision; a mutation that fails alone on its own lines is unviable.
 5. Run the inactive schema to establish passing controls and reach evidence. `--unmutated-baseline` requests an additional original-source baseline.
-6. Run reached mutations in separate test processes. Confirm failures according to the selected kill-confirmation policy.
+6. Run reached mutations: narrowed Swift Testing runs in shared helper processes when `--shared-process` engages, and everything else (survivor rechecks, XCTest, crashes, timeouts, process-cached switches) in fresh test processes. Confirm failures according to the selected kill-confirmation policy.
 7. Journal verdicts and write the completed or incomplete run artifact.
 
 An activation marker establishes whether execution reached the mutation. A failure without activation is not sufficient for a kill. Crashes and timeouts are rerun independently. Flaky-test probing and targeted confirmation reduce false detections but cannot eliminate nondeterminism.

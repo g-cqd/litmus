@@ -34,6 +34,11 @@ public struct TestRunRequest: Sendable {
     public var environmentToken = ""
     /// Test modules never run (`--skip-failing-targets` quarantine): their bundles are left out.
     public var skipModules: Set<String> = []
+    /// Run alone on the machine: a confirmation or rerun, never in a shared worker.
+    public var alone = false
+    /// Whether a narrowed survivor will be rechecked in a fresh process against its whole covering modules; a shared
+    /// worker may then report its pass without an immediate fresh copy of the same narrowed run.
+    public var rechecksNarrowedSurvivors = false
 }
 
 /// What a suite execution showed, before activation is considered.
@@ -64,6 +69,8 @@ public struct TestRunResult: Sendable {
     public var testDurations: [String: Int64] = [:]
     /// Per-test counts collected from the event stream.
     public var perTestCounts: [String: TestCounts] = [:]
+    /// Decided inside a shared worker (no process start): its time must not shorten fresh processes' deadlines.
+    public var ranInSharedWorker = false
 
     mutating func absorb(_ scan: TestEvidence.EventScan?) {
         guard let scan else { return }

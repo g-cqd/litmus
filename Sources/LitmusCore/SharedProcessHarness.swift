@@ -5,24 +5,82 @@ internal import SourceCorpus
     internal import Darwin
 #endif
 
-/// Shared-process execution on macOS (docs/design/shared-process.md): a mutant's narrowed Swift Testing run goes to a
-/// helper process that already loaded the test bundle, and the shared control page switches the mutant on.
+/// A test bundle a shared-process helper can serve.
+struct SharedBundle: Sendable, Equatable {
+    let module: String
+    /// The binary the helper loads.
+    let binary: String
+    /// Whether it holds Swift Testing tests (unknown for a simulator bundle: assumed, a filter then selects nothing).
+    let hasSwiftTesting: Bool
+}
+
+/// How to start a helper's serve loop: the program, its arguments and environment, and its directory.
+struct ServeCommand: Sendable {
+    let executable: String
+    let arguments: [String]
+    let environment: [String: String]
+    let directory: String
+}
+
+/// A harness whose bundles a shared-process helper can serve: the macOS SwiftPM one and the simulator one.
+protocol SharedProcessBackend: TestHarness {
+    var sharedBundles: [SharedBundle] { get }
+    var logs: String { get }
+    /// The command that starts `helper`'s serve loop on `bundle` with `arguments` (the serve arguments after the
+    /// helper), the subject's environment plus `environment` (the control page, the worker's TMPDIR).
+    func serveCommand(bundle: SharedBundle, helper: String, arguments: [String], environment: [String: String]) async
+        -> ServeCommand
+}
+
+/// What the run session asks of a shared-process harness, whatever its backend.
+protocol SharedProcessControl: AnyObject, Sendable {
+    var mode: SharedProcessMode { get }
+    var bundleCount: Int { get }
+    var statistics: SharedProcessStatistics { get }
+    func prepare(batch: [Mutation])
+    func decide(covered: Int, workers: Int, suiteNanoseconds: Int64, spawnNanoseconds: Int64) -> String?
+    func shutdown()
+}
+
+/// What a shared-process harness decided where, for the run's notes.
+public struct SharedProcessStatistics: Sendable, Equatable {
+    public var sharedKills = 0
+    public var sharedPasses = 0
+    public var freshRuns = 0
+    public var workersStarted = 0
+    public var workersRetired = 0
+    public var processCached: Set<String> = []
+    /// Batches `auto` engaged, and those it left to fresh processes.
+    public var batchesEngaged = 0
+    public var batchesDeclined = 0
+}
+
+/// Shared-process execution (docs/design/shared-process.md): a mutant's narrowed Swift Testing run goes to a helper
+/// process that already loaded the test bundle, on macOS or on a simulator, and the shared control page switches the
+/// mutant on.
 ///
 /// Only kills are decided there, and only when the mutant's switch was evaluated (`activeHits > 0`) and the failing
 /// tests pass again unmutated in the same process. Everything else runs in a fresh process through the direct
 /// harness: XCTest, whole-suite runs, controls, survivors (always confirmed fresh), mutants the worker classified as
 /// process-cached (evaluated while loading, or a different number of times in two unmutated passes), crashes,
 /// timeouts and any doubt about the worker's state, after which the worker is replaced.
-public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness, @unchecked Sendable {
-    let direct: SwiftPMDirectHarness<Executor>
+final class SharedProcessHarness<Backend: SharedProcessBackend>: TestHarness, SharedProcessControl,
+    @unchecked Sendable
+{
+    let direct: Backend
     /// Builds (or finds in the cache) the helper program; called once, when the first worker starts.
     let buildHelper: @Sendable () async throws -> String
     let scratch: String
     let token: String
     let mode: SharedProcessMode
     public var capabilities: HarnessCapabilities { direct.capabilities }
-    /// `swiftpm-shared` when always on; with `auto`, the direct harness's kind (a note says which batches used workers).
-    public var kind: String { mode == .on ? "swiftpm-shared" : direct.kind }
+    /// `swiftpm-shared` or `simulator-shared` when always on; with `auto`, the direct harness's kind (a note says which
+    /// batches used workers).
+    public var kind: String {
+        guard mode == .on else { return direct.kind }
+        return (direct.kind.hasSuffix("-direct") ? String(direct.kind.dropLast("-direct".count)) : direct.kind)
+            + "-shared"
+    }
 
     private let lock = NSLock()
     private var generation = 0
@@ -31,26 +89,14 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
     private var idle: [String: [Worker]] = [:]
     /// Modules whose worker could not be classified in this generation: fresh processes only.
     private var unshareable: Set<String> = []
-    private var counts = Statistics()
+    private var counts = SharedProcessStatistics()
     /// Whether this batch's narrowed runs go to workers: always with `on`, per batch with `auto` (``decide(covered:workers:suiteNanoseconds:spawnNanoseconds:)``).
     private var engaged: Bool
     /// The built helper, or why it could not be built (`auto` then stays off for the run).
     private var helperPath: Result<String, LitmusFailure>?
 
-    /// What the harness decided where, for the run's notes.
-    public struct Statistics: Sendable, Equatable {
-        public var sharedKills = 0
-        public var freshRuns = 0
-        public var workersStarted = 0
-        public var workersRetired = 0
-        public var processCached: Set<String> = []
-        /// Batches `auto` engaged, and those it left to fresh processes.
-        public var batchesEngaged = 0
-        public var batchesDeclined = 0
-    }
-
-    public init(
-        direct: SwiftPMDirectHarness<Executor>,
+    init(
+        direct: Backend,
         helper: @escaping @Sendable () async throws -> String,
         scratch: String,
         token: String,
@@ -128,10 +174,11 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
 
     deinit { shutdown() }
 
-    public var statistics: Statistics { lock.withLock { counts } }
+    var statistics: SharedProcessStatistics { lock.withLock { counts } }
+    var bundleCount: Int { direct.sharedBundles.count }
 
     /// A new schema batch is built: workers of the previous build are ended, and slots follow `batch`.
-    public func prepare(batch: [Mutation]) {
+    func prepare(batch: [Mutation]) {
         let retired: [Worker] = lock.withLock {
             generation += 1
             slots = SharedControlLayout.slots(for: batch).sorted { $0.value < $1.value }.map(\.key)
@@ -143,7 +190,7 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
     }
 
     /// Ends every idle worker.
-    public func shutdown() {
+    func shutdown() {
         let retired: [Worker] = lock.withLock {
             defer { idle = [:] }
             return idle.values.flatMap { $0 }
@@ -159,16 +206,20 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
             return try await direct.run(request)
         }
         guard isEngaged else { return try await fresh() }
-        guard !request.activeID.isEmpty, let only = request.onlySwiftTesting, !only.isEmpty,
+        guard !request.activeID.isEmpty, !request.alone, let only = request.onlySwiftTesting, !only.isEmpty,
             !request.collectPerTestReach, request.repetitions == nil,
             lock.withLock({ slots.contains(request.activeID) })
         else { return try await fresh() }
-        let targets = direct.bundles.filter { bundle in
+        let targets = direct.sharedBundles.filter { bundle in
             only.contains { $0.hasPrefix(bundle.module + ".") }
                 && request.onlyModules.map { $0.contains(bundle.module) } ?? true
                 && !request.skipModules.contains(bundle.module)
         }
-        guard !targets.isEmpty, targets.allSatisfy({ $0.swiftTestingCount > 0 }) else { return try await fresh() }
+        guard !targets.isEmpty, targets.allSatisfy(\.hasSwiftTesting) else { return try await fresh() }
+        var passed = 0, skipped = 0
+        var evidence: [String] = []
+        var scans: [TestEvidence.EventScan] = []
+        var wasHit = false
         for bundle in targets {
             guard let worker = try await checkout(bundle, request: request) else { return try await fresh() }
             if worker.processCached.contains(request.activeID) {
@@ -181,31 +232,53 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
                 checkin(worker)
                 lock.withLock { counts.sharedKills += 1 }
                 return result
-            case .passed:
+            case .passed(let scan, let bundleEvidence, let hit):
                 checkin(worker)
+                passed += scan.counts.passed
+                skipped += scan.counts.skipped
+                evidence += bundleEvidence
+                scans.append(scan)
+                wasHit = wasHit || hit
             case .doubt:
                 retire(worker)
                 return try await fresh()
             }
         }
-        // Every bundle passed: a survivor is never decided in a shared process.
-        return try await fresh()
+        // Without the full-module recheck this run would decide a survivor: run fresh instead.
+        guard request.rechecksNarrowedSurvivors else { return try await fresh() }
+        if wasHit {
+            FileManager.default.createFile(atPath: request.coverageDirectory + "/" + request.activeID, contents: nil)
+        }
+        lock.withLock { counts.sharedPasses += 1 }
+        var result = TestRunResult(
+            outcome: .passed,
+            counts: TestCounts(passed: passed, failed: 0, skipped: skipped),
+            nanoseconds: nanoseconds(since: start),
+            evidence: evidence,
+            reason: "passed in shared worker (rechecked against the full modules)"
+        )
+        result.ranInSharedWorker = true
+        for scan in scans { result.absorb(scan) }
+        return result
     }
 
     private enum SharedOutcome {
         case killed(TestRunResult)
-        case passed
+        case passed(TestEvidence.EventScan, [String], Bool)
         /// The worker's state or the run is in doubt: replace the worker and decide in a fresh process.
         case doubt
     }
 
     private func runShared(
-        _ bundle: SwiftPMDirectHarness<Executor>.Bundle,
+        _ bundle: SharedBundle,
         worker: Worker,
         request: TestRunRequest,
         start: ContinuousClock.Instant
     ) async throws -> SharedOutcome {
         let remaining = max(1, request.deadline - Int(nanoseconds(since: start) / 1_000_000_000))
+        // The worker already loaded the bundle: its unmutated pass took `suiteNanoseconds`, not a fresh process's
+        // static deadline. A mutant that hangs here fails in seconds and gets its full deadline in a fresh process.
+        let runTimeout = min(remaining, max(3, 4 * Int(worker.suiteNanoseconds / 1_000_000_000) + 2))
         let tests = (request.onlySwiftTesting ?? []).filter { $0.hasPrefix(bundle.module + ".") }
         let stem = "\(request.name)-\(bundle.module)-shared"
         /// The mutant's tests, once, with whatever the page holds; events in `logs/<stem><suffix>.events.jsonl`.
@@ -213,7 +286,7 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
             try await worker.run(
                 Self.configuration(only: tests, skip: request.skipSwiftTesting, width: request.parallelizationWidth),
                 events: "\(direct.logs)/\(stem)\(suffix).events.jsonl",
-                timeout: remaining
+                timeout: runTimeout
             )
         }
         try worker.page.activate(request.activeID)
@@ -223,7 +296,8 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
         guard let active, let scan = active.scan, scan.ended else { return .doubt }
         if !scan.failed && active.passed {
             // The mutant survived here; its run may still have left state behind. Look before the next mutant.
-            return try await pass("-after")?.clean == true ? .passed : .doubt
+            guard try await pass("-after")?.clean == true else { return .doubt }
+            return .passed(scan, ["logs/\(stem).events.jsonl", "logs/\(stem)-after.events.jsonl"], hits > 0)
         }
         let failing = scan.failedTests.map(testName).sorted()
         guard hits > 0, !failing.isEmpty else { return .doubt }
@@ -240,6 +314,7 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
         )
         result.failingTests = failing
         result.failedModule = bundle.module
+        result.ranInSharedWorker = true
         result.absorb(scan)
         return .killed(result)
     }
@@ -254,7 +329,7 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
 
     // MARK: Workers
 
-    private func checkout(_ bundle: SwiftPMDirectHarness<Executor>.Bundle, request: TestRunRequest) async throws
+    private func checkout(_ bundle: SharedBundle, request: TestRunRequest) async throws
         -> Worker?
     {
         let (reused, current, batch, refused): (Worker?, Int, [String], Bool) = lock.withLock {
@@ -295,7 +370,7 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
     /// number of times in two unmutated passes over the bundle, is process-cached. Nil when the helper does not start
     /// or an unmutated pass does not pass.
     private func spawn(
-        _ bundle: SwiftPMDirectHarness<Executor>.Bundle,
+        _ bundle: SharedBundle,
         generation: Int,
         slots: [String],
         request: TestRunRequest
@@ -305,21 +380,25 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
         try FileManager.default.createDirectory(atPath: directory + "/tmp", withIntermediateDirectories: true)
         let page = try SharedControlPage(path: directory + "/page", slots: slots)
         page.countsEvaluations = true
-        var environment = subjectEnvironment(nil)
-        environment["TMPDIR"] = directory + "/tmp"
-        environment[processTokenVariable] = directory
-        environment["DYLD_FRAMEWORK_PATH"] = direct.toolchain.frameworks
-        environment["DYLD_LIBRARY_PATH"] = direct.toolchain.libraries
-        environment[ActivationEnvironment.key(ActivationEnvironment.sharedControlPage, token: token)] = page.path
         let name = "shared-\(bundle.module)-\(directory.suffix(8))"
+        let commands = directory + "/commands", replies = directory + "/replies"
+        let command = await direct.serveCommand(
+            bundle: bundle,
+            helper: helper,
+            arguments: [bundle.binary, "\(direct.logs)/\(name).out.log", commands, replies],
+            environment: [
+                "TMPDIR": directory + "/tmp",
+                ActivationEnvironment.key(ActivationEnvironment.sharedControlPage, token: token): page.path,
+            ]
+        )
         guard
-            let worker = try Worker(
+            let worker = try await Worker(
                 module: bundle.module,
                 generation: generation,
-                helper: helper,
-                arguments: [bundle.binaryPath, "\(direct.logs)/\(name).out.log"],
-                environment: environment,
-                directory: direct.workspace,
+                command: command,
+                commands: commands,
+                replies: replies,
+                processToken: directory,
                 errorLog: "\(direct.logs)/\(name).err.log",
                 page: page
             )
@@ -340,6 +419,7 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
                 worker.terminate()
                 return nil
             }
+            if let run { worker.suiteNanoseconds = max(worker.suiteNanoseconds, run.nanoseconds) }
             passes.append(page.evaluations())
         }
         page.countsEvaluations = false
@@ -360,57 +440,112 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
         let generation: Int
         let page: SharedControlPage
         var processCached: Set<String> = []
+        /// How long one unmutated pass over this bundle took in this loaded worker.
+        var suiteNanoseconds: Int64 = 0
         /// Mutants run so far.
         var mutants = 0
         private let process = Process()
-        private let commands: FileHandle
+        private let commandsLock = NSLock()
+        private var commands: Int32
         private let replies: LineReader
+        /// The helper's own process ID (differs from `process`'s when `simctl spawn` launched it).
+        private var helperPID: Int32?
 
         /// What one command's run showed.
         struct Run {
             let passed: Bool
             let scan: TestEvidence.EventScan?
+            let nanoseconds: Int64
             /// Passed, with a complete event stream and no failing issue.
             var clean: Bool { passed && scan?.ended == true && scan?.failed == false }
         }
 
+        /// Makes the two FIFOs, starts `command` (stdin /dev/null, its output to `errorLog`), and opens the FIFOs in
+        /// the helper's order: commands for writing, then replies. Nil when the helper does not start or never opens
+        /// them within 120 s.
         init?(
             module: String,
             generation: Int,
-            helper: String,
-            arguments: [String],
-            environment: [String: String],
-            directory: String,
+            command: ServeCommand,
+            commands commandsPath: String,
+            replies repliesPath: String,
+            processToken: String,
             errorLog: String,
             page: SharedControlPage
-        ) throws {
+        ) async throws {
             self.module = module
             self.generation = generation
             self.page = page
-            let input = Pipe(), output = Pipe()
-            process.executableURL = URL(fileURLWithPath: helper)
-            process.arguments = arguments
+            for path in [commandsPath, repliesPath] {
+                guard unsafe mkfifo(path, 0o600) == 0 else { throw LitmusFailure("mkfifo \(path): errno \(errno)") }
+            }
+            process.executableURL = URL(fileURLWithPath: command.executable)
+            process.arguments = command.arguments
+            var environment = command.environment
+            environment[processTokenVariable] = processToken
             process.environment = environment
-            process.currentDirectoryURL = URL(fileURLWithPath: directory)
-            process.standardInput = input
-            process.standardOutput = output
+            process.currentDirectoryURL = URL(fileURLWithPath: command.directory)
+            process.standardInput = FileHandle.nullDevice
             FileManager.default.createFile(atPath: errorLog, contents: nil)
-            process.standardError = FileHandle(forWritingAtPath: errorLog)
-            commands = input.fileHandleForWriting
-            replies = LineReader(output.fileHandleForReading)
+            let log = FileHandle(forWritingAtPath: errorLog)
+            process.standardOutput = log
+            process.standardError = log
             do { try process.run() } catch { return nil }
+            // A writer's open fails (ENXIO) until the helper opened its end: retry while it runs.
+            var writer: Int32 = -1
+            let deadline = ContinuousClock.now + .seconds(120)
+            while writer < 0, process.isRunning, ContinuousClock.now < deadline {
+                writer = unsafe open(commandsPath, O_WRONLY | O_NONBLOCK)
+                if writer < 0 { try? await Task.sleep(for: .milliseconds(20)) }
+            }
+            let reader = writer >= 0 ? unsafe open(repliesPath, O_RDONLY | O_NONBLOCK) : -1
+            guard writer >= 0, reader >= 0 else {
+                if writer >= 0 { close(writer) }
+                if reader >= 0 { close(reader) }
+                if process.isRunning { process.terminate() }
+                return nil
+            }
+            _ = fcntl(writer, F_SETFL, fcntl(writer, F_GETFL) & ~O_NONBLOCK)
+            _ = fcntl(writer, F_SETNOSIGPIPE, 1)
+            commands = writer
+            let process = process
+            guard let reader = LineReader(descriptor: reader, alive: { process.isRunning }) else {
+                close(writer)
+                if process.isRunning { process.terminate() }
+                return nil
+            }
+            replies = reader
         }
 
         func waitReady(timeout: Int) async -> Bool {
-            guard case .line(let line) = await replies.next(timeout: timeout) else { return false }
-            return (try? JSONSerialization.jsonObject(with: line) as? [String: Any])?["ready"] as? Bool == true
+            guard case .line(let line) = await replies.next(timeout: timeout),
+                let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                object["ready"] as? Bool == true
+            else { return false }
+            helperPID = (object["pid"] as? Int).flatMap(Int32.init(exactly:))
+            return true
         }
 
         /// One Swift Testing run with `configuration`; nil when the helper ended or did not answer in `timeout`
         /// seconds (then it is ended).
         func run(_ configuration: [String: Any], events: String, timeout: Int) async throws -> Run? {
+            let started = Date()
             let command = try JSONSerialization.data(withJSONObject: ["configuration": configuration, "events": events])
-            do { try commands.write(contentsOf: command + Data([0x0A])) } catch { return nil }
+            let payload = command + Data([0x0A])
+            let wrote = commandsLock.withLock { () -> Bool in
+                guard commands >= 0 else { return false }
+                var offset = 0
+                while offset < payload.count {
+                    let count = unsafe payload[offset...].withUnsafeBytes {
+                        unsafe Darwin.write(commands, $0.baseAddress, $0.count)
+                    }
+                    if count < 0, errno == EINTR { continue }
+                    guard count > 0 else { return false }
+                    offset += count
+                }
+                return true
+            }
+            guard wrote else { return nil }
             guard case .line(let line) = await replies.next(timeout: timeout),
                 let reply = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
                 let passed = reply["passed"] as? Bool
@@ -418,61 +553,207 @@ public final class SharedProcessHarness<Executor: ProcessExecutor>: TestHarness,
                 terminate()
                 return nil
             }
+            let nanos = Int64(Date().timeIntervalSince(started) * 1_000_000_000)
             let scan = try? TestEvidence.swiftTestingEvents(BoundedFileReader.read(path: events, cap: 64 << 20))
-            return Run(passed: passed, scan: scan)
+            return Run(passed: passed, scan: scan, nanoseconds: nanos)
         }
-
         func terminate() {
+            // The helper inside the simulator first (`simctl spawn` would leave it behind), then the launcher, then
+            // our FIFO ends so the reader thread leaves its read.
+            if let pid = helperPID, pid > 1 { kill(pid, SIGKILL) }
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-            try? commands.close()
+            commandsLock.withLock {
+                if commands >= 0 {
+                    Darwin.close(commands)
+                    commands = -1
+                }
+            }
+            replies.close()
             process.waitUntilExit()
         }
     }
 
-    /// Lines of a pipe, read on a thread of their own so a wait can time out.
-    final class LineReader: @unchecked Sendable {
+    /// Lines of a non-blocking descriptor, waited on with `poll` alongside a wake pipe: `close()` wakes a waiting
+    /// caller, and the descriptors close once no call is reading them (never under another descriptor's number, and
+    /// never inside Foundation's `NSConcreteFileHandle` lock).
+    @safe final class LineReader: @unchecked Sendable {
         enum Next { case line(Data), timedOut, ended }
-        private let condition = NSCondition()
-        private var lines: [Data] = []
-        private var ended = false
+        private let descriptor: Int32
+        private let wake: (read: Int32, write: Int32)
+        private let alive: @Sendable () -> Bool
+        private let lock = NSLock()
+        private var closed = false
+        private var reading = false
+        private var released = false
+        private var pending = Data()
+        private var openedWriter = false
 
-        init(_ handle: FileHandle) {
-            let thread = Thread { [self] in
-                var pending = Data()
+        init?(descriptor: Int32, alive: @escaping @Sendable () -> Bool) {
+            var ends: [Int32] = [-1, -1]
+            guard unsafe pipe(&ends) == 0 else {
+                Darwin.close(descriptor)
+                return nil
+            }
+            for end in ends { _ = fcntl(end, F_SETFD, FD_CLOEXEC) }
+            self.descriptor = descriptor
+            wake = (ends[0], ends[1])
+            self.alive = alive
+        }
+
+        deinit { close() }
+
+        func close() {
+            let (shouldWake, releaseNow) = lock.withLock { () -> (Bool, Bool) in
+                guard !closed else { return (false, false) }
+                closed = true
+                if reading { return (true, false) }
+                released = true
+                return (false, true)
+            }
+            if shouldWake {
+                var byte: UInt8 = 1
+                _ = unsafe write(wake.write, &byte, 1)
+            }
+            if releaseNow { releaseDescriptors() }
+        }
+
+        private func releaseDescriptors() {
+            Darwin.close(descriptor)
+            Darwin.close(wake.read)
+            Darwin.close(wake.write)
+        }
+
+        func next(timeout: Int) async -> Next {
+            await Task.detached { [self] in readLine(timeout: timeout) }.value
+        }
+
+        private func readLine(timeout: Int) -> Next {
+            let entered = lock.withLock { () -> Bool in
+                guard !closed, !reading else { return false }
+                reading = true
+                return true
+            }
+            guard entered else { return .ended }
+            defer {
+                let releaseNow = lock.withLock { () -> Bool in
+                    reading = false
+                    guard closed, !released else { return false }
+                    released = true
+                    return true
+                }
+                if releaseNow { releaseDescriptors() }
+            }
+            let deadline = ContinuousClock.now + .seconds(timeout)
+            var buffer = [UInt8](repeating: 0, count: 65_536)
+            while true {
+                let buffered: Data? = lock.withLock {
+                    if closed { return Data() }
+                    guard let newline = pending.firstIndex(of: 0x0A) else { return nil }
+                    defer { pending.removeSubrange(...newline) }
+                    return Data(pending[..<newline])
+                }
+                if let buffered { return lock.withLock({ closed }) && buffered.isEmpty ? .ended : .line(buffered) }
+                let remaining = deadline - ContinuousClock.now
+                guard remaining > .zero else { return .timedOut }
+                let slice = Int32(
+                    min(
+                        500,
+                        max(
+                            1,
+                            remaining.components.seconds * 1_000
+                                + remaining.components.attoseconds / 1_000_000_000_000_000
+                        )
+                    )
+                )
+                var descriptors = [
+                    pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0),
+                    pollfd(fd: wake.read, events: Int16(POLLIN), revents: 0),
+                ]
+                let ready = unsafe poll(&descriptors, 2, slice)
+                if lock.withLock({ closed }) { return .ended }
+                if ready == 0 {
+                    if !alive() { return .ended }
+                    continue
+                }
+                if ready < 0 {
+                    if errno == EINTR { continue }
+                    return .ended
+                }
+                if descriptors[1].revents != 0 { return .ended }
                 while true {
-                    let chunk = handle.availableData
-                    condition.lock()
-                    if chunk.isEmpty {
-                        ended = true
-                        condition.broadcast()
-                        condition.unlock()
-                        return
+                    let count = buffer.withUnsafeMutableBytes {
+                        unsafe Darwin.read(descriptor, $0.baseAddress, $0.count)
                     }
-                    pending.append(chunk)
-                    while let newline = pending.firstIndex(of: 0x0A) {
-                        lines.append(pending[pending.startIndex..<newline])
-                        pending = pending[pending.index(after: newline)...]
+                    if count > 0 {
+                        lock.withLock {
+                            openedWriter = true
+                            pending.append(contentsOf: buffer[..<count])
+                        }
+                    } else if count == 0 {
+                        if !lock.withLock({ openedWriter }), alive() {
+                            usleep(10_000)
+                            break
+                        }
+                        return .ended
+                    } else if errno == EAGAIN || errno == EINTR {
+                        break
+                    } else {
+                        return .ended
                     }
-                    condition.broadcast()
-                    condition.unlock()
                 }
             }
-            thread.start()
         }
+    }
+}
 
-        /// The next line, waiting at most `timeout` seconds on a thread of the cooperative pool's choosing.
-        func next(timeout: Int) async -> Next {
-            await Task.detached { [self] in waitForLine(timeout: timeout) }.value
+extension SwiftPMDirectHarness: SharedProcessBackend {
+    var sharedBundles: [SharedBundle] {
+        bundles.map {
+            SharedBundle(module: $0.module, binary: $0.binaryPath, hasSwiftTesting: $0.swiftTestingCount > 0)
         }
+    }
 
-        private func waitForLine(timeout: Int) -> Next {
-            let deadline = Date(timeIntervalSinceNow: TimeInterval(timeout))
-            condition.lock()
-            defer { condition.unlock() }
-            while lines.isEmpty && !ended {
-                if !condition.wait(until: deadline) { return .timedOut }
-            }
-            return lines.isEmpty ? .ended : .line(Data(lines.removeFirst()))
+    func serveCommand(bundle: SharedBundle, helper: String, arguments: [String], environment: [String: String]) async
+        -> ServeCommand
+    {
+        var child = subjectEnvironment(nil)
+        child["DYLD_FRAMEWORK_PATH"] = toolchain.frameworks
+        child["DYLD_LIBRARY_PATH"] = toolchain.libraries
+        child.merge(environment) { _, new in new }
+        return ServeCommand(executable: helper, arguments: arguments, environment: child, directory: workspace)
+    }
+}
+
+extension SimulatorDirectHarness: SharedProcessBackend {
+    var sharedBundles: [SharedBundle] {
+        bundles.map { SharedBundle(module: $0.module, binary: $0.binary, hasSwiftTesting: true) }
+    }
+
+    /// `simctl spawn` on the next device of the fleet: the helper's serve mode, its environment passed as
+    /// `SIMCTL_CHILD_*`. The FIFOs and the control page are host paths, which simulator processes open as they are.
+    func serveCommand(bundle: SharedBundle, helper: String, arguments: [String], environment: [String: String]) async
+        -> ServeCommand
+    {
+        guard let full = bundles.first(where: { $0.module == bundle.module }) else {
+            return ServeCommand(executable: "/usr/bin/false", arguments: [], environment: [:], directory: workspace)
         }
+        var variables = self.environment(nil, bundle: full)
+        for (name, value) in environment { variables["SIMCTL_CHILD_" + name] = value }
+        let udid = await fleet.nextDevice().udid
+        let spawn = ["spawn", udid, helper, "--serve"] + arguments
+        if self.helper.simctl == "/usr/bin/xcrun" {
+            return ServeCommand(
+                executable: "/usr/bin/xcrun",
+                arguments: ["simctl"] + spawn,
+                environment: variables,
+                directory: workspace
+            )
+        }
+        return ServeCommand(
+            executable: self.helper.simctl,
+            arguments: spawn,
+            environment: variables,
+            directory: workspace
+        )
     }
 }
