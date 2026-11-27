@@ -98,17 +98,17 @@ func `DYLD variables reach a command outside SIP`() async throws {
         try? await Task.sleep(for: .milliseconds(150))
         stop(failFastReason)
     }
+    // The child outlives any scheduling delay: under a loaded sanitizer run, spawning it and starting the monitor took
+    // seconds, and a 30 s child once finished before the stop arrived.
     let output = try await BoundedExecutor().execute(
-        ToolCommand(executable: "/bin/sleep", arguments: ["30"]),
+        ToolCommand(executable: "/bin/sleep", arguments: ["300"]),
         directory: "/",
         environment: [:],
-        timeout: 20,
+        timeout: 400,
         supervision: supervision
     )
     #expect(output.stopReason == failFastReason)
-    // Stopped, not finished: by SIGTERM, or (under sanitizer load, when the stop lands as the child starts) with a
-    // failing status. An ignored stop would have ended in the 20 s timeout, without this reason.
-    #expect(output.terminationSignal == SIGTERM || output.exitStatus != 0)
+    #expect(output.terminationSignal == SIGTERM)
 }
 
 @Test(.timeLimit(.minutes(10))) func `a command past the memory limit is stopped and says so`() async throws {

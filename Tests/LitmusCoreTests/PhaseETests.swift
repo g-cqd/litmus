@@ -308,7 +308,7 @@ import Testing
     }
 
     #if os(macOS)
-        @Test(.timeLimit(.minutes(2))) func `rendered Phase E2 schemas typecheck under Swift 6`() throws {
+        @Test(.timeLimit(.minutes(2))) func `rendered Phase E2 schemas typecheck under Swift 6`() async throws {
             let source = """
                 struct Sample {
                     var items: [Int]
@@ -342,21 +342,17 @@ import Testing
                 let rendered = try SchemaWriter.schema(source, mutations: batch, token: "cafebabe")
                 let file = dir.appendingPathComponent("batch-\(index).swift")
                 try Data(rendered.text.utf8).write(to: file)
-                let proc = Process()
-                proc.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-                proc.arguments = ["swiftc", "-typecheck", "-swift-version", "6", "-parse-as-library", file.path]
-                let pipe = Pipe()
-                proc.standardError = pipe
-                try proc.run()
-                let err = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                proc.waitUntilExit()
-                #expect(proc.terminationStatus == 0, "batch \(index) failed typecheck:\n\(err)")
+                let typecheck = try await runTool(
+                    "/usr/bin/xcrun",
+                    ["swiftc", "-typecheck", "-swift-version", "6", "-parse-as-library", file.path]
+                )
+                #expect(typecheck.status == 0, "batch \(index) failed typecheck:\n\(typecheck.output)")
             }
         }
 
         @Test(.timeLimit(.minutes(2)))
         func `weaken-capture and remove-defer schemas preserve baseline semantics and inject faults when active`()
-            throws
+            async throws
         {
             let subject = """
                 final class Resource: @unchecked Sendable {
@@ -403,38 +399,26 @@ import Testing
             try Data(schema.text.utf8).write(to: dir.appendingPathComponent("Resource.swift"))
             try Data(mainDriver.utf8).write(to: dir.appendingPathComponent("Main.swift"))
             let bin = dir.appendingPathComponent("check")
-            let build = Process()
-            build.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-            build.arguments = [
-                "swiftc", "-swift-version", "6", "-parse-as-library",
-                dir.appendingPathComponent("Resource.swift").path,
-                dir.appendingPathComponent("Main.swift").path,
-                "-o", bin.path,
-            ]
-            let errPipe = Pipe()
-            build.standardError = errPipe
-            try build.run()
-            let err = String(decoding: errPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            build.waitUntilExit()
-            #expect(build.terminationStatus == 0, "swiftc failed:\n\(err)")
+            let build = try await runTool(
+                "/usr/bin/xcrun",
+                [
+                    "swiftc", "-swift-version", "6", "-parse-as-library",
+                    dir.appendingPathComponent("Resource.swift").path,
+                    dir.appendingPathComponent("Main.swift").path,
+                    "-o", bin.path,
+                ]
+            )
+            #expect(build.status == 0, "swiftc failed:\n\(build.output)")
 
-            func run(active: String?) throws -> String {
-                let p = Process()
-                p.executableURL = bin
-                var env = ProcessInfo.processInfo.environment
-                if let active { env["LITMUS_ACTIVE_ID_deadbeef"] = active }
-                p.environment = env
-                let out = Pipe()
-                p.standardOutput = out
-                try p.run()
-                let data = out.fileHandleForReading.readDataToEndOfFile()
-                p.waitUntilExit()
-                return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            func run(active: String?) async throws -> String {
+                let environment = active.map { ["LITMUS_ACTIVE_ID_deadbeef": $0] } ?? [:]
+                return try await runTool(bin.path, [], environment: environment).output
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
             }
 
-            #expect(try run(active: nil) == "during=body;after=body,deferred\nleaked=false")
-            #expect(try run(active: deferSite.id) == "during=body;after=body\nleaked=false")
-            #expect(try run(active: weakSite.id) == "during=body;after=body,deferred\nleaked=true")
+            #expect(try await run(active: nil) == "during=body;after=body,deferred\nleaked=false")
+            #expect(try await run(active: deferSite.id) == "during=body;after=body\nleaked=false")
+            #expect(try await run(active: weakSite.id) == "during=body;after=body,deferred\nleaked=true")
         }
 
         @Test(.timeLimit(.minutes(2)))
@@ -468,20 +452,16 @@ import Testing
             try Data(model.utf8).write(to: modelFile)
             try Data(consumer.utf8).write(to: consumerFile)
 
-            let build = Process()
-            build.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-            build.arguments = [
-                "swiftc", "-c", "-swift-version", "6", "-module-name", "Lib",
-                "-index-store-path", storeDir.path,
-                modelFile.path, consumerFile.path,
-            ]
-            build.currentDirectoryURL = dir
-            let errPipe = Pipe()
-            build.standardError = errPipe
-            try build.run()
-            let buildErr = String(decoding: errPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            build.waitUntilExit()
-            #expect(build.terminationStatus == 0, "swiftc index build failed:\n\(buildErr)")
+            let build = try await runTool(
+                "/usr/bin/xcrun",
+                [
+                    "swiftc", "-c", "-swift-version", "6", "-module-name", "Lib",
+                    "-index-store-path", storeDir.path,
+                    modelFile.path, consumerFile.path,
+                ],
+                directory: dir.path
+            )
+            #expect(build.status == 0, "swiftc index build failed:\n\(build.output)")
 
             // Without TypeOracle, `bag.tags` / `bag.scores` / `bag.numbers` have cross-file types unknown to syntax alone.
             let withoutOracle = try MutationPlanner.mutations(
@@ -520,18 +500,11 @@ import Testing
             let rendered = try SchemaWriter.schema(consumer, mutations: plan.mutations, token: "01020304")
             let schemaFile = dir.appendingPathComponent("ConsumerSchema.swift")
             try Data(rendered.text.utf8).write(to: schemaFile)
-            let check = Process()
-            check.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-            check.arguments = [
-                "swiftc", "-typecheck", "-swift-version", "6", "-module-name", "Lib",
-                modelFile.path, schemaFile.path,
-            ]
-            let checkPipe = Pipe()
-            check.standardError = checkPipe
-            try check.run()
-            let checkErr = String(decoding: checkPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            check.waitUntilExit()
-            #expect(check.terminationStatus == 0, "schema typecheck failed:\n\(checkErr)")
+            let check = try await runTool(
+                "/usr/bin/xcrun",
+                ["swiftc", "-typecheck", "-swift-version", "6", "-module-name", "Lib", modelFile.path, schemaFile.path]
+            )
+            #expect(check.status == 0, "schema typecheck failed:\n\(check.output)")
         }
     #endif
 }

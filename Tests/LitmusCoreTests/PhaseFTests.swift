@@ -228,7 +228,9 @@ import Testing
     }
 
     #if os(macOS)
-        @Test(.timeLimit(.minutes(10))) func `rendered SwiftUI UI operator schemas typecheck under Swift 6`() throws {
+        @Test(.timeLimit(.minutes(10))) func `rendered SwiftUI UI operator schemas typecheck under Swift 6`()
+            async throws
+        {
             let source = #"""
                 import SwiftUI
 
@@ -269,17 +271,11 @@ import Testing
                 let rendered = try SchemaWriter.schema(source, mutations: batch, token: "11223344")
                 let file = dir.appendingPathComponent("Screen-\(idx).swift")
                 try Data(rendered.text.utf8).write(to: file)
-                let proc = Process()
-                proc.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-                proc.arguments = [
-                    "--sdk", "macosx", "swiftc", "-typecheck", "-swift-version", "6", "-parse-as-library", file.path,
-                ]
-                let errPipe = Pipe()
-                proc.standardError = errPipe
-                try proc.run()
-                let err = String(decoding: errPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                proc.waitUntilExit()
-                #expect(proc.terminationStatus == 0, "SwiftUI batch \(idx) failed typecheck:\n\(err)")
+                let typecheck = try await runTool(
+                    "/usr/bin/xcrun",
+                    ["--sdk", "macosx", "swiftc", "-typecheck", "-swift-version", "6", "-parse-as-library", file.path]
+                )
+                #expect(typecheck.status == 0, "SwiftUI batch \(idx) failed typecheck:\n\(typecheck.output)")
             }
         }
     #endif

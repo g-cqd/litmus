@@ -63,7 +63,7 @@ import Testing
     }
 
     #if os(macOS)
-        @Test(.timeLimit(.minutes(10))) func `every SwiftUI operator's schema typechecks under Swift 6`() throws {
+        @Test(.timeLimit(.minutes(10))) func `every SwiftUI operator's schema typechecks under Swift 6`() async throws {
             let operators = MutationOperator.uiOperators.union([.removeAccessibilityMetadata])
             let sites = try Self.sites(operators)
             #expect(sites.count >= 10)
@@ -74,17 +74,11 @@ import Testing
                 let rendered = try SchemaWriter.schema(Self.screen, mutations: batch, token: "55667788")
                 let file = dir.appendingPathComponent("PayScreen-\(index).swift")
                 try Data(rendered.text.utf8).write(to: file)
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-                process.arguments = [
-                    "--sdk", "macosx", "swiftc", "-typecheck", "-swift-version", "6", "-parse-as-library", file.path,
-                ]
-                let errors = Pipe()
-                process.standardError = errors
-                try process.run()
-                let message = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                process.waitUntilExit()
-                #expect(process.terminationStatus == 0, "batch \(index) failed typecheck:\n\(message)")
+                let typecheck = try await runTool(
+                    "/usr/bin/xcrun",
+                    ["--sdk", "macosx", "swiftc", "-typecheck", "-swift-version", "6", "-parse-as-library", file.path]
+                )
+                #expect(typecheck.status == 0, "batch \(index) failed typecheck:\n\(typecheck.output)")
             }
         }
     #endif

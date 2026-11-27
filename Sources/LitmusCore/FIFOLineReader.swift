@@ -57,7 +57,7 @@ internal import Synchronization
     }
 
     func next(timeout: Int) async -> Next {
-        await Task.detached { [self] in readLine(timeout: timeout) }.value
+        await offPool { [self] in readLine(timeout: timeout) }
     }
 
     private func wakePoll() {

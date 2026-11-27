@@ -57,16 +57,18 @@ func withEventFIFO<T: Sendable>(
     }
     defer { try? FileManager.default.removeItem(atPath: fifoPath) }
     FileManager.default.createFile(atPath: outputFile, contents: nil)
-    let drainer = Task.detached {
-        guard let reader = FileHandle(forReadingAtPath: fifoPath),
-            let writer = FileHandle(forWritingAtPath: outputFile)
-        else { return }
-        defer {
-            try? reader.close()
-            try? writer.close()
-        }
-        while let chunk = try? reader.read(upToCount: 65_536), !chunk.isEmpty {
-            try? writer.write(contentsOf: chunk)
+    let drainer = Task {
+        await offPool {
+            guard let reader = FileHandle(forReadingAtPath: fifoPath),
+                let writer = FileHandle(forWritingAtPath: outputFile)
+            else { return }
+            defer {
+                try? reader.close()
+                try? writer.close()
+            }
+            while let chunk = try? reader.read(upToCount: 65_536), !chunk.isEmpty {
+                try? writer.write(contentsOf: chunk)
+            }
         }
     }
     do {

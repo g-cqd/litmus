@@ -56,7 +56,7 @@ import Testing
             }
         }
 
-        private func build(strict: Bool) throws -> (directory: String, binary: String, sites: [Mutation]) {
+        private func build(strict: Bool) async throws -> (directory: String, binary: String, sites: [Mutation]) {
             let directory = FileManager.default.temporaryDirectory
                 .appendingPathComponent("litmus-page-\(UUID().uuidString)").path
             try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
@@ -71,26 +71,20 @@ import Testing
             try Data(("import Foundation\n" + driver).utf8).write(
                 to: URL(fileURLWithPath: directory + "/main.swift")
             )
-            let compiler = Process()
-            compiler.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-            compiler.arguments =
+            let compiler = try await runTool(
+                "/usr/bin/xcrun",
                 ["swiftc", "-swift-version", "6", "-module-name", "Subject"]
-                + (strict ? ["-strict-memory-safety", "-warnings-as-errors"] : [])
-                + ["Classify.swift", "main.swift", "-o", "driver"]
-            compiler.currentDirectoryURL = URL(fileURLWithPath: directory)
-            let log = Pipe()
-            compiler.standardError = log
-            compiler.standardOutput = log
-            try compiler.run()
-            let text = String(decoding: log.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            compiler.waitUntilExit()
-            guard compiler.terminationStatus == 0 else { throw LitmusFailure("swiftc failed:\n\(text)") }
+                    + (strict ? ["-strict-memory-safety", "-warnings-as-errors"] : [])
+                    + ["Classify.swift", "main.swift", "-o", "driver"],
+                directory: directory
+            )
+            guard compiler.status == 0 else { throw LitmusFailure("swiftc failed:\n\(compiler.output)") }
             return (directory, directory + "/driver", sites)
         }
 
         @Test(.timeLimit(.minutes(10)), arguments: [false, true])
-        func `one process runs mutant after mutant from the page, and counts evaluations`(strict: Bool) throws {
-            let (directory, binary, sites) = try build(strict: strict)
+        func `one process runs mutant after mutant from the page, and counts evaluations`(strict: Bool) async throws {
+            let (directory, binary, sites) = try await build(strict: strict)
             defer { try? FileManager.default.removeItem(atPath: directory) }
             #expect(sites.count >= 2)
             let page = try SharedControlPage(
@@ -123,8 +117,8 @@ import Testing
             #expect(page.evaluations() == second)
         }
 
-        @Test(.timeLimit(.minutes(10))) func `without a valid page the process keeps LITMUS_ACTIVE_ID`() throws {
-            let (directory, binary, sites) = try build(strict: false)
+        @Test(.timeLimit(.minutes(10))) func `without a valid page the process keeps LITMUS_ACTIVE_ID`() async throws {
+            let (directory, binary, sites) = try await build(strict: false)
             defer { try? FileManager.default.removeItem(atPath: directory) }
             let site = try #require(sites.first)
             let isolated = try Driver(binary: binary, environment: ["LITMUS_ACTIVE_ID_feedf00d": site.id])
