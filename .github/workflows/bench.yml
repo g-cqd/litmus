@@ -89,6 +89,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Swift version
+        id: swift
+        run: echo "version=$(cat .swift-version)" >> "$GITHUB_OUTPUT"
+      # The runner's Xcode is older than Litmus's tools version: the toolchain CI builds Litmus with, through the
+      # swift-ci action ci.yml pins. Cells run the built binary without it (its runtime is in /usr/lib/swift).
+      - name: Set up Swift
+        if: contains(format(',{0},', needs.plan.outputs.tools), ',litmus,')
+        uses: g-cqd/swift-ci/setup-swift@07936b09eef98d5fcef4eac36a7c3f97de133e19 # swift-ci 07936b0
+        with:
+          swift-version: ${{ steps.swift.outputs.version }}
       - name: Build Litmus
         if: contains(format(',{0},', needs.plan.outputs.tools), ',litmus,')
         run: |
