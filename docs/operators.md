@@ -15,7 +15,10 @@ Each operator has a rule identifier, used by `--operators`, by suppression direc
 | `remove-negation` | standard | remove unary logical negation (`!x` to `x`) outside direct conditions |
 | `replace-nil-coalescing` | standard | replace nil-coalescing (`a ?? b`) with its fallback (`b`) |
 | `remove-call` | experimental | skip a call statement whose result is unused |
-| `remove-view-element` | experimental (UI, opt-in) | skip a leaf SwiftUI view-builder element (`--operators` only; reported separately from logic score) |
+| `remove-view-element` | UI (`--ui-operators`) | skip a leaf SwiftUI view-builder element (reported separately from logic score) |
+| `negate-disabled` | UI (`--ui-operators`) | negate a SwiftUI `.disabled(...)` predicate |
+| `remove-presentation` | UI (`--ui-operators`) | suppress `.sheet`, `.fullScreenCover`, `.popover`, `.alert`, `.confirmationDialog`, and `.navigationDestination` |
+| `remove-view-action` | UI (`--ui-operators`) | skip the closure body of `.onAppear`, `.onDisappear`, `.task`, `.refreshable`, `.onSubmit`, and `.onChange` |
 | `replace-stdlib-semantic` | experimental (opt-in) | swap standard-library semantic pairs (`min`/`max`, `allSatisfy`/`contains`, `prefix`/`dropLast`, `dropFirst`/`suffix`, `hasPrefix`/`hasSuffix`) |
 | `remove-normalization` | experimental (opt-in) | remove String normalization calls (`.lowercased()`, `.uppercased()`, `.trimmingCharacters(in:)`) |
 | `replace-optional-chain` | experimental (opt-in) | force-unwrap an optional-chained expression (`a?.b` to `a!.b`, outside assignment targets) |

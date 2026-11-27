@@ -53,7 +53,7 @@ Copied workspaces must include required local package dependencies. Copying only
 
 `--result-store DIR` stores verified verdict records outside the source root. The default `--reuse closure` keys results on the package and its local dependencies, toolchain, and execution options. External dependencies outside an in-place subject root conservatively disable reuse. `--reuse declaration` provides narrower reuse and should be evaluated against the project's dependency model.
 
-Set `LITMUS_STORE_KEY` to authenticate records with HMAC-SHA256. Keep the key private to trusted jobs. Use `--store-read-only` for jobs that must not modify a shared store. Unsigned records detect corruption, not an attacker controlling the store. The default size limit is 1024 MiB; `--store-limit` changes it.
+Set `LITMUS_STORE_KEY` to authenticate records with HMAC-SHA256. Keep the key private to trusted jobs. Use `--store-read-only` for jobs that must not modify a shared store. Unsigned records detect corruption, not an attacker controlling the store. The default size limit is 1024 MiB; `--store-limit` changes it. Use `litmus store status DIR`, `litmus store gc DIR [--max-age-days N] [--max-size-mib N]`, `litmus store pack DIR --output cache.pack`, and `litmus store unpack cache.pack --into DIR` to inspect, prune, and exchange verified store archives across CI jobs.
 
 `--resume RUN` reuses matching verdicts from a prior run. `--reach-from RUN` (a `run.json` or a run directory) imports flaky-test information and matching per-test reach evidence. Neither option makes incompatible verdicts reusable.
 
@@ -79,7 +79,7 @@ Keep baselines separated by project and update them only from trusted runs. A ba
 
 `--budget SECONDS` stops starting new work after the budget, rather than killing work already running. `--max-mutants N` limits mutations tested. Both report untested mutations explicitly.
 
-`--shard k/n` assigns whole-module units to workers. Combine compatible shard results with `litmus merge`; incompatible runs are rejected.
+`--shard k/n` assigns whole-module units to workers (balanced by historical runtime when `--reach-from` supplies a prior run, else by mutant count). Combine compatible shard results with `litmus merge`; incompatible runs are rejected. `litmus analyze --format github` emits GitHub Actions `::warning` and `::error` workflow annotations directly on pull request diffs.
 
 ## Housekeeping
 

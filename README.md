@@ -86,9 +86,10 @@ The mutation score is detected mutations divided by detected plus undetected mut
 - [CI and incremental runs](docs/ci.md)
 - [Execution model and limitations](docs/execution.md)
 - [Testing and performance](docs/testing.md)
+- [CLI, exit-code, and schema stability](docs/stability.md)
 - [Benchmark against other Swift mutation testers](docs/benchmark.md)
 - [Security](SECURITY.md)
-- [Release notes](release-notes/v0.4.14.md)
+- [Release notes](release-notes/v0.7.0.md)
 
 ## License
 
