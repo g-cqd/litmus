@@ -23,24 +23,39 @@ cases, deterministic (twenty consecutive runs of every suite pass).
 
 ## Tools
 
-| Id | Tool | Version | Installed by |
+Every tool runs from the **latest release binary** its project publishes on GitHub; nothing is built.
+`bench/install-tools.sh` asks the GitHub API for each latest release, downloads the macOS archive into a prefix (never
+system-wide), checks it against the release's published `.sha256` when there is one, and records the archive's SHA-256
+otherwise. `<prefix>/versions.tsv` lists tool, release tag, asset, SHA-256 and how it was checked; the workflow shows
+that table in its summary.
+
+| Id | Tool | Release binary | Checksum |
 | --- | --- | --- | --- |
-| `litmus` | Litmus | this checkout | `swift build -c release`, then `LITMUS_BIN` |
-| `smt` | [ericodx/swift-mutation-testing] | 1.7.1 | `bench/install-tools.sh` (release archive, SHA-256 pinned) |
-| `mutest` | [j-khn/mutest-swift] | 0.3.5 | `bench/install-tools.sh` (source archive, SHA-256 pinned, built) |
-| `muter` | [Muter] | 17 | `bench/install-tools.sh` (release archive, SHA-256 pinned) |
+| `litmus` | Litmus (this repository) | `litmus-<version>-macos-arm64.tar.gz` | published `.sha256` |
+| `smt` | [ericodx/swift-mutation-testing] | `swift-mutation-testing-<version>-macos.tar.gz` | recorded |
+| `muter` | [Muter] | `muter-<version>-macos-universal.tar.gz` | published `.sha256` |
+| `xcmutate` | [RyoHirota68/xcmutate] | `xcmutate-<version>-macos-universal.tar.gz` | published `.sha256` |
+| `dlitmus` | [debugholic/litmus] | `litmus-<version>-macos-universal.tar.gz` | recorded |
+| `mutest` | [j-khn/mutest-swift] | none: source archives only | skipped |
 
 [ericodx/swift-mutation-testing]: https://github.com/ericodx/swift-mutation-testing
-[j-khn/mutest-swift]: https://github.com/j-khn/mutest-swift
 [Muter]: https://github.com/muter-mutation-testing/muter
+[RyoHirota68/xcmutate]: https://github.com/RyoHirota68/xcmutate
+[debugholic/litmus]: https://github.com/debugholic/litmus
+[j-khn/mutest-swift]: https://github.com/j-khn/mutest-swift
 
-The tools go into a prefix (`bench/.tools` by default), never system-wide. mutest-swift's executable is also named
-`swift-mutation-testing`, so the runner only ever uses the paths in `SMT_BIN`, `MUTEST_BIN`, `MUTER_BIN` and
-`LITMUS_BIN` (or, failing those, `litmus`, `swift-mutation-testing` and `muter` on `PATH`).
+mutest-swift keeps its adapter: it runs as soon as a release ships a macOS binary. Of the tools xcmutate's README credits,
+[mizchi/mutator] is not here: it mutation-tests TypeScript under Vitest and cannot run on a Swift subject.
 
-Every tool runs its broadest standard operator set: `--operator-tier experimental` for Litmus and
-swift-mutation-testing; mutest-swift and Muter run all their operators by default. The sets still differ, so compare
-counts and scores within a scenario with care.
+[mizchi/mutator]: https://github.com/mizchi/mutator
+
+The runner only uses the paths in `LITMUS_BIN`, `SMT_BIN`, `MUTER_BIN`, `XCMUTATE_BIN`, `DLITMUS_BIN` and `MUTEST_BIN`
+(failing those, `litmus`, `swift-mutation-testing`, `muter` and `xcmutate` on `PATH`). debugholic's executable is also
+named `litmus`, and mutest-swift's `swift-mutation-testing`, so only their variables name them.
+
+Litmus and swift-mutation-testing run with `--operator-tier experimental`, their broadest set; the others run their
+default operators. The sets still differ, so compare counts and scores within a scenario with care. debugholic/litmus
+reports no replacement text, only a description ("changed > to <="); probes read their spellings from it.
 
 ## Scenarios
 
@@ -50,7 +65,7 @@ counts and scores within a scenario with care.
 | --- | --- | --- |
 | `ios-app` | all | the whole workspace on a simulator |
 | `package` | all | `WalletKit` on macOS (SwiftPM) |
-| `diff` | all | a commit that rewrites two lines of `Fare.swift`: Litmus `--diff-base`, mutest-swift `--source-commit`; swift-mutation-testing and Muter, which have no diff mode, get the changed file |
+| `diff` | all | a commit that rewrites two lines of `Fare.swift`: Litmus `--diff-base`, xcmutate and debugholic/litmus `--since`, mutest-swift `--source-commit`; swift-mutation-testing and Muter, which have no diff mode, get the changed file |
 | `reach-off` | Litmus | `ios-app` with `--no-per-test-reach` |
 | `shared-process` | Litmus | `WalletKit` isolated, then with `--shared-process on`; the note counts differing verdicts |
 | `test-changes` | Litmus | a nightly run of `FareKit`, then a commit that only weakens a test, with `--include-test-changes --reach-from` |
@@ -133,15 +148,15 @@ probes with the `probes.json` it runs with.
 | Peak memory | the largest resident set among those processes (`ru_maxrss`) |
 | Peak disk | `du` of the subject copy, the cell's private `TMPDIR` and its output, sampled every 30 s |
 
-Each cell gets its own `TMPDIR`, so a tool's sandboxes there count as its disk use and are removed with the cell.
-Xcode's default DerivedData, which tools that do not choose their own build into, is not counted.
+Each cell gets its own `TMPDIR`, so a tool's sandboxes there count as its disk use and are removed with the cell, and
+xcmutate's `--work-dir` is put inside the cell. Not counted: Xcode's default DerivedData, which tools that do not choose
+their own build into, and debugholic/litmus's work copies in `~/Library/Caches/litmus`.
 
 ## Running
 
 ```sh
-swift build -c release && export LITMUS_BIN="$(swift build -c release --show-bin-path)/litmus"
-eval "$(bench/install-tools.sh)"
-python3 bench/run.py                                    # every tool, every scenario
+eval "$(bench/install-tools.sh)"                        # the latest release binary of every tool
+python3 bench/run.py --jobs 4                           # every tool, every scenario
 python3 bench/run.py --tools litmus,smt --scenarios package,diff --simulator "iPhone 17 Pro"
 ```
 
@@ -154,7 +169,7 @@ On GitHub, the **Benchmark** workflow (`.github/workflows/bench.yml`) runs weekl
 scenario) and on demand, and parallelises the whole matrix:
 
 1. `plan` lists the applicable tool × scenario cells (`bench/run.py --matrix`).
-2. `prepare` builds Litmus and installs the other tools once, into one archive.
+2. `prepare` downloads the latest release binary of every tool once, on Linux, into one archive (nothing is built).
 3. One `cell` job per cell, each on its own macOS runner (so simulator cells never share a simulator), up to the
    `max-parallel` input at once.
 4. `summary` merges every cell's `results.json` (`bench/run.py --merge`) into the run's summary and a `bench-summary`

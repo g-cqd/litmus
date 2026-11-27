@@ -38,7 +38,8 @@
       "replacements": [
         "20_000 : 50_000",
         "(20_000) : (50_000)",
-        "!(isBusinessAccount(level: 1))"
+        "!(isBusinessAccount(level: 1))",
+        "swapped the branches of a ternary"
       ],
       "expect": "detected",
       "why": "a `static let` is evaluated once per process: the mutant must be active before its first read"

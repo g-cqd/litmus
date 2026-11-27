@@ -1,61 +1,91 @@
 #!/bin/bash
-# Installs the benchmark's third-party mutation-testing tools at pinned versions into a prefix (never system-wide),
-# each archive checked against a pinned SHA-256, and prints the environment bench/run.py reads.
+# Installs the benchmark's tools from the latest release binary each publishes on GitHub, into a prefix (never
+# system-wide), and prints the environment bench/run.py reads. Nothing is built: a tool whose latest release has no
+# macOS binary is reported and skipped.
 #
-#   bench/install-tools.sh [PREFIX [TOOLS]] default PREFIX: bench/.tools; TOOLS: comma-separated smt,muter,mutest
-#   eval "$(bench/install-tools.sh)"       then: python3 bench/run.py
+#   bench/install-tools.sh [PREFIX [TOOLS]]   PREFIX: bench/.tools; TOOLS: comma-separated ids (default: all)
+#   eval "$(bench/install-tools.sh)"          then: python3 bench/run.py
 #
-# Litmus itself is not installed here: build it (swift build -c release) and set LITMUS_BIN, or put it on PATH.
+# A release that publishes a .sha256 next to its archive is checked against it; otherwise the archive's SHA-256 is
+# recorded as downloaded. Either way, PREFIX/versions.tsv lists tool, release tag, asset, SHA-256 and how it was
+# checked. GITHUB_TOKEN, when set, authenticates the GitHub API calls (CI's rate limit).
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 prefix="${1:-$here/.tools}"
-tools=",${2:-smt,muter,mutest},"
-wants() { [[ "$tools" == *",$1,"* ]]; }
-mkdir -p "$prefix/bin" "$prefix/src"
+tools=",${2:-litmus,smt,muter,xcmutate,dlitmus,mutest},"
+mkdir -p "$prefix"
+versions="$prefix/versions.tsv"
+printf 'tool\ttag\tasset\tsha256\tchecked\n' > "$versions"
 
-fetch() { # url sha256 file
-    local url="$1" sha="$2" file="$prefix/src/$3"
-    if [ ! -f "$file" ] || ! printf '%s  %s\n' "$sha" "$file" | shasum -a 256 -c - > /dev/null 2>&1; then
-        curl -fsSL "$url" -o "$file.partial"
-        mv "$file.partial" "$file"
+api() {
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        curl -fsSL --retry 3 -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "$1"
+    else
+        curl -fsSL --retry 3 -H "Accept: application/vnd.github+json" "$1"
     fi
-    printf '%s  %s\n' "$sha" "$file" | shasum -a 256 -c - > /dev/null || {
-        echo "install-tools: SHA-256 mismatch for $url" >&2
-        exit 1
-    }
 }
 
-# ericodx/swift-mutation-testing: a prebuilt arm64 executable.
-smt_version=1.7.1
-smt_sha=5799deec1cfc2f99a40e0cefde6285a5671f780b1de65439ed4eec2585f493e7
-if wants smt && [ ! -x "$prefix/smt-$smt_version/swift-mutation-testing" ]; then
-    fetch "https://github.com/ericodx/swift-mutation-testing/releases/download/v$smt_version/swift-mutation-testing-v$smt_version-macos.tar.gz" \
-        "$smt_sha" "smt-$smt_version.tar.gz"
-    mkdir -p "$prefix/smt-$smt_version"
-    tar -xzf "$prefix/src/smt-$smt_version.tar.gz" -C "$prefix/smt-$smt_version"
-fi
+# install <id> <repo> <asset regex> <executable> <environment variable>
+install() {
+    local id="$1" repo="$2" pattern="$3" executable="$4" variable="$5"
+    [[ "$tools" == *",$id,"* ]] || return 0
+    local release tag url name sums
+    release="$(api "https://api.github.com/repos/$repo/releases/latest")"
+    read -r tag url name sums < <(
+        PATTERN="$pattern" python3 -c '
+import json, os, re, sys
+release = json.load(sys.stdin)
+assets = {a["name"]: a["browser_download_url"] for a in release["assets"]}
+match = next((n for n in sorted(assets) if re.fullmatch(os.environ["PATTERN"], n)), None)
+sums = assets.get(f"{match}.sha256", "-") if match else "-"
+print(release["tag_name"], assets.get(match, "-"), match or "-", sums)
+' <<< "$release"
+    )
+    if [ "$url" = "-" ]; then
+        echo "install-tools: $id ($repo $tag) publishes no macOS binary; skipped (nothing is built)" >&2
+        printf '%s\t%s\t-\t-\tno release binary\n' "$id" "$tag" >> "$versions"
+        echo "# $id: no release binary in $repo $tag"
+        return 0
+    fi
+    local home="$prefix/$id-$tag"
+    local archive="$prefix/$name"
+    if [ ! -f "$archive" ]; then
+        curl -fsSL --retry 3 "$url" -o "$archive.partial"
+        mv "$archive.partial" "$archive"
+    fi
+    local digest checked
+    digest="$(shasum -a 256 "$archive" | cut -d' ' -f1)"
+    if [ "$sums" != "-" ]; then
+        local expected
+        expected="$(curl -fsSL --retry 3 "$sums" | tr -s ' \t' ' ' | cut -d' ' -f1)"
+        if [ "$expected" != "$digest" ]; then
+            echo "install-tools: $id: SHA-256 mismatch for $name (published $expected, got $digest)" >&2
+            rm -f "$archive"
+            exit 1
+        fi
+        checked="published .sha256"
+    else
+        checked="recorded (no published checksum)"
+    fi
+    if [ ! -d "$home" ]; then
+        mkdir -p "$home.partial"
+        tar -xzf "$archive" -C "$home.partial"
+        mv "$home.partial" "$home"
+    fi
+    local binary
+    binary="$(find "$home" -type f -name "$executable" -perm -u+x | head -1)"
+    if [ -z "$binary" ]; then
+        echo "install-tools: $id: no executable $executable in $name" >&2
+        exit 1
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$tag" "$name" "$digest" "$checked" >> "$versions"
+    echo "export $variable='$binary'"
+}
 
-# Muter: a prebuilt universal executable.
-muter_version=17
-muter_sha=77d8fd147fadb25d838e8673cfc78747bf6f17c1b73727197b77c20e3ab54210
-if wants muter && [ ! -x "$prefix/muter-$muter_version/muter" ]; then
-    fetch "https://github.com/muter-mutation-testing/muter/releases/download/$muter_version/muter-$muter_version-macos-universal.tar.gz" \
-        "$muter_sha" "muter-$muter_version.tar.gz"
-    mkdir -p "$prefix/muter-$muter_version"
-    tar -xzf "$prefix/src/muter-$muter_version.tar.gz" -C "$prefix/muter-$muter_version"
-fi
-
-# j-khn/mutest-swift: a source archive, built here (its executable is also named swift-mutation-testing).
-mutest_version=0.3.5
-mutest_sha=0a6f4447497879aa619331e8fd5b08bd2dbac3c69296d06fd37d05d3786a6223
-mutest_dir="$prefix/mutest-swift-v$mutest_version"
-if wants mutest && [ ! -x "$mutest_dir/.build/release/swift-mutation-testing" ]; then
-    fetch "https://github.com/j-khn/mutest-swift/releases/download/v$mutest_version/mutest-swift-v$mutest_version.tar.gz" \
-        "$mutest_sha" "mutest-$mutest_version.tar.gz"
-    tar -xzf "$prefix/src/mutest-$mutest_version.tar.gz" -C "$prefix"
-    swift build -c release --package-path "$mutest_dir" --product swift-mutation-testing >&2
-fi
-
-if wants smt; then echo "export SMT_BIN='$prefix/smt-$smt_version/swift-mutation-testing'"; fi
-if wants muter; then echo "export MUTER_BIN='$prefix/muter-$muter_version/muter'"; fi
-if wants mutest; then echo "export MUTEST_BIN='$mutest_dir/.build/release/swift-mutation-testing'"; fi
+install litmus g-cqd/litmus 'litmus-.*-macos-arm64\.tar\.gz' litmus LITMUS_BIN
+install smt ericodx/swift-mutation-testing 'swift-mutation-testing-.*-macos\.tar\.gz' swift-mutation-testing SMT_BIN
+install muter muter-mutation-testing/muter 'muter-.*-macos-.*\.tar\.gz' muter MUTER_BIN
+install xcmutate RyoHirota68/xcmutate 'xcmutate-.*-macos-.*\.tar\.gz' xcmutate XCMUTATE_BIN
+install dlitmus debugholic/litmus 'litmus-.*-macos-.*\.tar\.gz' litmus DLITMUS_BIN
+# j-khn/mutest-swift publishes a source archive only: reported as having no release binary.
+install mutest j-khn/mutest-swift 'mutest-swift-.*-macos.*\.tar\.gz' swift-mutation-testing MUTEST_BIN

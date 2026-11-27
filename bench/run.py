@@ -254,7 +254,7 @@ Mutant = dict
 def normalise(status: str) -> str:
     text = status.lower().replace("_", "").replace(" ", "").replace("-", "")
     table = [
-        (("nocoverage", "notcovered", "uncovered"), "noCoverage"),
+        (("nocoverage", "notcovered", "uncovered", "notreached"), "noCoverage"),
         (("timeout", "timedout"), "timeout"),
         (("compile", "unviable", "builderror", "unbuildable"), "unviable"),
         (("crash", "runtimeerror", "signal"), "crashed"),
@@ -339,6 +339,53 @@ def muter_mutants(report: Path) -> list[Mutant] | None:
                     applied.get("testSuiteOutcome", ""),
                 )
             )
+    return mutants
+
+
+def xcmutate_mutants(report: Path) -> list[Mutant] | None:
+    """xcmutate's JSON report (`--json-output`): `results` with their mutant and status, and the `ignored` mutants."""
+    if not report.exists():
+        return None
+    data = json.loads(report.read_text())
+    mutants = []
+    for result in data.get("results", []):
+        mutant = result.get("mutant", {})
+        mutants.append(
+            record(
+                mutant.get("file", ""),
+                mutant.get("start", {}).get("line"),
+                mutant.get("originalExpression") or mutant.get("original"),
+                mutant.get("mutatedExpression") or mutant.get("replacement"),
+                result.get("status", ""),
+            )
+        )
+    for ignored in data.get("ignored", []):
+        mutants.append(
+            record(
+                ignored.get("file", ""),
+                ignored.get("start", {}).get("line"),
+                ignored.get("original"),
+                ignored.get("replacement"),
+                "ignored",
+            )
+        )
+    return mutants
+
+
+def dlitmus_mutants(report: Path) -> list[Mutant] | None:
+    """debugholic/litmus's JSON report (`--format json`): `mutants` with a file name, a line, a verdict and a
+    description such as "changed > to <=", from which the original and the replacement are read."""
+    if not report.exists():
+        return None
+    mutants = []
+    for mutant in json.loads(report.read_text()).get("mutants", []):
+        description = mutant.get("description", "")
+        original, replacement = "", description
+        if description.startswith("changed ") and " to " in description:
+            original, replacement = description[len("changed ") :].split(" to ", 1)
+        mutants.append(
+            record(mutant.get("file", ""), mutant.get("line"), original, replacement, mutant.get("verdict", ""))
+        )
     return mutants
 
 
@@ -434,6 +481,9 @@ TOOLS = [
     Tool("smt", "swift-mutation-testing (ericodx)", "SMT_BIN", ("swift-mutation-testing",)),
     Tool("mutest", "mutest-swift (j-khn)", "MUTEST_BIN", ("mutest-swift",)),
     Tool("muter", "Muter", "MUTER_BIN", ("muter",)),
+    Tool("xcmutate", "xcmutate (RyoHirota68)", "XCMUTATE_BIN", ("xcmutate",)),
+    # Its executable is also named litmus: only DLITMUS_BIN names it.
+    Tool("dlitmus", "litmus (debugholic)", "DLITMUS_BIN", ()),
 ]
 
 
@@ -629,6 +679,49 @@ def common_ios(tool: str, ctx: Context) -> list[Mutant] | None:
         report = ctx.out / "muter.json"
         ctx.run("run", [ctx.binary, "run", "--skip-update-check", "--format", "json", "--output", str(report)], ctx.out)
         return muter_mutants(report)
+    if tool == "xcmutate":
+        report = ctx.out / "xcmutate.json"
+        ctx.run(
+            "run",
+            [
+                ctx.binary,
+                "run",
+                "--workspace",
+                "Transit.xcworkspace",
+                "--scheme",
+                "Transit",
+                "--destination",
+                ctx.destination,
+                "--json-output",
+                str(report),
+                # Its copy and build inside the cell's scratch, so the cell's disk use counts them.
+                "--work-dir",
+                str(ctx.work.parent / "xcmutate-work"),
+            ],
+            ctx.out,
+        )
+        return xcmutate_mutants(report)
+    if tool == "dlitmus":
+        report = ctx.out / "dlitmus.json"
+        ctx.run(
+            "run",
+            [
+                ctx.binary,
+                "run",
+                "--project",
+                ".",
+                "--scheme",
+                "Transit",
+                "--destination",
+                ctx.destination,
+                "--format",
+                "json",
+                "--output",
+                str(report),
+            ],
+            ctx.out,
+        )
+        return dlitmus_mutants(report)
     return None
 
 
@@ -668,6 +761,38 @@ def common_package(tool: str, ctx: Context) -> list[Mutant] | None:
             cwd=package,
         )
         return muter_mutants(report)
+    if tool == "xcmutate":
+        report = ctx.out / "xcmutate.json"
+        ctx.run(
+            "run",
+            [
+                ctx.binary,
+                "run",
+                "--package",
+                ".",
+                "--scheme",
+                "WalletKit",
+                "--destination",
+                "platform=macOS",
+                "--json-output",
+                str(report),
+                # Its copy and build inside the cell's scratch, so the cell's disk use counts them.
+                "--work-dir",
+                str(ctx.work.parent / "xcmutate-work"),
+            ],
+            ctx.out,
+            cwd=package,
+        )
+        return xcmutate_mutants(report)
+    if tool == "dlitmus":
+        report = ctx.out / "dlitmus.json"
+        ctx.run(
+            "run",
+            [ctx.binary, "run", "--project", ".", "--format", "json", "--output", str(report)],
+            ctx.out,
+            cwd=package,
+        )
+        return dlitmus_mutants(report)
     return None
 
 
@@ -749,6 +874,53 @@ def common_diff(tool: str, ctx: Context) -> list[Mutant] | None:
         )
         ctx.notes.append("no diff mode: --files-to-mutate names the changed file")
         return muter_mutants(report)
+    if tool == "xcmutate":
+        report = ctx.out / "xcmutate.json"
+        ctx.run(
+            "run",
+            [
+                ctx.binary,
+                "run",
+                "--since",
+                ctx.base,
+                "--workspace",
+                "Transit.xcworkspace",
+                "--scheme",
+                "Transit",
+                "--destination",
+                ctx.destination,
+                "--json-output",
+                str(report),
+                # Its copy and build inside the cell's scratch, so the cell's disk use counts them.
+                "--work-dir",
+                str(ctx.work.parent / "xcmutate-work"),
+            ],
+            ctx.out,
+        )
+        return xcmutate_mutants(report)
+    if tool == "dlitmus":
+        report = ctx.out / "dlitmus.json"
+        ctx.run(
+            "run",
+            [
+                ctx.binary,
+                "run",
+                "--project",
+                ".",
+                "--since",
+                ctx.base,
+                "--scheme",
+                "Transit",
+                "--destination",
+                ctx.destination,
+                "--format",
+                "json",
+                "--output",
+                str(report),
+            ],
+            ctx.out,
+        )
+        return dlitmus_mutants(report)
     return None
 
 
@@ -922,7 +1094,7 @@ def only_litmus(function: Callable[[Context], list[Mutant] | None]) -> Callable[
     return lambda tool, ctx: function(ctx)
 
 
-ALL = ("litmus", "smt", "mutest", "muter")
+ALL = ("litmus", "smt", "mutest", "muter", "xcmutate", "dlitmus")
 SCENARIOS = [
     Scenario("ios-app", "the whole app and its packages on the simulator", common_ios, ALL, True, whole=True),
     Scenario("package", "one SwiftPM package (WalletKit) on macOS", common_package, ALL, False, whole=True),
@@ -1201,7 +1373,16 @@ def main() -> int:
             future.result()
     write_markdown(output, results)
     print(f"results: {output / 'results.md'}")
-    return 0
+    # A cell that could not run (tool missing, step timed out or failed without a report) fails the run, so a CI job
+    # never shows success for a benchmark that did not happen.
+    broken = [
+        f"{r['tool']}/{r['scenario']}: {r['status']}"
+        for r in results["rows"]
+        if r["status"] not in ("ok", "not-applicable")
+    ]
+    for line in broken:
+        print(f"not ok: {line}", file=sys.stderr)
+    return 1 if broken else 0
 
 
 # ---------------------------------------------------------------------------------------------------------------------
