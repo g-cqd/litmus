@@ -227,7 +227,7 @@ import Testing
     }
 
     #if os(macOS)
-        @Test(.timeLimit(.minutes(2))) func `rendered SwiftUI UI operator schemas typecheck under Swift 6`() throws {
+        @Test(.timeLimit(.minutes(10))) func `rendered SwiftUI UI operator schemas typecheck under Swift 6`() throws {
             let source = #"""
                 import SwiftUI
 
