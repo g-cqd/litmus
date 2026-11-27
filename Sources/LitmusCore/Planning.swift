@@ -419,8 +419,12 @@ private final class Anchors {
     private(set) var stack: [Declaration] = []
     private var ordinals: [String: Int] = [:]
     private let fileText: String
+    let sourceUTF8: [UInt8]
 
-    init(fileText: String) { self.fileText = fileText }
+    init(fileText: String) {
+        self.fileText = fileText
+        self.sourceUTF8 = Array(fileText.utf8)
+    }
 
     func push(_ name: String, isBody: Bool, _ node: some SyntaxProtocol) {
         stack.append(Declaration(name: name, isBody: isBody, text: isBody ? node.trimmedDescription : ""))
@@ -476,15 +480,31 @@ private final class Sites: SyntaxVisitor {
     }
 
     private func add(_ expression: some SyntaxProtocol, operatorID: MutationOperator, replacement: String) {
+        addSpan(
+            from: expression.positionAfterSkippingLeadingTrivia,
+            to: expression.endPositionBeforeTrailingTrivia,
+            operatorID: operatorID,
+            replacement: replacement
+        )
+    }
+
+    private func addSpan(
+        from startPos: AbsolutePosition,
+        to endPos: AbsolutePosition,
+        operatorID: MutationOperator,
+        replacement: String
+    ) {
         guard context.operators.contains(operatorID),
             constantDepth == 0 || operatorID.tier == .stable,
             aridCallDepth == 0,
             !isExcludedByDeclaration()
         else { return }
-        let start = expression.positionAfterSkippingLeadingTrivia.utf8Offset
-        let end = expression.endPositionBeforeTrailingTrivia.utf8Offset
-        let original = expression.trimmedDescription
-        let location = context.converter.location(for: expression.positionAfterSkippingLeadingTrivia)
+        let start = startPos.utf8Offset
+        let end = endPos.utf8Offset
+        guard start < end, end <= context.anchors.sourceUTF8.count else { return }
+        let original = String(decoding: context.anchors.sourceUTF8[start..<end], as: UTF8.self)
+        guard !original.isEmpty, original != replacement else { return }
+        let location = context.converter.location(for: startPos)
         // Anchored identity: the path, the enclosing declaration, the operator, the site's normalised text and
         // replacement, and which identical site of the declaration it is. Lines added above leave it unchanged.
         let declaration = context.anchors.path
@@ -621,7 +641,54 @@ private final class Sites: SyntaxVisitor {
     override func visit(_ node: ClosureExprSyntax) -> SyntaxVisitorContinueKind {
         let returnType = node.signature?.returnClause.map { normalized($0.type.trimmedDescription) }
         returnTypes.append(returnType)
+        if context.operators.contains(.weakenCapture), builderDepth == 0 {
+            addWeakCaptureMutations(node)
+        }
         return .visitChildren
+    }
+
+    private func addWeakCaptureMutations(_ node: ClosureExprSyntax) {
+        guard let signature = node.signature,
+            let captureClause = signature.capture,
+            !node.statements.isEmpty,
+            let firstStmt = node.statements.first
+        else { return }
+        let itemsText = captureClause.items.map(\.trimmedDescription).joined(separator: ", ")
+        let sigAfter = sliceSource(
+            from: captureClause.rightSquare.endPositionBeforeTrailingTrivia,
+            to: signature.inKeyword.endPositionBeforeTrailingTrivia
+        )
+        let bodyPrefix = sliceSource(
+            from: signature.inKeyword.endPositionBeforeTrailingTrivia,
+            to: firstStmt.positionAfterSkippingLeadingTrivia
+        )
+        let needsExplicitReturn: Bool = {
+            guard node.statements.count == 1, let expr = firstStmt.item.as(ExprSyntax.self) else { return false }
+            let unwrapped = CallRemoval.unwrapTryAwait(expr)
+            return !Self.chainHasOptionalChaining(unwrapped) && !Self.isNeverCall(unwrapped)
+        }()
+        let returnPrefix = needsExplicitReturn ? "return " : ""
+        for (idx, item) in captureClause.items.enumerated() {
+            guard let spec = item.specifier?.specifier.text, spec == "weak" || spec == "unowned" else { continue }
+            let capturedExpr = (item.initializer?.value.trimmedDescription ?? item.name.text)
+            let keepName = "_litmus_keep_\(idx)"
+            let newCapture =
+                "[\(itemsText), \(keepName) = \(SchemaWriter.clauseGuardPlaceholder) ? nil : (\(capturedExpr))]"
+            let replacement =
+                newCapture + sigAfter + bodyPrefix + "Swift.withExtendedLifetime(\(keepName)) {}; " + returnPrefix
+            addSpan(
+                from: captureClause.positionAfterSkippingLeadingTrivia,
+                to: firstStmt.positionAfterSkippingLeadingTrivia,
+                operatorID: .weakenCapture,
+                replacement: replacement
+            )
+        }
+    }
+
+    private func sliceSource(from startPos: AbsolutePosition, to endPos: AbsolutePosition) -> String {
+        let s = startPos.utf8Offset, e = endPos.utf8Offset
+        guard s <= e, e <= context.anchors.sourceUTF8.count else { return "" }
+        return String(decoding: context.anchors.sourceUTF8[s..<e], as: UTF8.self)
     }
     override func visitPost(_ node: ClosureExprSyntax) {
         _ = returnTypes.popLast()
@@ -876,6 +943,8 @@ private final class Sites: SyntaxVisitor {
             {
                 if context.operators.contains(.removeCall) {
                     add(expression, operatorID: .removeCall, replacement: "()")
+                } else if context.operators.contains(.removeCleanupCall), CallRemoval.isCleanupCall(callee) {
+                    add(expression, operatorID: .removeCleanupCall, replacement: "()")
                 }
                 if context.operators.contains(.emptyClosureBody),
                     let closure = call.trailingClosure,
@@ -1102,6 +1171,64 @@ private final class Sites: SyntaxVisitor {
             current = cur.parent
         }
         return false
+    }
+
+    override func visit(_ node: DeferStmtSyntax) -> SyntaxVisitorContinueKind {
+        if context.operators.contains(.removeDefer),
+            builderDepth == 0,
+            !node.body.statements.isEmpty,
+            !CallRemoval.containsLockUnlock(node.body.statements),
+            !CallRemoval.isAllArid(node.body.statements, aridCalls: context.aridCalls)
+        {
+            // Mutate the body inside `defer { ... }` rather than wrapping `defer` itself in `if !m` (which would
+            // run the defer at the end of the `if` scope instead of the enclosing scope when inactive).
+            add(node.body.statements, operatorID: .removeDefer, replacement: "()")
+        }
+        return .visitChildren
+    }
+
+    override func visit(_ node: CodeBlockItemListSyntax) -> SyntaxVisitorContinueKind {
+        if context.operators.contains(.swapAsyncOrder), builderDepth == 0 {
+            let items = Array(node)
+            if items.count >= 2 {
+                for index in 0..<(items.count - 1) {
+                    let first = items[index], second = items[index + 1]
+                    guard let e1 = first.item.as(ExprSyntax.self),
+                        let e2 = second.item.as(ExprSyntax.self),
+                        Self.isSuspensionCallStatement(e1),
+                        Self.isSuspensionCallStatement(e2),
+                        !CallRemoval.isImplicitReturn(second)
+                    else { continue }
+                    let s1 = first.trimmedDescription, s2 = second.trimmedDescription
+                    let replacement =
+                        "if \(SchemaWriter.clauseGuardPlaceholder) { \(s1); \(s2) } else { \(s2); \(s1) }"
+                    addSpan(
+                        from: first.positionAfterSkippingLeadingTrivia,
+                        to: second.endPositionBeforeTrailingTrivia,
+                        operatorID: .swapAsyncOrder,
+                        replacement: replacement
+                    )
+                }
+            }
+        }
+        return .visitChildren
+    }
+
+    /// True if `expr` is `[try] await call(...)` (not an assignment or declaration, so reordering preserves bindings).
+    private static func isSuspensionCallStatement(_ expr: ExprSyntax) -> Bool {
+        var sawAwait = false
+        var current = expr
+        while true {
+            if let t = current.as(TryExprSyntax.self) {
+                current = t.expression
+            } else if let a = current.as(AwaitExprSyntax.self) {
+                sawAwait = true
+                current = a.expression
+            } else {
+                break
+            }
+        }
+        return sawAwait && current.is(FunctionCallExprSyntax.self)
     }
 
     override func visit(_ node: SwitchExprSyntax) -> SyntaxVisitorContinueKind {
@@ -1434,6 +1561,33 @@ enum CallRemoval {
         "withUnsafeContinuation", "withUnsafeThrowingContinuation", "withExtendedLifetime", "autoreleasepool",
         "assumeIsolated",
     ]
+
+    private static let cleanupNames: Set<String> = [
+        "close", "cancel", "invalidate", "finish", "removeObserver", "stop", "leave", "removeAll", "flush",
+        "synchronize", "disconnect", "unsubscribe",
+    ]
+    private static let unlockNames: Set<String> = [
+        "unlock", "os_unfair_lock_unlock", "pthread_mutex_unlock", "pthread_rwlock_unlock", "signal",
+    ]
+
+    static func isCleanupCall(_ callee: String) -> Bool {
+        let last = callee.split(separator: ".").last.map(String.init) ?? callee
+        return cleanupNames.contains(last)
+    }
+
+    /// True if `statements` calls an unlock/signal primitive (skipping such a `defer` deadlocks every later test).
+    static func containsLockUnlock(_ statements: CodeBlockItemListSyntax) -> Bool {
+        for item in statements {
+            if let expr = item.item.as(ExprSyntax.self),
+                let call = unwrapTryAwait(expr).as(FunctionCallExprSyntax.self)
+            {
+                let callee = call.calledExpression.trimmedDescription
+                let last = callee.split(separator: ".").last.map(String.init) ?? callee
+                if unlockNames.contains(callee) || unlockNames.contains(last) { return true }
+            }
+        }
+        return false
+    }
 
     /// Logging, assertions, and initializer chaining: removing them proves nothing or cannot compile.
     static func isLogging(_ callee: String) -> Bool {

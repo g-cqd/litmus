@@ -36,20 +36,26 @@ struct SubjectOptions: ParsableArguments {
             "Operator tier to mutate: stable (default), standard (adds comparisons, booleans, arithmetic, ranges, negation, nil-coalescing) or experimental (adds call removal). UI and extended operators require --operators."
     )
     var operatorTier: String?
+    @Flag(
+        help:
+            "Include the fault-injection operators (remove-defer, remove-cleanup-call, weaken-capture, swap-async-order)."
+    )
+    var faultOperators = false
     /// The operators this run or plan mutates; `--operators` names them exactly, a tier includes every tier before it.
     func operatorSet() throws -> Set<MutationOperator> {
         do {
+            let extra = faultOperators ? MutationOperator.faultOperators : []
             if let operators {
                 guard operatorTier == nil else {
                     throw ValidationError("--operators and --operator-tier are alternatives; give one")
                 }
-                return try MutationOperator.parse(operators)
+                return try MutationOperator.parse(operators).union(extra)
             }
-            guard let operatorTier else { return MutationOperator.defaults }
+            guard let operatorTier else { return MutationOperator.defaults.union(extra) }
             guard let tier = OperatorTier(rawValue: operatorTier) else {
                 throw ValidationError("operator tier must be stable, standard or experimental")
             }
-            return MutationOperator.operators(upTo: tier)
+            return MutationOperator.operators(upTo: tier).union(extra)
         } catch let error as ValidationError {
             throw error
         } catch { try fail(error, code: .usage) }

@@ -228,6 +228,47 @@ import Testing
         #expect(!((try? MutationOperator.parse("all"))?.contains(.removeViewElement) ?? true))
     }
 
+    @Test
+    func `fault operators target defer, cleanup calls, weak captures, and adjacent awaits, and skip lock unlocks`()
+        throws
+    {
+        let source = """
+            final class Worker: @unchecked Sendable {
+                var log: [String] = []
+                func stepA() async { log.append("A") }
+                func stepB() async { log.append("B") }
+                func close() { log.append("close") }
+                func unlock() {}
+                func run() async {
+                    defer { unlock() }
+                    defer { log.append("defer") }
+                    await stepA()
+                    await stepB()
+                    close()
+                }
+                func callback() -> @Sendable () -> Void {
+                    { [weak self] in self?.close() }
+                }
+            }
+            """
+        let sites = try MutationPlanner.mutations(
+            in: source,
+            path: "Worker.swift",
+            operators: MutationOperator.faultOperators
+        )
+        #expect(Set(sites.map(\.operatorID)) == MutationOperator.faultOperators)
+        // `defer { unlock() }` must be skipped to avoid manufacturing deadlocks.
+        #expect(sites.filter { $0.operatorID == .removeDefer }.map(\.original) == [#"log.append("defer")"#])
+        #expect(sites.filter { $0.operatorID == .removeCleanupCall }.map(\.original) == ["close()"])
+        #expect(sites.count { $0.operatorID == .weakenCapture } == 1)
+        #expect(sites.count { $0.operatorID == .swapAsyncOrder } == 1)
+        let counted = try MutationCensus.count(source: source)
+        #expect(counted["defer-removal (fcheck)"]?.implementedBy == .removeDefer)
+        #expect(counted["cleanup-call-removal (fcheck)"]?.implementedBy == .removeCleanupCall)
+        #expect(counted["weak-capture-to-strong (arcleak)"]?.implementedBy == .weakenCapture)
+        #expect(counted["await-statement-swap (modeler)"]?.implementedBy == .swapAsyncOrder)
+    }
+
     #if os(macOS)
         @Test(.timeLimit(.minutes(2))) func `rendered Phase E2 schemas typecheck under Swift 6`() throws {
             let source = """
@@ -273,6 +314,89 @@ import Testing
                 proc.waitUntilExit()
                 #expect(proc.terminationStatus == 0, "batch \(index) failed typecheck:\n\(err)")
             }
+        }
+
+        @Test(.timeLimit(.minutes(2)))
+        func `weaken-capture and remove-defer schemas preserve baseline semantics and inject faults when active`()
+            throws
+        {
+            let subject = """
+                final class Resource: @unchecked Sendable {
+                    var events: [String] = []
+                    func touch() { events.append("touch") }
+                    func work() -> [String] {
+                        defer { events.append("deferred") }
+                        events.append("body")
+                        return events
+                    }
+                    func makeCallback() -> @Sendable () -> Void {
+                        { [weak self] in self?.touch() }
+                    }
+                }
+                """
+            let mainDriver = """
+                @main enum Check {
+                    static func main() {
+                        let r = Resource()
+                        let during = r.work()
+                        // When inactive, `defer` must run AFTER `body` (at function exit), not before!
+                        print("during=" + during.joined(separator: ",") + ";after=" + r.events.joined(separator: ","))
+                        var holder: Resource? = Resource()
+                        weak let probe = holder
+                        let cb = holder!.makeCallback()
+                        cb()
+                        holder = nil
+                        print("leaked=" + String(probe != nil))
+                    }
+                }
+                """
+            let sites = try MutationPlanner.mutations(
+                in: subject,
+                path: "Resource.swift",
+                operators: [.removeDefer, .weakenCapture]
+            )
+            #expect(sites.count == 2)
+            let deferSite = try #require(sites.first { $0.operatorID == .removeDefer })
+            let weakSite = try #require(sites.first { $0.operatorID == .weakenCapture })
+            let schema = try SchemaWriter.schema(subject, mutations: sites, token: "deadbeef")
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-e3-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            try Data(schema.text.utf8).write(to: dir.appendingPathComponent("Resource.swift"))
+            try Data(mainDriver.utf8).write(to: dir.appendingPathComponent("Main.swift"))
+            let bin = dir.appendingPathComponent("check")
+            let build = Process()
+            build.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+            build.arguments = [
+                "swiftc", "-swift-version", "6", "-parse-as-library",
+                dir.appendingPathComponent("Resource.swift").path,
+                dir.appendingPathComponent("Main.swift").path,
+                "-o", bin.path,
+            ]
+            let errPipe = Pipe()
+            build.standardError = errPipe
+            try build.run()
+            let err = String(decoding: errPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            build.waitUntilExit()
+            #expect(build.terminationStatus == 0, "swiftc failed:\n\(err)")
+
+            func run(active: String?) throws -> String {
+                let p = Process()
+                p.executableURL = bin
+                var env = ProcessInfo.processInfo.environment
+                if let active { env["LITMUS_ACTIVE_ID_deadbeef"] = active }
+                p.environment = env
+                let out = Pipe()
+                p.standardOutput = out
+                try p.run()
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+                return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            #expect(try run(active: nil) == "during=body;after=body,deferred\nleaked=false")
+            #expect(try run(active: deferSite.id) == "during=body;after=body\nleaked=false")
+            #expect(try run(active: weakSite.id) == "during=body;after=body,deferred\nleaked=true")
         }
     #endif
 }

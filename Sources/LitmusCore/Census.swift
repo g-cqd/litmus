@@ -55,6 +55,10 @@ extension CensusEntry {
         case "break-continue-swap": .swapBreakContinue
         case "bitwise-replace": .replaceBitwise
         case "unary-minus-removal": .removeUnaryMinus
+        case "defer-removal (fcheck)": .removeDefer
+        case "cleanup-call-removal (fcheck)": .removeCleanupCall
+        case "weak-capture-to-strong (arcleak)": .weakenCapture
+        case "await-statement-swap (modeler)": .swapAsyncOrder
         default: nil
         }
     }

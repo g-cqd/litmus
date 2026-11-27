@@ -49,12 +49,17 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
     case swapBreakContinue = "swap-break-continue"
     case replaceBitwise = "replace-bitwise"
     case removeUnaryMinus = "remove-unary-minus"
+    case removeDefer = "remove-defer"
+    case removeCleanupCall = "remove-cleanup-call"
+    case weakenCapture = "weaken-capture"
+    case swapAsyncOrder = "swap-async-order"
 
     /// The kind of edit it makes, which decides how its schema is written.
     public var shape: SchemaShape {
         switch self {
-        case .removeCall, .removeViewElement, .emptyBody, .emptyClosureBody: .statement
-        case .removeSwitchCase, .skipLoop, .swapBreakContinue: .clause
+        case .removeCall, .removeViewElement, .emptyBody, .emptyClosureBody, .removeDefer, .removeCleanupCall:
+            .statement
+        case .removeSwitchCase, .skipLoop, .swapBreakContinue, .weakenCapture, .swapAsyncOrder: .clause
         default: .expression
         }
     }
@@ -68,7 +73,7 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
         case .removeCall, .removeViewElement, .replaceStdlibSemantic, .removeNormalization, .replaceOptionalChain,
             .returnBoundary, .returnConstant, .emptyBody, .emptyClosureBody, .removeSwitchCase,
             .nullifyOptionalBinding, .negateIsEmpty, .skipLoop, .swapBreakContinue, .replaceBitwise,
-            .removeUnaryMinus:
+            .removeUnaryMinus, .removeDefer, .removeCleanupCall, .weakenCapture, .swapAsyncOrder:
             .experimental
         }
     }
@@ -92,7 +97,7 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
         case .removeViewElement, .replaceStdlibSemantic, .removeNormalization, .replaceOptionalChain, .returnBoundary,
             .returnConstant, .emptyBody, .emptyClosureBody, .removeSwitchCase,
             .nullifyOptionalBinding, .negateIsEmpty, .skipLoop, .swapBreakContinue, .replaceBitwise,
-            .removeUnaryMinus:
+            .removeUnaryMinus, .removeDefer, .removeCleanupCall, .weakenCapture, .swapAsyncOrder:
             false
         }
     }
@@ -127,6 +132,11 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
         case .swapBreakContinue: "swap unlabeled break and continue inside a loop"
         case .replaceBitwise: "exchange bitwise and shift operators (& | ^ << >> &= |= ^=)"
         case .removeUnaryMinus: "remove unary negation (-x to x) on non-literal expressions"
+        case .removeDefer: "skip the body of a defer block at scope exit (fault injection)"
+        case .removeCleanupCall: "skip a standalone cleanup call such as cancel/invalidate/close (fault injection)"
+        case .weakenCapture:
+            "retain a weak or unowned closure capture strongly to test leak detection (fault injection)"
+        case .swapAsyncOrder: "swap two adjacent suspension statements to test async ordering (fault injection)"
         }
     }
 
@@ -134,6 +144,19 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
     public static func operators(upTo tier: OperatorTier) -> Set<MutationOperator> {
         Set(allCases.filter { $0.domain == .logic && $0.inDefaultTiers && $0.tier <= tier })
     }
+
+    /// Whether this operator is an explicit fault-injection operator (`--fault-operators`).
+    public var isFaultOperator: Bool {
+        switch self {
+        case .removeDefer, .removeCleanupCall, .weakenCapture, .swapAsyncOrder: true
+        default: false
+        }
+    }
+
+    /// The fault-injection operator bundle (`--fault-operators`).
+    public static let faultOperators: Set<MutationOperator> = [
+        .removeDefer, .removeCleanupCall, .weakenCapture, .swapAsyncOrder,
+    ]
 
     /// What a run mutates unless told otherwise.
     public static let defaults = operators(upTo: .stable)
@@ -143,7 +166,11 @@ public enum MutationOperator: String, Codable, CaseIterable, Sendable {
         var result: Set<MutationOperator> = []
         for name in list.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) where !name.isEmpty {
             if name == "all" {
-                result.formUnion(allCases.filter { $0.domain == .logic })
+                result.formUnion(allCases.filter { $0.domain == .logic && !$0.isFaultOperator })
+                continue
+            }
+            if name == "fault" {
+                result.formUnion(faultOperators)
                 continue
             }
             guard let found = MutationOperator(rawValue: name) else {

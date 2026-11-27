@@ -88,35 +88,6 @@ public struct OperatorSummary: Codable, Sendable, Equatable {
     public let scorePercent: Double?
     public let meanSeconds: Double
 
-    public init(
-        operator: String,
-        generated: Int,
-        viable: Int,
-        unviable: Int,
-        unviablePercent: Double,
-        killed: Int,
-        crashed: Int,
-        timeout: Int,
-        survived: Int,
-        noCoverage: Int,
-        accepted: Int,
-        scorePercent: Double?,
-        meanSeconds: Double
-    ) {
-        self.operator = `operator`
-        self.generated = generated
-        self.viable = viable
-        self.unviable = unviable
-        self.unviablePercent = unviablePercent
-        self.killed = killed
-        self.crashed = crashed
-        self.timeout = timeout
-        self.survived = survived
-        self.noCoverage = noCoverage
-        self.accepted = accepted
-        self.scorePercent = scorePercent
-        self.meanSeconds = meanSeconds
-    }
 }
 
 /// One decision with the test evidence and explanation that justified it.
