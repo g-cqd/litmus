@@ -30,12 +30,19 @@
         "dispatch"
       ],
       "os": "macOS",
-      "title": "Integration · Mutation Smoke"
+      "title": "Integration \u00b7 Mutation Smoke"
     }
   ],
   "swift": {
     "versions": [
       "6.4.2"
+    ]
+  },
+  "dependabot": {
+    "exclude": [
+      "**/Fixtures/**",
+      ".build/**",
+      "bench/**"
     ]
   }
 }
