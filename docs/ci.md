@@ -55,7 +55,7 @@ Copied workspaces must include required local package dependencies. Copying only
 
 Set `LITMUS_STORE_KEY` to authenticate records with HMAC-SHA256. Keep the key private to trusted jobs. Use `--store-read-only` for jobs that must not modify a shared store. Unsigned records detect corruption, not an attacker controlling the store. The default size limit is 1024 MiB; `--store-limit` changes it.
 
-`--resume RUN` reuses matching verdicts from a prior run. `--reach-from RUN` imports flaky-test information and matching per-test reach evidence. Neither option makes incompatible verdicts reusable.
+`--resume RUN` reuses matching verdicts from a prior run. `--reach-from RUN` (a `run.json` or a run directory) imports flaky-test information and matching per-test reach evidence. Neither option makes incompatible verdicts reusable.
 
 ## Baselines
 
