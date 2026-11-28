@@ -77,10 +77,10 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
             destination: device?.destination,
             derivedData: derivedData
         )
-        var supervision = request.supervision
+        var supervision = Self.supervision(request.supervision)
         if let stream { supervision.monitor = XcodeResultStream.monitor(path: stream) }
-        // The memory limit covers `xcodebuild`'s session; the simulator's test host is outside it, and is ended after
-        // the run through the token its `.xctestrun` environment carries.
+        // The simulator's test host is outside `xcodebuild`'s session, and is ended after the run through the token its
+        // `.xctestrun` environment carries.
         let output = try await executor.execute(
             command,
             directory: driver.executionDirectory(workspace: workspace),
@@ -122,7 +122,12 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
         else {
             // Kept whatever the options say: it is what a person debugging an unusable run looks at.
             evidence.append("logs/\(request.name).xcresult")
-            return result(.unusable, nil, "xcresult summary unavailable (xcodebuild exit \(output.exitStatus))")
+            let stopped = output.stopReason.map { ", stopped: \($0)" } ?? ""
+            return result(
+                .unusable,
+                nil,
+                "xcresult summary unavailable (xcodebuild exit \(output.exitStatus)\(stopped))"
+            )
         }
         try Data(summary.stdout).write(
             to: URL(fileURLWithPath: "\(logs)/\(request.name).summary.json"),
@@ -163,6 +168,15 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
 
     /// PropertyListSerialization supplies heterogeneous SDK data; the untyped boundary is contained here.
     /// Xcode-relative paths are absolutised before moving the plist outside Build/Products.
+    /// `base` without its memory limit, which covers only `xcodebuild`'s session: the test hosts run in the simulator,
+    /// outside it, so the limit cannot catch a mutant's runaway allocation and only stops `xcodebuild` as its own
+    /// memory grows with the suite's output (an app of fourteen bundles: 4 GiB after four).
+    static func supervision(_ base: Supervision) -> Supervision {
+        var supervision = base
+        supervision.memoryLimitBytes = nil
+        return supervision
+    }
+
     /// `xcresulttool get test-results <report>` of `bundle`, compact JSON.
     func resultTool(_ report: String, bundle: String) async throws -> ProcessOutput {
         try await executor.execute(

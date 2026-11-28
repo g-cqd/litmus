@@ -40,4 +40,13 @@ import Testing
         #expect((plist["__xctestrun_metadata__"] as? [String: Int])?["FormatVersion"] == 2)
         _ = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
     }
+
+    @Test func `xcodebuild runs keep sampling but drop the memory limit, which covers only xcodebuild's session`() {
+        var base = Supervision()
+        base.memoryLimitBytes = 4 << 30
+        base.sampling = .milliseconds(100)
+        let supervision = XcodeHarness<BoundedExecutor>.supervision(base)
+        #expect(supervision.memoryLimitBytes == nil)
+        #expect(supervision.sampling == .milliseconds(100))
+    }
 }

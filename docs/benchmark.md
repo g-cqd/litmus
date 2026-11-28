@@ -23,7 +23,7 @@ cases, deterministic (twenty consecutive runs of every suite pass).
 
 ## Tools
 
-Every tool runs from the **latest release binary** its project publishes on GitHub; nothing is built.
+Every tool runs from its **latest GitHub release**: the macOS binary it publishes, or, for mutest-swift, which publishes source only, a `swift build -c release` of that release's source archive, resolving exactly what its `Package.resolved` pins.
 `bench/install-tools.sh` asks the GitHub API for each latest release, downloads the macOS archive into a prefix (never
 system-wide), checks it against the release's published `.sha256` when there is one, and records the archive's SHA-256
 otherwise. `<prefix>/versions.tsv` lists tool, release tag, asset, SHA-256 and how it was checked; the workflow shows
@@ -36,7 +36,7 @@ that table in its summary.
 | `muter` | [Muter] | `muter-<version>-macos-universal.tar.gz` | published `.sha256` |
 | `xcmutate` | [RyoHirota68/xcmutate] | `xcmutate-<version>-macos-universal.tar.gz` | published `.sha256` |
 | `dlitmus` | [debugholic/litmus] | `litmus-<version>-macos-universal.tar.gz` | recorded |
-| `mutest` | [j-khn/mutest-swift] | none: source archives only | skipped |
+| `mutest` | [j-khn/mutest-swift] | built from the release's source archive (macOS only) | recorded |
 
 [ericodx/swift-mutation-testing]: https://github.com/ericodx/swift-mutation-testing
 [Muter]: https://github.com/muter-mutation-testing/muter
@@ -44,7 +44,7 @@ that table in its summary.
 [debugholic/litmus]: https://github.com/debugholic/litmus
 [j-khn/mutest-swift]: https://github.com/j-khn/mutest-swift
 
-mutest-swift keeps its adapter: it runs as soon as a release ships a macOS binary. Of the tools xcmutate's README credits,
+The workflow builds mutest-swift once, in its prepare job on the cells' macOS runner (about 3 minutes), and every cell reuses that executable. Of the tools xcmutate's README credits,
 [mizchi/mutator] is not here: it mutation-tests TypeScript under Vitest and cannot run on a Swift subject.
 
 [mizchi/mutator]: https://github.com/mizchi/mutator

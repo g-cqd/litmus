@@ -1,13 +1,14 @@
 #!/bin/bash
-# Installs the benchmark's tools from the latest release binary each publishes on GitHub, into a prefix (never
-# system-wide), and prints the environment bench/run.py reads. Nothing is built: a tool whose latest release has no
-# macOS binary is reported and skipped.
+# Installs the benchmark's tools from the latest release each publishes on GitHub, into a prefix (never system-wide),
+# and prints the environment bench/run.py reads. A release binary is used where there is one; a tool that publishes
+# only source (mutest-swift) is built from its latest release's source archive with SwiftPM, on macOS only.
 #
 #   bench/install-tools.sh [PREFIX [TOOLS]]   PREFIX: bench/.tools; TOOLS: comma-separated ids (default: all)
 #   eval "$(bench/install-tools.sh)"          then: python3 bench/run.py
 #
 # A release that publishes a .sha256 next to its archive is checked against it; otherwise the archive's SHA-256 is
-# recorded as downloaded. Either way, PREFIX/versions.tsv lists tool, release tag, asset, SHA-256 and how it was
+# recorded as downloaded. A source build resolves exactly the dependencies its Package.resolved pins.
+# Build output goes to stderr: stdout is only the environment. Either way, PREFIX/versions.tsv lists tool, release tag, asset, SHA-256 and how it was
 # checked. GITHUB_TOKEN, when set, authenticates the GitHub API calls (CI's rate limit).
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -82,10 +83,45 @@ print(release["tag_name"], assets.get(match, "-"), match or "-", sums)
     echo "export $variable='$binary'"
 }
 
+# build <id> <repo> <product> <environment variable>: the latest release's source archive, built with
+# `swift build -c release`; the executable alone is kept.
+build() {
+    local id="$1" repo="$2" product="$3" variable="$4"
+    [[ "$tools" == *",$id,"* ]] || return 0
+    local tag
+    tag="$(api "https://api.github.com/repos/$repo/releases/latest" | python3 -c 'import json, sys; print(json.load(sys.stdin)["tag_name"])')"
+    if [ "$(uname -s)" != Darwin ]; then
+        echo "install-tools: $id ($repo $tag) is built from source, which needs macOS; skipped" >&2
+        printf '%s\t%s\t-\t-\tneeds macOS to build\n' "$id" "$tag" >> "$versions"
+        echo "# $id: needs macOS to build from source"
+        return 0
+    fi
+    local home="$prefix/$id-$tag" name="$id-$tag-source.tar.gz"
+    local archive="$prefix/$name"
+    if [ ! -f "$archive" ]; then
+        curl -fsSL --retry 3 "https://github.com/$repo/archive/refs/tags/$tag.tar.gz" -o "$archive.partial"
+        mv "$archive.partial" "$archive"
+    fi
+    local digest
+    digest="$(shasum -a 256 "$archive" | cut -d' ' -f1)"
+    if [ ! -x "$home/$product" ]; then
+        local source
+        source="$(mktemp -d "$prefix/.source.XXXXXX")"
+        tar -xzf "$archive" -C "$source" --strip-components 1
+        echo "install-tools: building $id $tag from source…" >&2
+        (cd "$source" && swift build -c release --product "$product" --force-resolved-versions) >&2
+        mkdir -p "$home"
+        cp "$(cd "$source" && swift build -c release --show-bin-path)/$product" "$home/$product"
+        rm -rf "$source"
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$tag" "$name" "$digest" "built from source (archive recorded)" >> "$versions"
+    echo "export $variable='$home/$product'"
+}
+
 install litmus g-cqd/litmus 'litmus-.*-macos-arm64\.tar\.gz' litmus LITMUS_BIN
 install smt ericodx/swift-mutation-testing 'swift-mutation-testing-.*-macos\.tar\.gz' swift-mutation-testing SMT_BIN
 install muter muter-mutation-testing/muter 'muter-.*-macos-.*\.tar\.gz' muter MUTER_BIN
 install xcmutate RyoHirota68/xcmutate 'xcmutate-.*-macos-.*\.tar\.gz' xcmutate XCMUTATE_BIN
 install dlitmus debugholic/litmus 'litmus-.*-macos-.*\.tar\.gz' litmus DLITMUS_BIN
-# j-khn/mutest-swift publishes a source archive only: reported as having no release binary.
-install mutest j-khn/mutest-swift 'mutest-swift-.*-macos.*\.tar\.gz' swift-mutation-testing MUTEST_BIN
+# j-khn/mutest-swift publishes source only.
+build mutest j-khn/mutest-swift swift-mutation-testing MUTEST_BIN

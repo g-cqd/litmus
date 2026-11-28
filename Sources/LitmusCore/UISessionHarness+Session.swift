@@ -45,7 +45,7 @@ extension UISessionHarness {
             directory: inner.driver.executionDirectory(workspace: inner.workspace),
             environment: subjectEnvironment(nil),
             timeout: request.deadline * group.count,
-            supervision: request.supervision
+            supervision: XcodeHarness<Executor>.supervision(request.supervision)
         )
         try writeLog(output, path: "\(inner.logs)/\(name).log")
         guard !output.timedOut, output.stopReason == nil else { return }

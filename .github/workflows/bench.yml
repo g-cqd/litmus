@@ -2,7 +2,8 @@ name: Benchmark
 
 # The mutation-testing benchmark (docs/benchmark.md), one job per tool x scenario cell, all in parallel:
 #   plan     lists the applicable cells (bench/run.py --matrix);
-#   prepare  downloads the latest release binary of every tool once, for every cell (nothing is built);
+#   prepare  installs every tool once, for every cell: the latest release binary, or for mutest-swift (source
+#            only) a build of its latest release's source, on the macOS runner the cells use;
 #   cell     runs one cell on its own macOS runner (so simulator cells never share a simulator);
 #   summary  merges every cell's results into the run's summary.
 # Weekly (Monday 04:17 UTC, every tool and scenario) and on demand: a full matrix is many hours of macOS runner time,
@@ -13,8 +14,8 @@ on:
   workflow_dispatch:
     inputs:
       tools:
-        description: Comma-separated tool ids (litmus, smt, muter, xcmutate, dlitmus; mutest has no release binary)
-        default: litmus,smt,muter,xcmutate,dlitmus
+        description: Comma-separated tool ids (litmus, smt, mutest, muter, xcmutate, dlitmus)
+        default: litmus,smt,mutest,muter,xcmutate,dlitmus
       scenarios:
         description: Comma-separated scenario ids, or all (python3 bench/run.py --list)
         default: all
@@ -59,7 +60,7 @@ jobs:
       - name: Settings
         id: settings
         env:
-          TOOLS: ${{ inputs.tools || 'litmus,smt,muter,xcmutate,dlitmus' }}
+          TOOLS: ${{ inputs.tools || 'litmus,smt,mutest,muter,xcmutate,dlitmus' }}
           SCENARIOS: ${{ inputs.scenarios || 'all' }}
           IDLE: ${{ inputs.idle-timeout || '900' }}
           HARD: ${{ inputs.hard-timeout || '7200' }}
@@ -87,14 +88,15 @@ jobs:
   prepare:
     name: Bench · Prepare tools
     needs: plan
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # macOS: mutest-swift is built here, once, for the cells' runner.
+    runs-on: ${{ needs.plan.outputs.runner }}
+    timeout-minutes: 30
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Download the latest release binaries
+      - name: Install the tools
         env:
           TOOLS: ${{ needs.plan.outputs.tools }}
           GITHUB_TOKEN: ${{ github.token }}
