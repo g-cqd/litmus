@@ -9,7 +9,7 @@ let strict: [SwiftSetting] = [
 ]
 let package = Package(
     name: "litmus",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS("15.6")],
     products: [
         .library(name: "LitmusCore", targets: ["LitmusCore"]), .executable(name: "litmus", targets: ["litmus"]),
     ],
@@ -21,6 +21,11 @@ let package = Package(
         .package(
             url: "https://github.com/g-cqd/AemiProtobuf.git",
             revision: "d8985c489aa19e285214d032ef98855b6b95f30b"
+        ),
+        .package(
+            url: "https://github.com/g-cqd/AemiMCP.git",
+            revision: "f3e29cc0ba459bf3e12fd92375b331b1cb92f4ad",
+            traits: []
         ),
         .package(url: "https://github.com/g-cqd/analyzerkit.git", revision: "a5464a5063aa98725faabf8d7f4058e7fb3b4f85"),
     ],
@@ -38,6 +43,7 @@ let package = Package(
                 .product(name: "AemiMetrics", package: "aemi"),
                 .product(name: "AemiDigest", package: "aemi"),
                 .product(name: "AemiJSON", package: "AemiJSON"),
+                .product(name: "AemiMCP", package: "AemiMCP"),
                 .product(name: "AemiProtobufCore", package: "AemiProtobuf"),
                 .product(name: "AemiProtobuf", package: "AemiProtobuf"),
                 .product(name: "SourceCorpus", package: "analyzerkit"),
@@ -54,6 +60,7 @@ let package = Package(
             name: "litmus",
             dependencies: [
                 "LitmusCore", .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "AemiMCP", package: "AemiMCP"), .product(name: "AemiJSON", package: "AemiJSON"),
                 .product(name: "AnalyzerCLI", package: "analyzerkit"),
                 .product(name: "ReportSupport", package: "analyzerkit"),
             ],
@@ -63,6 +70,7 @@ let package = Package(
             name: "LitmusCoreTests",
             dependencies: [
                 "LitmusCore", .product(name: "ProjectModel", package: "analyzerkit"),
+                .product(name: "AemiMCP", package: "AemiMCP"), .product(name: "AemiJSON", package: "AemiJSON"),
                 .product(name: "SourceCorpus", package: "analyzerkit"),
                 .product(name: "ReportSupport", package: "analyzerkit"), .product(name: "AemiRuntime", package: "aemi"),
             ],

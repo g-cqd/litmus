@@ -1,5 +1,5 @@
+import AemiMCP
 import ArgumentParser
-import Foundation
 import LitmusCore
 
 /// `litmus mcp`: a Model Context Protocol server on stdin/stdout (newline-delimited JSON-RPC 2.0) whose tools plan,
@@ -10,11 +10,6 @@ struct Mcp: AsyncParsableCommand {
     )
 
     mutating func run() async throws {
-        while let line = readLine(strippingNewline: true) {
-            guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
-            if let reply = await McpServer.handle(line, tools: McpTools.definitions, call: McpTools.call) {
-                McpServer.write(reply)
-            }
-        }
+        await MCPStdioServer.serve(McpServer.make(call: McpTools.call), maxConcurrentRequests: 1)
     }
 }

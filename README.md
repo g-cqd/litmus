@@ -6,7 +6,7 @@ Litmus introduces small changes to production code and runs your tests against t
 
 ## Requirements
 
-- macOS 15 or later
+- macOS 15.6 or later
 - Swift 6.4 or later
 - Xcode and an available simulator for iOS tests
 

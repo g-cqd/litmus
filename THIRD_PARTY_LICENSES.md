@@ -14,4 +14,4 @@ All external (non-`g-cqd` / non-`Aemi-Studio`) dependencies in the resolved buil
 | `indexstore-db` | https://github.com/swiftlang/indexstore-db | Apache-2.0 with Runtime Library Exception |
 | `swift-lmdb` | https://github.com/swiftlang/swift-lmdb | Apache-2.0 / OpenLDAP Public License 2.8 (LMDB) |
 
-Internal family dependencies (`aemi`, `AemiRegex`, `AemiJSON`, `AemiProtobuf`, `analyzerkit`) are licensed under the **MIT License**.
+Internal family dependencies (`aemi`, `AemiRegex`, `AemiJSON`, `AemiMCP`, `AemiProtobuf`, `analyzerkit`) are licensed under the **MIT License**.

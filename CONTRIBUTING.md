@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Swift 6.4+ on macOS 15+ (SwiftPM + Xcode/Simulator) or Linux (SwiftPM)
+- Swift 6.4+ on macOS 15.6+ (SwiftPM + Xcode/Simulator) or Linux (SwiftPM)
 
 ## Workflow
 
