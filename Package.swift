@@ -24,7 +24,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/g-cqd/AemiMCP.git",
-            revision: "f3e29cc0ba459bf3e12fd92375b331b1cb92f4ad",
+            revision: "992b1a62ec80a85f814bb6f9f7d378ad820d0bcd",
             traits: []
         ),
         .package(url: "https://github.com/g-cqd/analyzerkit.git", revision: "a5464a5063aa98725faabf8d7f4058e7fb3b4f85"),
