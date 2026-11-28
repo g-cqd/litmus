@@ -59,35 +59,61 @@ def end_active_groups(signum: int, _frame: object) -> None:
         groups = list(ACTIVE_GROUPS)
     for sig in (signal.SIGTERM, signal.SIGKILL):
         for group in groups:
-            try:
-                os.killpg(group, sig)
-            except ProcessLookupError:
-                pass
+            signal_step(group, sig)
         if sig == signal.SIGTERM and groups:
             time.sleep(5)
     os._exit(128 + signum)
 
 
-def process_group_cpu(pgid: int) -> float:
-    """CPU seconds of every live process in the group (ps reports [[dd-]hh:]mm:ss.cc)."""
+def step_processes(root: int) -> dict[int, float]:
+    """CPU seconds of each live process of a step: its process group, and every descendant of its first process,
+    which a tool may start in a group of its own (ps reports time as [[dd-]hh:]mm:ss.cc)."""
     try:
-        listing = subprocess.run(["ps", "-A", "-o", "pgid=,time="], capture_output=True, text=True, timeout=10).stdout
+        listing = subprocess.run(
+            ["ps", "-A", "-o", "pid=,ppid=,pgid=,time="], capture_output=True, text=True, timeout=10
+        ).stdout
     except (OSError, subprocess.TimeoutExpired):
-        return 0.0
-    total = 0.0
+        return {}
+    rows: dict[int, tuple[int, int, float]] = {}
     for line in listing.splitlines():
         parts = line.split()
-        if len(parts) != 2 or parts[0] != str(pgid):
+        if len(parts) != 4:
             continue
-        clock, days = parts[1], 0
+        clock, days = parts[3], 0
         if "-" in clock:
             day, clock = clock.split("-", 1)
             days = int(day)
         seconds = 0.0
         for piece in clock.split(":"):
             seconds = seconds * 60 + float(piece)
-        total += days * 86400 + seconds
-    return total
+        rows[int(parts[0])] = (int(parts[1]), int(parts[2]), days * 86400 + seconds)
+    members = {pid for pid, (_, group, _) in rows.items() if group == root}
+    members.add(root)
+    grew = True
+    while grew:
+        found = {pid for pid, (parent, _, _) in rows.items() if parent in members} - members
+        members |= found
+        grew = bool(found)
+    return {pid: rows[pid][2] for pid in members if pid in rows}
+
+
+def signal_step(root: int, sig: int) -> bool:
+    """Sends `sig` to a step's process group and to its descendants in other groups; False when none was left."""
+    # Listed before any signal: a parent that ends first leaves its children to launchd, out of the tree.
+    processes = step_processes(root)
+    sent = False
+    try:
+        os.killpg(root, sig)
+        sent = True
+    except ProcessLookupError:
+        pass
+    for pid in processes:
+        try:
+            os.kill(pid, sig)
+            sent = True
+        except ProcessLookupError:
+            pass
+    return sent
 
 
 def newest_change(paths: list[Path], cap: int = 20000) -> float:
@@ -180,7 +206,7 @@ def run_step(
         pgid = process.pid
         with ACTIVE_LOCK:
             ACTIVE_GROUPS.add(pgid)
-        cpu, files = 0.0, newest_change(watch)
+        cpu, files = step_processes(pgid), newest_change(watch)
         peak_disk, last_disk = 0.0, time.monotonic()
         status = None
         # This step's own child is reaped with wait4: its resource usage (descendants it waited for included) is the
@@ -195,13 +221,16 @@ def run_step(
             now = time.monotonic()
             if now - last_disk >= 30:
                 peak_disk, last_disk = max(peak_disk, disk_mib(list(measure))), now
-            current_cpu = process_group_cpu(pgid)
+            current_cpu = step_processes(pgid)
             current_files = newest_change(watch)
+            # Activity: a new process, or more CPU time among the processes seen last time (one that ended no longer
+            # counts against the others).
+            busier = sum(max(0.0, used - cpu.get(pid, 0.0)) for pid, used in current_cpu.items())
             with lock:
-                if current_cpu > cpu + 0.5 or current_files > files:
+                if busier > 0.5 or current_files > files or set(current_cpu) - set(cpu):
                     last_activity = now
                 idle = now - last_activity
-            cpu, files = max(cpu, current_cpu), max(files, current_files)
+            cpu, files = current_cpu, max(files, current_files)
             if now - start > hard_timeout:
                 status = "hard-timeout"
             elif idle > idle_timeout:
@@ -209,9 +238,7 @@ def run_step(
             if status:
                 sink.write(f"\n[bench] {status}: ending the process group after {now - start:.0f} s\n".encode())
                 for sig, grace in ((signal.SIGTERM, 15), (signal.SIGKILL, 5)):
-                    try:
-                        os.killpg(pgid, sig)
-                    except ProcessLookupError:
+                    if not signal_step(pgid, sig):
                         break
                     deadline = time.monotonic() + grace
                     while time.monotonic() < deadline:
@@ -1223,7 +1250,7 @@ def run_cell(
                 cell / f"{len(steps) + 1:02d}-{name}.log",
                 args.idle_timeout,
                 args.hard_timeout,
-                [p for p in (watch, cell) if p is not None],
+                [p for p in (watch, cell, work, temporary) if p is not None],
                 env={"TMPDIR": str(temporary) + "/"},
                 measure=[Path(scratch), cell],
             )
