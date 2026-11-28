@@ -546,7 +546,9 @@ WORKSPACE = ["--project", "Transit.xcworkspace", "--scheme", "Transit"]
 # Each tool's broadest standard operator set: Litmus's and ericodx's experimental tiers; mutest-swift and Muter run
 # all their operators by default.
 LITMUS_TIER = ["--operator-tier", "experimental"]
-SMT_TIER = ["--operator-tier", "experimental"]
+# Its broadest operators, and a build limit the bench's own time limits govern instead of its default 120 s, which
+# a cold CI runner's Transit workspace build exceeds.
+SMT_TIER = ["--operator-tier", "experimental", "--build-timeout", "1800"]
 XCODEBUILD_TEST = ["/usr/bin/xcodebuild", "-workspace", "Transit.xcworkspace", "-scheme", "Transit"]
 
 
