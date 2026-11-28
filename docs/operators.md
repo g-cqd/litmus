@@ -48,7 +48,9 @@ Each operator has a rule identifier, used by `--operators`, by suppression direc
 - `replace-relational`: `===` and `!==`, and operators Litmus does not list (`&+`, `..<`).
 - `flip-boolean`: a literal in a `case` pattern, where it is matched and not evaluated.
 - `replace-arithmetic`: an operand that is a string literal (concatenation; its `-` never compiles).
-- `remove-call`: `print`, `debugPrint`, `dump`, `NSLog`, `os_log`, `assert`, `assertionFailure`, `precondition`, `preconditionFailure`, `fatalError` and logger methods (`.debug`, `.info`, `.error` and the like); `super.init` and `self.init`; a call that is the only statement of a closure, getter, or function with a result (it may be the returned value); anything inside a result builder (`@...Builder`, `var body: some ...`).
+- `remove-call`: `print`, `debugPrint`, `dump`, `NSLog`, `os_log`, `assert`, `assertionFailure`, `precondition`, `preconditionFailure`, `fatalError` and logger methods (`.debug`, `.info`, `.error` and the like); `super.init` and `self.init`; waits (`sleep`, `usleep`, `nanosleep`, `Task.sleep`, `Thread.sleep`, `Task.yield`), which change only timing; a call that is the only statement of a closure, getter, or function with a result (it may be the returned value); anything inside a result builder (`@...Builder`, `var body: some ...`), except in the action closures a view body holds (`Button` actions, `.onChange`, `.task` and the other action modifiers, `Task { }`, `withAnimation`, closures labelled `action:`, `perform:`, `onDismiss:` and the like, and closures with assignments, `try`, `await`, `guard`, `defer` or `return`), which run as ordinary code.
+
+When `replace-relational` mutates a comparison, `negate-condition` and `swap-ternary` leave that same comparison alone: `!(a < b)` is the relational mutant `a >= b`, so it would count one weakness twice.
 
 A removed call is written as `if !marker { call }`, so the statement keeps its place in the code; `try` and `await` stay inside it.
 

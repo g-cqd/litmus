@@ -440,7 +440,8 @@ func `remove-call records skipped SwiftUI view-builder leaf elements and remove-
         }
         """
     let withCallRemoval = try MutationPlanner.discover(in: source, path: "Summary.swift", operators: [.removeCall])
-    #expect(withCallRemoval.sites.isEmpty)
+    // The `.onAppear` action is ordinary code; `save()` is its `Button` action's only statement, its value.
+    #expect(withCallRemoval.sites.map(\.original) == ["load()", "track()"])
     #expect(withCallRemoval.skipped[MutationPlanner.skippedViewBuilderReason] == 2)
 
     let withViewRemoval = try MutationPlanner.discover(

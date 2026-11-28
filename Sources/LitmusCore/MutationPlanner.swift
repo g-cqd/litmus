@@ -67,7 +67,11 @@ public enum MutationPlanner {
         )
         let visitor = Sites(context)
         visitor.walk(tree)
-        return Discovery(sites: ordered(visitor.sites), excluded: visitor.excluded, skipped: visitor.skipped)
+        return Discovery(
+            sites: ordered(withoutEquivalentNegations(visitor.sites)),
+            excluded: visitor.excluded,
+            skipped: visitor.skipped
+        )
     }
 
     /// The schematisable sites of one file, in source order.
@@ -87,6 +91,18 @@ public enum MutationPlanner {
             excludeDeclarations: excludeDeclarations,
             oracle: oracle
         ).sites
+    }
+
+    /// Drops `!(c)` mutants (`swap-ternary`, `negate-condition`) of a comparison `c` that `replace-relational`
+    /// already mutates: its replacements include the comparison's complement (`==` to `!=`, `<` to `>=`, …), which
+    /// behaves exactly as `!(c)`, so the second mutant would count one weakness twice.
+    static func withoutEquivalentNegations(_ sites: [Mutation]) -> [Mutation] {
+        let relational = Set(sites.filter { $0.operatorID == .replaceRelational }.map { [$0.start, $0.end] })
+        guard !relational.isEmpty else { return sites }
+        return sites.filter { site in
+            guard site.operatorID == .swapTernary || site.operatorID == .negateCondition else { return true }
+            return !(relational.contains([site.start, site.end]) && site.replacement == "!(\(site.original))")
+        }
     }
 
     static func ordered(_ sites: [Mutation]) -> [Mutation] {

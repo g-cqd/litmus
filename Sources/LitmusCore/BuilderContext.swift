@@ -93,20 +93,57 @@ enum BuilderContext {
     private static func isInsideActionClosure(_ node: CodeBlockItemSyntax) -> Bool {
         var current: Syntax? = node.parent
         while let cur = current {
-            if let closure = cur.as(ClosureExprSyntax.self),
-                let call = closure.parent?.as(FunctionCallExprSyntax.self)
-            {
-                let callee = immediateCalleeName(call)
-                if ["Button", "onAppear", "onDisappear", "onChange", "task", "onTapGesture", "onSubmit"].contains(
-                    callee
-                ) {
-                    return true
-                }
-            }
+            if let closure = cur.as(ClosureExprSyntax.self), isImperativeClosure(closure) { return true }
             if cur.is(VariableDeclSyntax.self) || cur.is(FunctionDeclSyntax.self) { break }
             current = cur.parent
         }
         return false
+    }
+
+    /// Calls whose closures are actions, never view content.
+    private static let actionCallees: Set<String> = [
+        "Button", "onAppear", "onDisappear", "onChange", "task", "onTapGesture", "onLongPressGesture", "onSubmit",
+        "refreshable", "onReceive", "onOpenURL", "onContinueUserActivity", "onDelete", "onMove", "onHover",
+        "onKeyPress", "onScrollGeometryChange", "Task", "detached", "withAnimation", "withTransaction", "async",
+        "asyncAfter",
+    ]
+
+    /// Closure argument labels that name an action, never view content.
+    private static let actionLabels: Set<String> = [
+        "action", "perform", "onDismiss", "onCompletion", "completion", "handler", "onCommit", "onEditingChanged",
+    ]
+
+    /// True for a closure that runs as code inside a view body: an argument of a known action call or labelled as
+    /// an action, or one whose statements a view builder could not hold (assignments, `try`, `await`, `defer`,
+    /// `guard`, `return`).
+    static func isImperativeClosure(_ closure: ClosureExprSyntax) -> Bool {
+        if let label = closure.parent?.as(LabeledExprSyntax.self)?.label?.text, actionLabels.contains(label) {
+            return true
+        }
+        if let label = closure.parent?.as(MultipleTrailingClosureElementSyntax.self)?.label.text,
+            actionLabels.contains(label)
+        {
+            return true
+        }
+        let owner =
+            closure.parent?.as(FunctionCallExprSyntax.self)
+            ?? closure.parent?.parent?.parent?.as(FunctionCallExprSyntax.self)
+        if let owner, actionCallees.contains(immediateCalleeName(owner)) { return true }
+        return closure.statements.contains { item in
+            switch item.item {
+            case .stmt(let statement):
+                return statement.is(DeferStmtSyntax.self) || statement.is(GuardStmtSyntax.self)
+                    || statement.is(ReturnStmtSyntax.self)
+            case .decl:
+                // Result builders hold local declarations (`let x = …`) since Swift 5.4.
+                return false
+            case .expr(let expression):
+                if expression.is(TryExprSyntax.self) || expression.is(AwaitExprSyntax.self) { return true }
+                guard let infix = expression.as(InfixOperatorExprSyntax.self) else { return false }
+                return infix.operator.is(AssignmentExprSyntax.self)
+                    || ["+=", "-=", "*=", "/=", "%="].contains(infix.operator.trimmedDescription)
+            }
+        }
     }
 
     /// Unwraps chained method/modifier calls (`VStack { ... }.padding().accessibilityElement(...)`) to the innermost

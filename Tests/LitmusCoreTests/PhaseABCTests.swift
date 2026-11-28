@@ -157,7 +157,8 @@ struct PhaseABCTests {
         #expect(plan.mutations.contains { $0.original == "SideEffect.save()" && $0.operatorID == .removeCall })
         // Unknown directive operator produces a PlanNote warning and does NOT suppress `a > b`.
         #expect(plan.notes.contains { $0.reason.contains("unknown operator 'negate-conditon'") })
-        #expect(plan.mutations.contains { $0.original == "a > b" && $0.operatorID == .negateCondition })
+        // (`replace-relational` mutates it; its `!(a > b)` is the same mutant as `a <= b`, so it is planned once.)
+        #expect(plan.mutations.contains { $0.original == "a > b" && $0.operatorID == .replaceRelational })
     }
 
     @Test(.timeLimit(.minutes(10)))
@@ -197,7 +198,8 @@ struct PhaseABCTests {
             path: "Sources/L.swift",
             operators: [.negateCondition, .replaceRelational, .replaceArithmetic]
         )
-        #expect(sites.count >= 4)
+        // Two relational mutants and `cap * 2`; `!(points <= cap / 2)` is `points > cap / 2`, planned once.
+        #expect(sites.count >= 3)
         let schema = try SchemaWriter.schema(source, mutations: sites)
         let innerSite = try #require(sites.first { $0.replacement == "cap * 2" })
         let sub = try #require(schema.text.range(of: "cap * 2"))

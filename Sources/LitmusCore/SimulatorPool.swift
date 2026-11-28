@@ -47,22 +47,29 @@ public final class SimulatorPool<Executor: ProcessExecutor>: Sendable {
         // The names are on disk before any device exists: a device made just before a kill is still found by name.
         var ownership = Ownership(runID: runID, names: names, udids: [])
         try write(ownership, in: entry)
+        // The template's state now, not when the destination was resolved: the helper may have booted it since, and
+        // a booted simulator cannot be cloned (or clones mid-boot into a device tests never attach to).
+        let shutDown = await isShutDown(executor, udid: template.udid, directory: directory) ?? template.isShutdown
         do {
             let created = try await withThrowingTaskGroup(of: (Int, String).self) { group in
                 for (index, name) in names.enumerated() {
                     group.addTask {
                         let arguments =
-                            template.isShutdown
+                            shutDown
                             ? ["clone", template.udid, name]
                             : ["create", name, template.deviceType ?? "", template.runtime]
-                        guard template.isShutdown || template.deviceType != nil else {
+                        guard shutDown || template.deviceType != nil else {
                             throw LitmusFailure("the template simulator names no device type; cannot make a new one")
                         }
                         let output = try await simctl(executor, arguments, directory: directory, timeout: 120)
                         let udid = String(decoding: output.stdout, as: UTF8.self)
                             .trimmingCharacters(in: .whitespacesAndNewlines)
                         guard output.exitStatus == 0, UUID(uuidString: udid) != nil else {
-                            throw LitmusFailure("`simctl \(arguments[0])` for \(name) failed: \(udid.prefix(200))")
+                            let error = String(decoding: output.stderr, as: UTF8.self)
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                            throw LitmusFailure(
+                                "`simctl \(arguments[0])` for \(name) failed: \((error.isEmpty ? udid : error).prefix(200))"
+                            )
                         }
                         return (index, udid)
                     }
@@ -183,14 +190,19 @@ public final class SimulatorPool<Executor: ProcessExecutor>: Sendable {
 
     // MARK: simctl
 
-    /// Every device `simctl` lists, by name and id; nil when the listing fails.
-    static func listedDevices(_ executor: Executor, directory: String) async -> [(name: String, udid: String)]? {
+    /// Every device `simctl` lists, as its JSON entry; nil when the listing fails.
+    static func deviceEntries(_ executor: Executor, directory: String) async -> [[String: Any]]? {
         guard let listing = try? await simctl(executor, ["list", "-j", "devices"], directory: directory, timeout: 60),
             listing.exitStatus == 0,
             let object = try? JSONSerialization.jsonObject(with: Data(listing.stdout)) as? [String: Any],
             let groups = object["devices"] as? [String: [[String: Any]]]
         else { return nil }
-        return groups.values.joined().compactMap { entry in
+        return Array(groups.values.joined())
+    }
+
+    /// Every device `simctl` lists, by name and id; nil when the listing fails.
+    static func listedDevices(_ executor: Executor, directory: String) async -> [(name: String, udid: String)]? {
+        await deviceEntries(executor, directory: directory)?.compactMap { entry in
             guard let name = entry["name"] as? String, let udid = entry["udid"] as? String else { return nil }
             return (name, udid)
         }
@@ -205,6 +217,16 @@ public final class SimulatorPool<Executor: ProcessExecutor>: Sendable {
             environment: subjectEnvironment(nil),
             timeout: timeout
         )
+    }
+
+    /// Whether simulator `udid` is shut down now; nil when `simctl` cannot say.
+    static func isShutDown(_ executor: Executor, udid: String, directory: String) async -> Bool? {
+        guard
+            let device = await deviceEntries(executor, directory: directory)?.first(where: {
+                $0["udid"] as? String == udid
+            })
+        else { return nil }
+        return (device["state"] as? String) == "Shutdown"
     }
 
     static func boot(_ executor: Executor, udid: String, directory: String, timeout: Int) async throws {

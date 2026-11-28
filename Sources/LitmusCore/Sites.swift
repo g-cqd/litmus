@@ -26,6 +26,10 @@ final class Sites: SyntaxVisitor {
     /// arguments are suppressed, following Google's arid-node rule.
     var aridCallDepth = 0
 
+    /// The builder depths an imperative closure inside a builder set aside (it runs as code, not as builder content),
+    /// one entry per closure walked: nil when the closure was not one.
+    var suspendedBuilders: [(builder: Int, viewBuilder: Int)?] = []
+
     /// Stack of enclosing functions' declared return types (`nil` for Void/untyped, or normalized type string).
     var returnTypes: [String?] = []
 

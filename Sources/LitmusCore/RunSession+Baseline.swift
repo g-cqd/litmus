@@ -139,6 +139,7 @@ extension RunSession {
         )
         // The helper `xcodebuild` replaced, retried once `xcodebuild` has quarantined the targets that truly fail.
         let fellBackFrom = try await fallBackToXcodebuild(&run)
+        try await dropStalledFleet(&run)
         if options.skipFailingTargets, run.harness.selectsModules {
             try await quarantineFailingTargets(&run, helper: fellBackFrom, singlePassReach: singlePassReach)
         }
@@ -161,13 +162,7 @@ extension RunSession {
         run.harness = xcodeHarness(fleet: fleet)
         let made = try makeJudge(for: run.harness)
         (run.allowedWorkers, run.pool, run.judge) = (made.allowedWorkers, made.pool, made.judge)
-        let usageBefore = ChildUsage.cpuSeconds()
-        run.execution = try await run.judge.execute(
-            name: "baseline-xcodebuild",
-            activeID: "",
-            deadline: options.timeoutCap
-        )
-        run.suiteCPU = ChildUsage.cpuSeconds() - usageBefore
+        try await rerunBaseline(&run, name: "baseline-xcodebuild")
         return direct
     }
 
@@ -250,5 +245,28 @@ extension RunSession {
         let made = try makeJudge(for: harness)
         (run.allowedWorkers, run.pool, run.judge) = (made.allowedWorkers, made.pool, made.judge)
         run.judge.quarantined = quarantinedNow
+    }
+
+    /// A baseline that timed out on a simulator made for this run: such a device may never take the tests (a clone of
+    /// a simulator caught mid-boot, a first boot still migrating data). The run retries once on the destination's own
+    /// simulator, alone, and keeps it.
+    func dropStalledFleet(_ run: inout BaselineRun) async throws {
+        guard run.execution.result.outcome == .timedOut, let xcode = run.harness as? XcodeHarness<Executor>,
+            xcode.fleet != nil
+        else { return }
+        artifact.notes.append(
+            "the unmodified suite timed out on a simulator made for this run; retried on the destination's own "
+                + "simulator, which the run keeps"
+        )
+        await teardownSimulators()
+        try adopt(xcodeHarness(fleet: nil), into: &run)
+        try await rerunBaseline(&run, name: "baseline-destination")
+    }
+
+    /// The unmodified suite once more on `run`'s judge, which becomes its execution and suite cost.
+    func rerunBaseline(_ run: inout BaselineRun, name: String) async throws {
+        let usageBefore = ChildUsage.cpuSeconds()
+        run.execution = try await run.judge.execute(name: name, activeID: "", deadline: options.timeoutCap)
+        run.suiteCPU = ChildUsage.cpuSeconds() - usageBefore
     }
 }

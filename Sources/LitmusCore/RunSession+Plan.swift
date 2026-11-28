@@ -244,5 +244,6 @@ extension RunSession {
         // Builds run at the run's priority, without the memory limit: a compiler may use more than a test should.
         buildSupervision = Supervision()
         buildSupervision.background = options.background
+        narrowXcodeBuild()
     }
 }

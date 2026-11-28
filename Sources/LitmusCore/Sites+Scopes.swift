@@ -147,6 +147,14 @@ extension Sites {
     func visitClosureExpr(_ node: ClosureExprSyntax) -> SyntaxVisitorContinueKind {
         let returnType = node.signature?.returnClause.map { normalized($0.type.trimmedDescription) }
         returnTypes.append(returnType)
+        // An action closure in a view body (`Button` actions, `.onChange`, `Task { }`) runs as ordinary code: the
+        // logic operators apply inside it, as they do outside builders.
+        if builderDepth > 0, BuilderContext.isImperativeClosure(node) {
+            suspendedBuilders.append((builderDepth, viewBuilderDepth))
+            (builderDepth, viewBuilderDepth) = (0, 0)
+        } else {
+            suspendedBuilders.append(nil)
+        }
         if context.operators.contains(.weakenCapture), builderDepth == 0 {
             addWeakCaptureMutations(node)
         }
@@ -230,6 +238,9 @@ extension Sites {
 
     func visitPostClosureExpr(_ node: ClosureExprSyntax) {
         _ = returnTypes.popLast()
+        if let suspended = suspendedBuilders.popLast() ?? nil {
+            (builderDepth, viewBuilderDepth) = (suspended.builder, suspended.viewBuilder)
+        }
     }
 
     func visitPostVariableDecl(_ node: VariableDeclSyntax) {

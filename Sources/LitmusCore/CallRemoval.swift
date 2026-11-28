@@ -5,6 +5,8 @@ enum CallRemoval {
     private static let names: Set<String> = [
         "print", "debugPrint", "dump", "NSLog", "os_log", "assert", "assertionFailure", "precondition",
         "preconditionFailure", "fatalError", "swift_unreachable",
+        // Waits change only timing: removing one is a mutant no test should have to catch.
+        "sleep", "usleep", "nanosleep", "Task.yield",
     ]
     private static let loggerMethods: Set<String> = [
         "debug", "info", "notice", "error", "warning", "fault", "trace", "critical", "log",
@@ -43,7 +45,7 @@ enum CallRemoval {
         return false
     }
 
-    /// Logging, assertions, and initializer chaining: removing them proves nothing or cannot compile.
+    /// Logging, assertions, waits, and initializer chaining: removing them proves nothing or cannot compile.
     static func isLogging(_ callee: String) -> Bool {
         if callee == "super.init" || callee == "self.init" { return true }
         let last = callee.split(separator: ".").last.map(String.init) ?? callee
