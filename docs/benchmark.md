@@ -53,6 +53,8 @@ The runner only uses the paths in `LITMUS_BIN`, `SMT_BIN`, `MUTER_BIN`, `XCMUTAT
 (failing those, `litmus`, `swift-mutation-testing`, `muter` and `xcmutate` on `PATH`). debugholic's executable is also
 named `litmus`, and mutest-swift's `swift-mutation-testing`, so only their variables name them.
 
+swift-mutation-testing's simulator cells run only where `CI` is set: on 2026-11-28, version 1.7.1 deleted the machine's own simulators when it started, the destination included, while removing the clones of an earlier run. Elsewhere they are `skipped`, with that reason.
+
 Litmus and swift-mutation-testing run with `--operator-tier experimental`, their broadest set; the others run their
 default operators. The sets still differ, so compare counts and scores within a scenario with care. debugholic/litmus
 reports no replacement text, only a description ("changed > to <="); probes read their spellings from it.
@@ -84,18 +86,21 @@ Wall times of parallel cells still compete for the machine: for comparable timin
 
 ## Time limits
 
-A step ends when it has shown no activity for `--idle-timeout` seconds (default 600), or after `--hard-timeout`
-seconds (default 5400) regardless. Activity is any of:
+A step ends when it has shown no activity for `--idle-timeout` seconds (default 600; 900 in the workflow), or after
+`--hard-timeout` seconds (default 5400; 7200 in the workflow) regardless. Activity is any of:
 
 - bytes on its standard output or error;
-- more than 0.5 s of new CPU time in its process group (`ps`), which catches a test run that prints nothing;
-- a newer modification time under its output directory or the cell's directory.
+- a new process, or more than 0.5 s of new CPU time, in its process tree: its process group and every descendant of its
+  first process, including those a tool starts in a group or session of its own (such as its `xcodebuild`);
+- a newer modification time under the subject copy, the cell's `TMPDIR`, its output directory or the cell's directory.
 
 A slow tool that is still working is never ended by the idle limit; a hung one is. The runner starts each step in its
-own process group and ends the whole group (SIGTERM, then SIGKILL after 15 s), and it ends the running group if it is
-itself interrupted.
+own process group. To end a step it lists the whole tree first, then signals the group and every process of the tree
+(SIGTERM, then SIGKILL after 15 s), so nothing it started is left running. It does the same if it is itself interrupted.
 
 ## Results
+
+`run.py` exits non-zero, and a CI cell fails, only when the benchmark did not happen (a tool's binary is missing) or Litmus's own cell did not end `ok`. Another tool that fails, times out or writes no report is a result: its row says so, with its first errors. For example, Muter 17 on WalletKit fails because its instrumented `Wallet.swift` does not compile (`attribute 'public' can only be used…`).
 
 `bench/results/<UTC time>/` (or `--output`) holds `results.json`, `results.md` and every step's log under
 `<tool>/<scenario>/`. `results.md` reads top to bottom:
@@ -147,12 +152,6 @@ probes with the `probes.json` it runs with.
 | CPU time | `wait4` of each step's own child: every process it waited for, whatever ran beside it |
 | Peak memory | the largest resident set among those processes (`ru_maxrss`) |
 | Peak disk | `du` of the subject copy, the cell's private `TMPDIR` and its output, sampled every 30 s |
-
-swift-mutation-testing's simulator cells run only where `CI` is set: on 2026-11-28, version 1.7.1 deleted the machine's own simulators when it started, the destination included, while removing the clones of an earlier run. Elsewhere they are `skipped`, with that reason.
-
-A step is idle when its process tree (its process group, and every descendant, including those a tool starts in a session of its own) gains no CPU time and starts no process, and nothing changes in the subject copy, the cell's `TMPDIR` or its output. When it times out, the whole tree is signalled.
-
-`run.py` exits non-zero, and a CI cell fails, only when the benchmark did not happen (a tool's binary is missing) or Litmus's own cell did not end `ok`. Another tool that fails, times out or writes no report is a result: its row says so, with its first errors. For example, Muter 17 on WalletKit fails because its instrumented `Wallet.swift` does not compile (`attribute 'public' can only be used…`).
 
 Each cell gets its own `TMPDIR`, so a tool's sandboxes there count as its disk use and are removed with the cell, and
 xcmutate's `--work-dir` is put inside the cell. Not counted: Xcode's default DerivedData, which tools that do not choose

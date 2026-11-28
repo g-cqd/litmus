@@ -1414,7 +1414,8 @@ def main() -> int:
     broken = [
         f"{r['tool']}/{r['scenario']}: {r['status']}"
         for r in results["rows"]
-        if r["status"] == "unavailable" or (r["tool"] == "litmus" and r["status"] not in ("ok", "not-applicable", "skipped"))
+        if r["status"] == "unavailable"
+        or (r["tool"] == "litmus" and r["status"] not in ("ok", "not-applicable", "skipped"))
     ]
     for row in results["rows"]:
         if row["status"] not in ("ok", "not-applicable", "unavailable", "skipped") and row["tool"] != "litmus":
