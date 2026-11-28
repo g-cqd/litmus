@@ -20,6 +20,11 @@ func `malformed and infrastructure XML cannot be test evidence`(xml: String) thr
     #expect(try TestEvidence.xcresult(Array(good.utf8)) == TestCounts(passed: 3, failed: 0, skipped: 1))
     let bad = good.replacingOccurrences(of: "\"totalTestCount\":4", with: "\"totalTestCount\":5")
     #expect(throws: (any Error).self) { try TestEvidence.xcresult(Array(bad.utf8)) }
+    // A known issue (`withKnownIssue`) is in the total and in none of the three counters: it counts as passed.
+    let known = bad.replacingOccurrences(of: "{", with: "{\"expectedFailures\":1,")
+    #expect(try TestEvidence.xcresult(Array(known.utf8)) == TestCounts(passed: 4, failed: 0, skipped: 1))
+    let hostile = good.replacingOccurrences(of: "{", with: "{\"expectedFailures\":\(Int.max),")
+    #expect(throws: (any Error).self) { try TestEvidence.xcresult(Array(hostile.utf8)) }
 }
 @Test func `wire rejects unknown versions duplicate payloads and corruption`() throws {
     let bytes = ArtifactWire.encode(Array("{}".utf8))

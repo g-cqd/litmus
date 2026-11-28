@@ -186,14 +186,18 @@ public enum TestEvidence {
     /// Xcode 16+ `xcresulttool get test-results summary`; unsupported summaries fail closed.
     public static func xcresult(_ bytes: [UInt8]) throws -> TestCounts {
         let summary = try ArtifactCodec.decode(XcodeSummary.self, bytes: bytes)
-        guard ["Passed", "Failed"].contains(summary.result),
-            summary.totalTestCount >= 0, summary.totalTestCount <= 10_000_000,
-            summary.passedTests >= 0, summary.failedTests >= 0, summary.skippedTests >= 0,
-            summary.passedTests <= summary.totalTestCount, summary.failedTests <= summary.totalTestCount,
-            summary.skippedTests <= summary.totalTestCount,
-            summary.passedTests + summary.failedTests + summary.skippedTests == summary.totalTestCount,
+        // An expected failure is a test that behaved as declared: it counts as passed, as in the per-bundle counts.
+        let expected = summary.expectedFailures ?? 0
+        let total = summary.totalTestCount
+        // Every counter is bounded before any is added: hostile values cannot overflow.
+        guard ["Passed", "Failed"].contains(summary.result), total >= 0, total <= 10_000_000,
+            (0...total).contains(summary.passedTests), (0...total).contains(summary.failedTests),
+            (0...total).contains(summary.skippedTests), (0...total).contains(expected)
+        else { throw LitmusFailure("inconsistent or unsupported xcresult test summary") }
+        let passed = summary.passedTests + expected
+        guard passed + summary.failedTests + summary.skippedTests == total,
             (summary.result == "Passed") == (summary.failedTests == 0)
         else { throw LitmusFailure("inconsistent or unsupported xcresult test summary") }
-        return TestCounts(passed: summary.passedTests, failed: summary.failedTests, skipped: summary.skippedTests)
+        return TestCounts(passed: passed, failed: summary.failedTests, skipped: summary.skippedTests)
     }
 }

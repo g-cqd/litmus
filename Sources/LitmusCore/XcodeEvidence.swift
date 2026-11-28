@@ -10,6 +10,8 @@ struct XcodeSummary: Decodable {
     let passedTests: Int
     let failedTests: Int
     let skippedTests: Int
+    /// Known issues (`withKnownIssue`, `XCTExpectFailure`): in `totalTestCount`, in none of the three above.
+    let expectedFailures: Int?
     let testFailures: [Failure]?
     struct Failure: Decodable {
         let failureText: String?
