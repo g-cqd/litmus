@@ -68,7 +68,7 @@ public enum MutationPlanner {
         let visitor = Sites(context)
         visitor.walk(tree)
         return Discovery(
-            sites: ordered(withoutEquivalentNegations(visitor.sites)),
+            sites: ordered(withoutDuplicates(withoutEquivalentNegations(visitor.sites))),
             excluded: visitor.excluded,
             skipped: visitor.skipped
         )
@@ -103,6 +103,17 @@ public enum MutationPlanner {
             guard site.operatorID == .swapTernary || site.operatorID == .negateCondition else { return true }
             return !(relational.contains([site.start, site.end]) && site.replacement == "!(\(site.original))")
         }
+    }
+
+    /// One mutant per edit: two operators that make the same replacement of the same span (`return-boundary` and
+    /// `replace-nil-coalescing` both turn `a ?? ""` into `""`) are one mutant, kept under the lower tier's operator.
+    static func withoutDuplicates(_ sites: [Mutation]) -> [Mutation] {
+        var seen: Set<String> = []
+        let preferred = sites.sorted {
+            ($0.operatorID.tier, $0.operatorID.rawValue) < ($1.operatorID.tier, $1.operatorID.rawValue)
+        }
+        let kept = Set(preferred.filter { seen.insert("\($0.start):\($0.end):\($0.replacement)").inserted }.map(\.id))
+        return sites.filter { kept.contains($0.id) }
     }
 
     static func ordered(_ sites: [Mutation]) -> [Mutation] {

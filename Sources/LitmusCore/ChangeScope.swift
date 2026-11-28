@@ -125,8 +125,18 @@ public struct ChangeScope: Sendable {
 
     /// 0 for a site on a changed line, 1 for another site of a changed file when the breadth is `files`, or for a site
     /// the test edits reach; nil when out of scope.
-    public func priority(of mutation: Mutation) -> Int? {
-        if changed.contains(mutation.path, lines: mutation.line...mutation.endLine) { return 0 }
+    /// - Parameter codeLines: per file, the lines holding code (a token, not only comments or blanks); a changed line
+    ///   outside them reaches no site. Nil counts every changed line.
+    public func priority(of mutation: Mutation, codeLines: [String: Set<Int>]? = nil) -> Int? {
+        if let lines = codeLines?[mutation.path] {
+            if (mutation.line...mutation.endLine).contains(where: {
+                lines.contains($0) && changed.contains(mutation.path, lines: $0...$0)
+            }) {
+                return 0
+            }
+        } else if changed.contains(mutation.path, lines: mutation.line...mutation.endLine) {
+            return 0
+        }
         if breadth == .files && changed.touches(mutation.path) { return 1 }
         guard let testDriven else { return nil }
         if testDriven.wholeFiles.contains(mutation.path) || testDriven.mutants.contains(mutation.id) { return 1 }

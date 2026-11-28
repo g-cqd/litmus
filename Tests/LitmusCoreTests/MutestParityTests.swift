@@ -1,4 +1,5 @@
 import Foundation
+import ProjectModel
 import Testing
 
 @testable import LitmusCore
@@ -61,6 +62,55 @@ import Testing
         #expect(!sites.contains { $0.operatorID == .negateCondition && $0.original == "x == 1" })
         #expect(sites.contains { $0.operatorID == .replaceRelational && $0.replacement == "x >= 2" })
         #expect(sites.contains { $0.operatorID == .swapTernary && $0.original == "flag" })
+    }
+
+    @Test func `two operators making the same edit are one mutant`() throws {
+        let sites = try MutationPlanner.mutations(
+            in: "func name(_ s: String?) -> String { s ?? \"\" }\n",
+            path: "N.swift",
+            operators: [.returnBoundary, .replaceNilCoalescing]
+        )
+        #expect(sites.filter { $0.replacement == "\"\"" }.count == 1)
+    }
+
+    @Test func `a changed comment inside a multi-line mutant reaches no site; a changed code line does`() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("litmus-comment-\(UUID().uuidString)")
+            .path
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        try FileManager.default.createDirectory(atPath: root + "/Sources/A", withIntermediateDirectories: true)
+        try Data(
+            "// swift-tools-version: 6.0\nimport PackageDescription\nlet package = Package(name: \"A\", targets: [.target(name: \"A\")])\n"
+                .utf8
+        )
+        .write(to: URL(fileURLWithPath: root + "/Package.swift"))
+        let source = """
+            func run(_ work: () -> Void) {}
+            func f() {
+                run {
+                    // a comment the change edits
+                    print("x")
+                    g()
+                }
+            }
+            func g() {}
+            """
+        try Data(source.utf8).write(to: URL(fileURLWithPath: root + "/Sources/A/A.swift"))
+        func plan(_ line: Int) async throws -> [Mutation] {
+            let scope = ChangeScope(
+                changed: ChangedLines(files: ["Sources/A/A.swift": [line...line]]),
+                breadth: .lines,
+                source: "test",
+                digest: "d"
+            )
+            return try await MutationPlanner.plan(
+                root: root,
+                scope: scope,
+                operators: [.removeCall, .emptyClosureBody]
+            )
+            .mutations
+        }
+        #expect(try await plan(4).isEmpty)
+        #expect(try await plan(6).contains { $0.original == "g()" })
     }
 
     #if os(macOS)

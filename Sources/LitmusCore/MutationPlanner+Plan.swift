@@ -90,9 +90,12 @@ extension MutationPlanner {
                 )
             }
         }
+        // A change to a comment or blank line inside a multi-line mutant (a comment in a closure body) reaches no site.
+        var codeLines: [String: Set<Int>] = [:]
+        for path in files { codeLines[String(path.dropFirst(root.count + 1))] = Self.codeLines(of: path) }
         var ranked: [(priority: Int, mutation: Mutation)] = []
         for mutation in planned.flatMap(\.mutations) {
-            if let priority = scope.priority(of: mutation) { ranked.append((priority, mutation)) }
+            if let priority = scope.priority(of: mutation, codeLines: codeLines) { ranked.append((priority, mutation)) }
         }
         ranked.sort {
             ($0.priority, $0.mutation.path, $0.mutation.start, $0.mutation.id) < (
@@ -113,7 +116,7 @@ extension MutationPlanner {
             root: root,
             analyzedFiles: planned.count,
             mutations: ranked.map(\.mutation),
-            suppressed: planned.flatMap(\.suppressed).filter { scope.priority(of: $0) != nil },
+            suppressed: planned.flatMap(\.suppressed).filter { scope.priority(of: $0, codeLines: codeLines) != nil },
             notes: notes + planned.flatMap(\.notes)
         )
         plan.skipped = mergeSkipped(planned.compactMap(\.skipped))
