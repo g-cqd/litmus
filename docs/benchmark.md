@@ -117,7 +117,7 @@ own process group. To end a step it lists the whole tree first, then signals the
 ### Latest measured results
 
 From the workflow on GitHub's `macos-26` runners, each cell alone on its own runner, with every tool's latest release on
-2026-11-27/28 (Litmus 1.0.1, swift-mutation-testing 1.7.1, Muter 17, xcmutate 0.14.0, debugholic/litmus 0.5.4).
+2026-11-27/28 (Litmus 1.0.0, swift-mutation-testing 1.7.1, Muter 17, xcmutate 0.14.0, debugholic/litmus 0.5.4).
 Operator sets differ between tools, so mutant counts and scores are not one scale.
 
 **`package` (WalletKit on macOS):**
