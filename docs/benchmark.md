@@ -114,6 +114,27 @@ own process group. To end a step it lists the whole tree first, then signals the
 5. **Resources**: per scenario and tool, CPU time, peak memory and peak disk.
 6. **Verdicts** (every count) and **Notes** (scenario notes, and the first error lines of a failed row).
 
+### Latest measured results
+
+From the workflow on GitHub's `macos-26` runners, each cell alone on its own runner, with every tool's latest release on
+2026-11-27/28 (Litmus 1.0.1, swift-mutation-testing 1.7.1, Muter 17, xcmutate 0.14.0, debugholic/litmus 0.5.4).
+Operator sets differ between tools, so mutant counts and scores are not one scale.
+
+**`package` (WalletKit on macOS):**
+
+| Tool | Status | Mutants | Score | Probes right | Wall time |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Litmus | ok | 45 | 84.1% | 3/3 | 36 s |
+| swift-mutation-testing | ok | 43 | 83.3% | 3/3 | 265 s |
+| xcmutate | ok | 42 | 83.8% | 3/3 | 258 s |
+| debugholic/litmus | ok | 40 | 87.2% | 1/1 (1 of 3 probes mutated) | 179 s |
+| Muter | failed: its instrumented `Wallet.swift` does not compile | – | – | – | 36 s |
+
+**`ios-app`** has not completed for every tool yet. swift-mutation-testing ran for the whole 2-hour step limit without
+finishing (it writes its report only at the end). On a local M3 MacBook, with a 40-minute limit per cell: Litmus
+finished in 331 s, with 164 mutants decided. xcmutate decided 4 mutants and debugholic/litmus 21 of 42 before the
+limit.
+
 ### Probes: what correctness means here
 
 Tools mutate different sites and spell mutations differently, so their scores are not directly comparable.
