@@ -52,11 +52,14 @@ struct Watch: AsyncParsableCommand {
         process.executableURL = URL(fileURLWithPath: LitmusChild.executable)
         process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
-        try process.run()
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global().async {
-                process.waitUntilExit()
-                continuation.resume()
+        // The process says when it ends: no thread waits for it.
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            process.terminationHandler = { _ in continuation.resume() }
+            do {
+                try process.run()
+            } catch {
+                process.terminationHandler = nil
+                continuation.resume(throwing: error)
             }
         }
         guard let artifact = try? ArtifactCodec.read(RunArtifact.self, path: output + "/run.json") else {
