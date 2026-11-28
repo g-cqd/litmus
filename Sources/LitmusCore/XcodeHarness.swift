@@ -166,8 +166,6 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
         return finished(.passed, "every test passed")
     }
 
-    /// PropertyListSerialization supplies heterogeneous SDK data; the untyped boundary is contained here.
-    /// Xcode-relative paths are absolutised before moving the plist outside Build/Products.
     /// `base` without its memory limit, which covers only `xcodebuild`'s session: the test hosts run in the simulator,
     /// outside it, so the limit cannot catch a mutant's runaway allocation and only stops `xcodebuild` as its own
     /// memory grows with the suite's output (an app of fourteen bundles: 4 GiB after four).
@@ -190,6 +188,8 @@ public struct XcodeHarness<Executor: ProcessExecutor>: TestHarness {
         )
     }
 
+    /// PropertyListSerialization supplies heterogeneous SDK data; the untyped boundary is contained here.
+    /// Xcode-relative paths are absolutised before moving the plist outside Build/Products.
     private func preparedTestRun(output: String, request: TestRunRequest, products: String) throws -> String {
         let patched = try testRunPlist(request: request, products: products)
         let data = try PropertyListSerialization.data(fromPropertyList: patched, format: .xml, options: 0)
