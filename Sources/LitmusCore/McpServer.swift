@@ -22,8 +22,8 @@ public enum McpServer {
             "litmus_plan",
             "List the mutants Litmus would run in a subject (ids, locations, operators, diffs), without building.",
             [
-                "root": MCPSchema.string("Subject root."),
-                "operators": MCPSchema.string("Comma-separated operators or groups (all, ui, fault)."),
+                "root": root,
+                "operators": operators,
                 "diff_base": MCPSchema.string("Only sites changed since this git revision."),
             ],
             required: ["root"]
@@ -33,17 +33,11 @@ public enum McpServer {
             "Run mutants and return their verdicts. Builds incrementally in a persistent directory per subject and "
                 + "reuses verdicts whose inputs did not change.",
             [
-                "root": MCPSchema.string("Subject root."),
+                "root": root,
                 "trust_project": MCPSchema.boolean("Required true: the run builds and executes the subject's code."),
-                "only_ids": MCPSchema.array(
-                    items: MCPSchema.string(),
-                    "Run only these mutants (ids, prefixes or path:line[:operator])."
-                ),
-                "operators": MCPSchema.string("Comma-separated operators or groups (all, ui, fault)."),
-                "arguments": MCPSchema.array(
-                    items: MCPSchema.string(),
-                    "More `litmus run` arguments, such as --project, --scheme, --destination."
-                ),
+                "only_ids": strings("Run only these mutants (ids, prefixes or path:line[:operator])."),
+                "operators": operators,
+                "arguments": strings("More `litmus run` arguments, such as --project, --scheme, --destination."),
                 "timeout_seconds": MCPSchema.integer("Stop the run after this long (default 3600)."),
             ],
             required: ["root", "trust_project"]
@@ -53,7 +47,7 @@ public enum McpServer {
             "Every survivor and uncovered mutant of a run, each a self-contained record with its code, diff and a "
                 + "verify command.",
             [
-                "root": MCPSchema.string("Subject root."), "run": MCPSchema.string("Run directory or run.json."),
+                "root": root, "run": MCPSchema.string("Run directory or run.json."),
                 "domain": MCPSchema.string("logic, ui or all (default all)."),
             ],
             required: ["root", "run"]
@@ -62,7 +56,7 @@ public enum McpServer {
             "litmus_accept",
             "Accept a reviewed equivalent mutant in .litmus-accepted.json, with the proof of equivalence as its reason.",
             [
-                "root": MCPSchema.string("Subject root."),
+                "root": root,
                 "run": MCPSchema.string("Run directory or run.json the mutant was reported in."),
                 "id": MCPSchema.string("Mutant id, id prefix, or path:line:operator."),
                 "reason": MCPSchema.string("Why it is equivalent."),
@@ -70,6 +64,13 @@ public enum McpServer {
             required: ["root", "run", "id", "reason"]
         ),
     ]
+
+    private static let root = MCPSchema.string("Subject root.")
+    private static let operators = MCPSchema.string("Comma-separated operators or groups (all, ui, fault).")
+
+    private static func strings(_ description: String) -> JSONValue {
+        MCPSchema.array(items: MCPSchema.string(), description)
+    }
 
     private static func tool(
         _ name: String,
