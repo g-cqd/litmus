@@ -148,6 +148,8 @@ probes with the `probes.json` it runs with.
 | Peak memory | the largest resident set among those processes (`ru_maxrss`) |
 | Peak disk | `du` of the subject copy, the cell's private `TMPDIR` and its output, sampled every 30 s |
 
+swift-mutation-testing's simulator cells run only where `CI` is set: on 2026-11-28, version 1.7.1 deleted the machine's own simulators when it started, the destination included, while removing the clones of an earlier run. Elsewhere they are `skipped`, with that reason.
+
 A step is idle when its process tree (its process group, and every descendant, including those a tool starts in a session of its own) gains no CPU time and starts no process, and nothing changes in the subject copy, the cell's `TMPDIR` or its output. When it times out, the whole tree is signalled.
 
 `run.py` exits non-zero, and a CI cell fails, only when the benchmark did not happen (a tool's binary is missing) or Litmus's own cell did not end `ok`. Another tool that fails, times out or writes no report is a result: its row says so, with its first errors. For example, Muter 17 on WalletKit fails because its instrumented `Wallet.swift` does not compile (`attribute 'public' can only be used…`).

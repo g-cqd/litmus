@@ -514,6 +514,13 @@ TOOLS = [
 ]
 
 
+# Tools whose simulator runs delete simulators that are not theirs: run only on a throwaway CI runner (CI is set).
+DELETES_SIMULATORS = {
+    "smt": "skipped outside CI: swift-mutation-testing 1.7.1 deleted the destination and every other simulator of the "
+    "machine when it started (2026-11-28); set CI=1 to run it on a machine whose simulators may be lost",
+}
+
+
 def resolve(tool: Tool) -> str | None:
     """The tool's executable: its environment variable, else its name on PATH. mutest-swift's executable is also
     named swift-mutation-testing, so set MUTEST_BIN (and SMT_BIN) rather than rely on PATH for those two."""
@@ -1383,6 +1390,8 @@ def main() -> int:
                 keep({**row, "status": "not-applicable"})
             elif not binary:
                 keep({**row, "status": "unavailable", "notes": [f"set {tool.env} or put it on PATH"]})
+            elif tool.id in DELETES_SIMULATORS and scenario.simulator and not os.environ.get("CI"):
+                keep({**row, "status": "skipped", "notes": [DELETES_SIMULATORS[tool.id]]})
             else:
                 work.append((tool, binary, scenario))
 
@@ -1405,10 +1414,10 @@ def main() -> int:
     broken = [
         f"{r['tool']}/{r['scenario']}: {r['status']}"
         for r in results["rows"]
-        if r["status"] == "unavailable" or (r["tool"] == "litmus" and r["status"] not in ("ok", "not-applicable"))
+        if r["status"] == "unavailable" or (r["tool"] == "litmus" and r["status"] not in ("ok", "not-applicable", "skipped"))
     ]
     for row in results["rows"]:
-        if row["status"] not in ("ok", "not-applicable", "unavailable") and row["tool"] != "litmus":
+        if row["status"] not in ("ok", "not-applicable", "unavailable", "skipped") and row["tool"] != "litmus":
             print(f"note: {row['tool']}/{row['scenario']}: {row['status']} (reported, not a benchmark failure)")
     for line in broken:
         print(f"not ok: {line}", file=sys.stderr)
